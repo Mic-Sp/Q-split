@@ -1,10 +1,14 @@
 import { API_BASE_URL } from "@/lib/config";
-import type { HybridTelemetryResponse, SimulationRequest } from "@/types/telemetry";
+import type { HybridTelemetryResponse, RoutingConfig, SimulationRequest } from "@/types/telemetry";
+
+export const DEFAULT_ROUTING: RoutingConfig = {
+  stage_1_node: "CPU", stage_2_node: "QPU", stage_3_node: "CPU",
+};
 
 export const PIPELINE = [
-  { key: "stage_1_classical_pre", node: "CPU", label: "Classical preprocessing" },
-  { key: "stage_2_quantum_kernel", node: "QPU", label: "Quantum execution" },
-  { key: "stage_3_classical_post", node: "CPU", label: "Classical postprocessing" },
+  { key: "stage_1_classical_pre", routingKey: "stage_1_node", label: "Classical preprocessing" },
+  { key: "stage_2_quantum_kernel", routingKey: "stage_2_node", label: "Quantum kernel" },
+  { key: "stage_3_classical_post", routingKey: "stage_3_node", label: "Classical postprocessing" },
 ] as const;
 
 export function formatValue(value: unknown): string {
@@ -35,6 +39,7 @@ export function describeChanges(before: Snapshot, after: Snapshot): MetricDelta[
   for (const { key, label } of PIPELINE) {
     const previous = before.data.stages[key];
     const current = after.data.stages[key];
+    add(`${label} · node`, previous?.node, current?.node);
     add(`${label} · status`, previous?.status, current?.status);
     add(`${label} · latency (ms)`, previous?.latency_ms, current?.latency_ms);
     const keys = new Set([...Object.keys(previous?.metrics ?? {}), ...Object.keys(current?.metrics ?? {})]);
@@ -51,12 +56,12 @@ export function parseTelemetry(value: unknown): HybridTelemetryResponse {
       !data.stages || typeof data.stages !== "object" || Array.isArray(data.stages)) {
     throw new Error("The engine returned an unexpected telemetry schema.");
   }
-  for (const { key, node } of PIPELINE) {
+  for (const { key } of PIPELINE) {
     const stage = data.stages[key];
-    if (!stage || stage.node !== node) throw new Error(`The engine returned invalid telemetry for ${key}.`);
+    if (!stage) throw new Error(`The engine returned invalid telemetry for ${key}.`);
   }
   for (const [key, stage] of Object.entries(data.stages)) {
-    if (!stage || !["CPU", "QPU"].includes(stage.node) || typeof stage.name !== "string" || typeof stage.output_summary !== "string" ||
+    if (!stage || !["CPU", "GPU", "QPU"].includes(stage.node) || typeof stage.name !== "string" || typeof stage.output_summary !== "string" ||
         typeof stage.latency_ms !== "number" || !Number.isFinite(stage.latency_ms) ||
         !["OPTIMAL", "WARNING", "CRITICAL_BOTTLENECK"].includes(stage.status) ||
         !stage.metrics || typeof stage.metrics !== "object" || Array.isArray(stage.metrics)) {
@@ -75,5 +80,14 @@ export async function simulate(request: SimulationRequest, signal: AbortSignal):
     const detail = body && typeof body === "object" && "detail" in body ? body.detail : null;
     throw new Error(typeof detail === "string" ? `${detail} (HTTP ${response.status})` : `Simulation failed (HTTP ${response.status}). Please try again.`);
   }
-  return parseTelemetry(body);
+  const data = parseTelemetry(body);
+  // Older deployments may silently ignore unknown request fields. Do not show
+  // their fixed-route response as a successful custom routing simulation.
+  for (const { key, routingKey } of PIPELINE) {
+    const expected = request.routing?.[routingKey] ?? DEFAULT_ROUTING[routingKey];
+    if (data.stages[key].node !== expected) {
+      throw new Error("The engine did not honor the selected stage routing. Use an updated backend and retry.");
+    }
+  }
+  return data;
 }

@@ -3,14 +3,14 @@
 import { useEffect, useReducer, useState } from "react";
 import Link from "next/link";
 import {
-  Activity, ArrowDown, ArrowRight, Check, ChevronDown, CircleAlert, Cpu,
+  Activity, ArrowDown, ArrowRight, Check, ChevronDown, CircleAlert, CircuitBoard, Cpu,
   FlaskConical, GitCompareArrows, Layers3, LoaderCircle, Play, Radio, Workflow, Zap,
 } from "lucide-react";
 import {
-  describeChanges, formatValue, PIPELINE, simulate, totalLatency,
+  DEFAULT_ROUTING, describeChanges, formatValue, PIPELINE, simulate, totalLatency,
   type Snapshot, type Transition,
 } from "@/lib/telemetry";
-import type { HardwareProfile, SimulationRequest, StageStatus, StageTelemetry, WorkloadId } from "@/types/telemetry";
+import type { HardwareProfile, RoutingConfig, SimulationRequest, StageNode, StageStatus, StageTelemetry, WorkloadId } from "@/types/telemetry";
 
 const SCALES = [15, 21, 35, 512, 2048];
 const scaleLabel = (scale: number) => scale < 512 ? `N = ${scale}` : `RSA-${scale}`;
@@ -23,6 +23,13 @@ const STATUS = {
   WARNING: { label: "Warning", text: "text-amber-300", border: "border-amber-400/30", background: "bg-amber-400/10", dot: "bg-amber-400" },
   CRITICAL_BOTTLENECK: { label: "Critical bottleneck", text: "text-rose-400", border: "border-rose-400/30", background: "bg-rose-400/10", dot: "bg-rose-400" },
 } satisfies Record<StageStatus, { label: string; text: string; border: string; background: string; dot: string }>;
+
+const NODE_STYLE = {
+  CPU: { icon: Cpu, text: "text-sky-300", frame: "border-sky-400/20 bg-sky-400/10 text-sky-300" },
+  GPU: { icon: CircuitBoard, text: "text-cyan-300", frame: "border-cyan-400/20 bg-cyan-400/10 text-cyan-300" },
+  QPU: { icon: Layers3, text: "text-violet-300", frame: "border-violet-400/20 bg-violet-400/10 text-violet-300" },
+};
+const NODES: StageNode[] = ["CPU", "GPU", "QPU"];
 
 interface DashboardState {
   loading: boolean;
@@ -61,11 +68,23 @@ const metricLabels: Record<string, string> = {
   qubits_required: "Logical qubits", circuit_depth: "Circuit depth", io_state_prep_ms: "State preparation · ms",
   coherence_survival_pct: "Coherence survival · %", algorithm: "Algorithm", complexity: "Complexity",
   base_a: "Coprime base", factors_found: "Factors found",
+  routing_model: "Latency estimate", routing_supported: "Route supported", execution_feasible: "Execution feasible",
+  launch_transfer_overhead_ms: "Launch / transfer · ms", compute_latency_factor: "Compute latency factor",
+  simulation_method: "Simulation method", statevector_memory_required: "Statevector memory required",
+  statevector_memory_budget_gib: "Memory budget · GiB",
 };
 
-function PipelineCard({ index, stage }: { index: number; stage?: StageTelemetry }) {
+function PipelineCard({ index, stage, selectedNode, onNodeChange, pending }: {
+  index: number;
+  stage?: StageTelemetry;
+  selectedNode: StageNode;
+  onNodeChange: (node: StageNode) => void;
+  pending: boolean;
+}) {
   const config = PIPELINE[index];
-  const quantum = config.node === "QPU";
+  const node = stage?.node ?? selectedNode;
+  const nodeStyle = NODE_STYLE[node];
+  const NodeIcon = nodeStyle.icon;
   const style = stage ? STATUS[stage.status] : null;
   return (
     <article data-testid={"stage-" + (index + 1)} className={["relative flex h-full min-w-0 flex-col rounded-2xl border bg-slate-900/70 p-5 sm:p-6", style?.border ?? "border-slate-800"].join(" ")}>
@@ -74,18 +93,25 @@ function PipelineCard({ index, stage }: { index: number; stage?: StageTelemetry 
         {stage ? <StatusBadge status={stage.status} /> : <span className="text-xs text-slate-500">Awaiting telemetry</span>}
       </div>
       <div className="mb-5 flex items-center gap-3">
-        <span className={["grid size-11 shrink-0 place-items-center rounded-xl border", quantum ? "border-violet-400/20 bg-violet-400/10 text-violet-300" : "border-sky-400/20 bg-sky-400/10 text-sky-300"].join(" ")}>
-          {quantum ? <Layers3 size={22} /> : <Cpu size={22} />}
+        <span className={["grid size-11 shrink-0 place-items-center rounded-xl border", nodeStyle.frame].join(" ")}>
+          <NodeIcon size={22} />
         </span>
         <div>
-          <p className={["text-sm font-semibold", quantum ? "text-violet-300" : "text-sky-300"].join(" ")}>{config.node}</p>
+          <p data-testid={"stage-node-" + (index + 1)} className={["text-sm font-semibold", nodeStyle.text].join(" ")}>{node}</p>
           <p className="mt-0.5 text-xs text-slate-400">{config.label}</p>
         </div>
       </div>
+      <fieldset aria-label={`Stage ${index + 1} node assignment`} className="mb-5 min-w-0">
+        <legend className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Run on</legend>
+        <div className="grid grid-cols-3 gap-1 rounded-lg border border-slate-800 bg-slate-950 p-1">
+          {NODES.map((target) => <button key={target} type="button" aria-pressed={selectedNode === target} onClick={() => onNodeChange(target)} className={["min-h-10 rounded-md px-2 py-2 text-xs font-semibold transition-colors", selectedNode === target ? "bg-cyan-400/15 text-cyan-200 ring-1 ring-inset ring-cyan-400/30" : "text-slate-400 hover:bg-slate-800 hover:text-slate-100"].join(" ")}>{target}</button>)}
+        </div>
+        <p className="mt-2 min-h-8 text-[10px] leading-4 text-slate-500">{stage && stage.node !== selectedNode ? `Selected ${selectedNode} · showing previous ${stage.node} result` : pending ? "Updating telemetry for the selected route…" : "Changes run automatically · modeled allocation"}</p>
+      </fieldset>
       <h3 title={stage?.name ?? config.label} className="min-h-12 line-clamp-2 text-base font-semibold leading-6 text-slate-100 [overflow-wrap:anywhere]">{stage?.name ?? config.label}</h3>
       <div className="my-5 border-y border-slate-800/80 py-4">
         <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Stage latency</span>
-        <p className="mt-1 font-mono text-2xl tracking-tight text-slate-100 [overflow-wrap:anywhere] sm:text-3xl">
+        <p data-testid={"stage-latency-" + (index + 1)} className="mt-1 font-mono text-2xl tracking-tight text-slate-100 [overflow-wrap:anywhere] sm:text-3xl">
           {stage ? formatValue(stage.latency_ms) : "—"}<span className="ml-2 text-sm text-slate-500">ms</span>
         </p>
       </div>
@@ -93,7 +119,7 @@ function PipelineCard({ index, stage }: { index: number; stage?: StageTelemetry 
         {stage ? Object.entries(stage.metrics).map(([key, value]) => (
           <div key={key} className="min-w-0 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2.5">
             <dt className="text-[10px] leading-4 text-slate-400 [overflow-wrap:anywhere]">{metricLabels[key] ?? key.replaceAll("_", " ")}</dt>
-            <dd className={["mt-1 font-mono text-xs leading-5 [overflow-wrap:anywhere]", key === "coherence_survival_pct" ? style?.text : "text-slate-200"].join(" ")}>{formatValue(value)}</dd>
+            <dd className={["mt-1 font-mono text-xs leading-5 [overflow-wrap:anywhere]", key === "coherence_survival_pct" ? style?.text : "text-slate-200"].join(" ")}>{key === "routing_model" ? "Illustrative estimate" : typeof value === "boolean" ? value ? "Yes" : "No" : formatValue(value)}</dd>
           </div>
         )) : <div className="col-span-2 h-24 animate-pulse rounded-lg bg-slate-800/40" aria-hidden="true" />}
       </dl>
@@ -111,6 +137,7 @@ export default function Home() {
   const [workload, setWorkload] = useState<WorkloadId>("shors_crypto");
   const [scale, setScale] = useState(15);
   const [hardware, setHardware] = useState<HardwareProfile>("ibm_heron_nisq");
+  const [routing, setRouting] = useState<RoutingConfig>(DEFAULT_ROUTING);
   const [revision, setRevision] = useState(0);
   const [state, dispatch] = useReducer(reducer, {
     loading: true, slow: false, error: null, snapshot: null, history: [], completed: 0,
@@ -121,7 +148,7 @@ export default function Home() {
     const controller = new AbortController();
     const slowNotice = setTimeout(() => { if (active) dispatch({ type: "slow" }); }, 10000);
     const timeout = setTimeout(() => controller.abort(new Error("The engine took too long to respond. Please retry; it may be waking up.")), 90000);
-    const request: SimulationRequest = { workload_id: workload, scale_param: scale, hardware_profile: hardware };
+    const request: SimulationRequest = { workload_id: workload, scale_param: scale, hardware_profile: hardware, routing };
     dispatch({ type: "start" });
     void simulate(request, controller.signal).then((data) => {
       if (active && !controller.signal.aborted) dispatch({ type: "success", snapshot: { request, data } });
@@ -136,7 +163,7 @@ export default function Home() {
       dispatch({ type: "error", error: message });
     }).finally(() => { clearTimeout(timeout); clearTimeout(slowNotice); });
     return () => { active = false; clearTimeout(timeout); clearTimeout(slowNotice); controller.abort(); };
-  }, [workload, scale, hardware, revision]);
+  }, [workload, scale, hardware, routing, revision]);
 
   const { snapshot, loading, error } = state;
   const data = snapshot?.data;
@@ -148,6 +175,9 @@ export default function Home() {
   const style = STATUS[severity];
   const limited = data && !data.primary_bottleneck.startsWith("NONE");
   const latest = state.history[0];
+  const updateNode = (key: keyof RoutingConfig, node: StageNode) => {
+    setRouting((current) => current[key] === node ? current : { ...current, [key]: node });
+  };
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -268,11 +298,11 @@ export default function Home() {
           <div>
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <h2 className="text-sm font-semibold">Execution pipeline</h2>
-              <p className="flex items-center gap-2 font-mono text-[10px] text-slate-500"><span className="text-sky-400">CPU</span><ArrowRight size={12} /><span className="text-violet-400">QPU</span><ArrowRight size={12} /><span className="text-sky-400">CPU</span></p>
+              <p aria-label="Selected stage routing" className="flex items-center gap-2 font-mono text-[10px] text-slate-500">{PIPELINE.map(({ routingKey }, index) => <span key={routingKey} className="inline-flex items-center gap-2">{index > 0 && <ArrowRight size={12} />}<span className={NODE_STYLE[routing[routingKey]].text}>{routing[routingKey]}</span></span>)}</p>
             </div>
-            <div className="grid gap-4 lg:grid-cols-3">{PIPELINE.map(({ key }, index) => (
+            <div className="grid gap-4 lg:grid-cols-3">{PIPELINE.map(({ key, routingKey }, index) => (
               <div key={key} className="relative min-w-0">
-                <PipelineCard index={index} stage={data?.stages[key]} />
+                <PipelineCard index={index} stage={data?.stages[key]} selectedNode={routing[routingKey]} onNodeChange={(node) => updateNode(routingKey, node)} pending={loading} />
                 {index < 2 && <span aria-hidden="true" className="pointer-events-none absolute -bottom-3 left-1/2 z-10 grid size-6 -translate-x-1/2 place-items-center rounded-full border border-slate-700 bg-slate-950 text-slate-500 lg:-right-5 lg:bottom-auto lg:left-auto lg:top-1/2 lg:-translate-y-1/2 lg:translate-x-0"><ArrowRight size={12} className="hidden lg:block" /><ArrowDown size={12} className="lg:hidden" /></span>}
               </div>
             ))}</div>

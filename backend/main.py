@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Dict, Any, Optional
+from pydantic import BaseModel, ConfigDict
+from typing import Dict, Any, Literal, Optional
 import math
 from fractions import Fraction
 from qiskit import QuantumCircuit, transpile
@@ -26,14 +26,26 @@ app.add_middleware(
 # ==========================================
 # 1. UNIFIED PYDANTIC CONTRACT
 # ==========================================
+StageNode = Literal["CPU", "GPU", "QPU"]
+
+
+class RoutingConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    stage_1_node: StageNode = "CPU"
+    stage_2_node: StageNode = "QPU"
+    stage_3_node: StageNode = "CPU"
+
+
 class SimulationRequest(BaseModel):
     workload_id: str = "shors_crypto"       # "shors_crypto" or "quantum_mips"
     scale_param: int = 15                   # For Shor's: 15, 21, 35, 512, 2048
     hardware_profile: str = "ibm_heron_nisq" # "ideal_sim" or "ibm_heron_nisq"
+    routing: Optional[RoutingConfig] = None
 
 class StageTelemetry(BaseModel):
     name: str
-    node: str                               # "CPU" or "QPU"
+    node: StageNode
     latency_ms: float
     status: str                             # "OPTIMAL", "WARNING", "CRITICAL_BOTTLENECK"
     output_summary: str
@@ -119,7 +131,7 @@ def execute_live_shors_15(a: int = 7, noisy: bool = True) -> Dict[str, Any]:
 # ==========================================
 # 3. SHOR'S HYBRID PIPELINE BUILDER
 # ==========================================
-def run_shors_pipeline(scale_param: int, hardware_profile: str) -> HybridTelemetryResponse:
+def _run_default_shors_pipeline(scale_param: int, hardware_profile: str) -> HybridTelemetryResponse:
     noisy = (hardware_profile == "ibm_heron_nisq")
     a = 7 if scale_param != 21 else 2
 
@@ -252,6 +264,138 @@ def run_shors_pipeline(scale_param: int, hardware_profile: str) -> HybridTelemet
         }
     )
 
+# Routing costs below are illustrative simulation assumptions, not benchmarks.
+# GPU classical routines include 0.30 ms of launch/transfer overhead and a 4x
+# compute speedup. Classical statevector emulation costs scale with 2^qubits;
+# CPU/GPU kernel multipliers are 50x/12.5x the baseline gate-time estimate.
+# The modeled statevector budgets are 16 GiB on CPU and 8 GiB on GPU, with
+# complex128 amplitudes (16 bytes). No physical GPU or QPU is dispatched.
+CLASSICAL_GPU_OVERHEAD_MS = 0.30
+CLASSICAL_GPU_COMPUTE_FACTOR = 0.25
+STATEVECTOR_PROFILES = {
+    "CPU": {"max_qubits": 30, "memory_gib": 16, "latency_factor": 50.0},
+    "GPU": {"max_qubits": 29, "memory_gib": 8, "latency_factor": 12.5},
+}
+STAGE_KEYS = (
+    "stage_1_classical_pre",
+    "stage_2_quantum_kernel",
+    "stage_3_classical_post",
+)
+
+
+def run_shors_pipeline(
+    scale_param: int,
+    hardware_profile: str,
+    routing: Optional[RoutingConfig] = None,
+) -> HybridTelemetryResponse:
+    """Profile projected stage placement; the N=15 reference circuit uses Aer.
+
+    Omitted, null, empty, and explicit default routing retain the original API
+    response. Custom routes describe modeled costs and feasibility, not device
+    measurements. Classical emulation has no physical QPU decoherence.
+    """
+    targets = routing or RoutingConfig()
+    core_profile = hardware_profile if targets.stage_2_node == "QPU" else "ideal_sim"
+    response = _run_default_shors_pipeline(scale_param, core_profile)
+    if targets == RoutingConfig():
+        return response
+
+    reasons = {"stage_2_quantum_kernel": response.primary_bottleneck}
+    for key, target in zip(STAGE_KEYS, (
+        targets.stage_1_node, targets.stage_2_node, targets.stage_3_node
+    )):
+        stage = response.stages[key]
+        stage.node = target
+        stage.metrics["routing_model"] = "ILLUSTRATIVE_V1 (not device measurements)"
+        stage.metrics["routing_supported"] = True
+        stage.metrics["execution_feasible"] = True
+
+        if key == "stage_2_quantum_kernel":
+            if target == "QPU":
+                continue
+            profile = STATEVECTOR_PROFILES[target]
+            qubits = stage.metrics["qubits_required"]
+            stage.metrics.update({
+                "simulation_method": "Classical statevector emulation",
+                "statevector_memory_required": f"2^{qubits + 4} bytes",
+                "statevector_memory_budget_gib": profile["memory_gib"],
+                "coherence_survival_pct": 100.0,
+                "io_state_prep_ms": CLASSICAL_GPU_OVERHEAD_MS if target == "GPU" else 0.0,
+            })
+            if qubits > profile["max_qubits"]:
+                stage.latency_ms = 0.0
+                stage.status = "CRITICAL_BOTTLENECK"
+                stage.metrics["execution_feasible"] = False
+                stage.output_summary = (
+                    f"BLOCKED: {qubits:,}-qubit statevector requires 2^{qubits + 4} "
+                    f"bytes, exceeding the modeled {profile['memory_gib']} GiB {target} budget."
+                )
+                reasons[key] = f"{target} STATEVECTOR MEMORY LIMIT ({profile['memory_gib']} GiB Modeled Budget)"
+            else:
+                overhead = CLASSICAL_GPU_OVERHEAD_MS if target == "GPU" else 0.0
+                stage.latency_ms = round(
+                    stage.latency_ms * (2 ** (qubits - 8)) * profile["latency_factor"] + overhead, 2
+                )
+                stage.status = "WARNING"
+                stage.output_summary += (
+                    f" Quantum kernel emulated on modeled {target}; latency is an "
+                    "illustrative projection with no physical QPU decoherence."
+                )
+                reasons[key] = f"{target} STATEVECTOR EMULATION OVERHEAD (Illustrative Latency Model)"
+            continue
+
+        if target == "GPU":
+            stage.latency_ms = round(
+                stage.latency_ms * CLASSICAL_GPU_COMPUTE_FACTOR + CLASSICAL_GPU_OVERHEAD_MS, 2
+            )
+            stage.metrics["launch_transfer_overhead_ms"] = CLASSICAL_GPU_OVERHEAD_MS
+            stage.metrics["compute_latency_factor"] = CLASSICAL_GPU_COMPUTE_FACTOR
+            stage.output_summary = stage.output_summary.replace("on CPU.", "on the profiling host.")
+            stage.output_summary += " GPU routing latency includes modeled launch/transfer overhead."
+            if stage.status == "OPTIMAL":
+                stage.status = "WARNING"
+                reasons[key] = f"{target} LAUNCH/TRANSFER OVERHEAD ({stage.name})"
+        elif target == "QPU":
+            stage.latency_ms = 0.0
+            stage.status = "CRITICAL_BOTTLENECK"
+            stage.metrics["routing_supported"] = False
+            stage.metrics["execution_feasible"] = False
+            stage.output_summary = (
+                f"UNSUPPORTED ROUTE: {stage.name} is a classical host routine in this "
+                "profiler and requires CPU or GPU placement; no QPU implementation is available."
+            )
+            reasons[key] = f"UNSUPPORTED QPU ROUTING ({stage.name})"
+
+    # A blocked prerequisite must not produce successful downstream telemetry.
+    blocked_by = None
+    for key in STAGE_KEYS:
+        stage = response.stages[key]
+        if blocked_by is not None:
+            stage.latency_ms = 0.0
+            stage.status = "CRITICAL_BOTTLENECK"
+            stage.metrics["execution_feasible"] = False
+            stage.output_summary = f"STARVED: {blocked_by} did not produce usable input."
+            reasons[key] = stage.output_summary
+        if stage.metrics["execution_feasible"] is False and blocked_by is None:
+            blocked_by = stage.name
+        if key == "stage_3_classical_post" and stage.metrics["execution_feasible"] is False:
+            stage.metrics["factors_found"] = "NONE (Routing blocked)"
+
+    if blocked_by is not None:
+        # Report the source of starvation rather than a downstream symptom.
+        source_key = next(key for key in STAGE_KEYS if response.stages[key].name == blocked_by)
+        response.primary_bottleneck = reasons[source_key]
+    else:
+        rank = {"OPTIMAL": 0, "WARNING": 1, "CRITICAL_BOTTLENECK": 2}
+        candidates = [key for key in STAGE_KEYS if response.stages[key].status != "OPTIMAL"]
+        if candidates:
+            key = max(candidates, key=lambda key: (
+                rank[response.stages[key].status], response.stages[key].latency_ms
+            ))
+            response.primary_bottleneck = reasons.get(key, response.primary_bottleneck)
+    return response
+
+
 # ==========================================
 # 4. API ENDPOINTS
 # ==========================================
@@ -262,7 +406,7 @@ def health_check():
 @app.post("/api/simulate", response_model=HybridTelemetryResponse)
 def simulate_workload(req: SimulationRequest):
     if req.workload_id == "shors_crypto":
-        return run_shors_pipeline(req.scale_param, req.hardware_profile)
+        return run_shors_pipeline(req.scale_param, req.hardware_profile, req.routing)
     elif req.workload_id == "quantum_mips":
         # Socket ready for Thursday/Friday Quantum AI Vector Preset!
         raise HTTPException(status_code=501, detail="Quantum-MIPS AI Preset unlocks in Sprint Phase 2.")

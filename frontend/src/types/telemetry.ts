@@ -1,16 +1,24 @@
 export type StageStatus = "OPTIMAL" | "WARNING" | "CRITICAL_BOTTLENECK";
 export type HardwareProfile = "ibm_heron_nisq" | "ideal_sim";
 export type WorkloadId = "shors_crypto" | "quantum_mips";
+export type StageNode = "CPU" | "GPU" | "QPU";
+
+export interface RoutingConfig {
+  stage_1_node: StageNode;
+  stage_2_node: StageNode;
+  stage_3_node: StageNode;
+}
 
 export interface SimulationRequest {
   workload_id: WorkloadId;
   scale_param: number;
   hardware_profile: HardwareProfile;
+  routing?: Partial<RoutingConfig> | null;
 }
 
 export interface StageTelemetry {
   name: string;
-  node: "CPU" | "QPU";
+  node: StageNode;
   latency_ms: number;
   status: StageStatus;
   output_summary: string;

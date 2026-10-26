@@ -40,7 +40,7 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 ### Dashboard behavior
 
 The dashboard at `src/app/page.tsx` runs the default Shor's N = 15 simulation on
-load. Changing the workload, target scale, or hardware profile automatically
+load. Changing the workload, target scale, hardware profile, or a stage's node automatically
 posts to `/api/simulate`. The Run simulation button repeats the current request.
 Superseded requests are canceled, and failed requests retain the last successful
 result with an error notice and retry action.
@@ -50,10 +50,22 @@ offers Try again; requests time out after 90 seconds with a Retry button. Retryi
 cancels the previous request. Network failures do not automatically switch to a
 local backend; select the local URL using the environment configuration above.
 
-The pipeline cards show CPU → QPU → CPU stage telemetry. Green indicates optimal,
+Each pipeline card has CPU/GPU/QPU node-assignment pills. The default route is
+CPU → QPU → CPU; each stage can be assigned independently. Every request includes
+the full `routing` object (`stage_1_node`, `stage_2_node`, `stage_3_node`). Selection
+changes appear immediately, while returned node labels, latency, and status update
+when the engine responds. Previous results remain labeled during updates or errors.
+
+The updated local backend runs on `http://127.0.0.1:8001`, configured in
+`.env.local`. The Render deployment must include `RoutingConfig` before it can
+handle custom routes. A response that ignores the requested node assignments
+produces an error rather than displaying a successful custom simulation.
+
+Green indicates optimal,
 amber indicates a warning, and rose indicates a critical bottleneck. The delta
 tracker compares consecutive successful responses, retaining six transitions in
-memory until the page reloads. Failed and canceled requests do not enter history.
+memory until the page reloads. Node changes are included alongside metrics.
+Failed and canceled requests do not enter history.
 
 N = 15 executes a circuit using Qiskit Aer on a classical simulator. Larger scales
 use analytical projections. Stage timings and coherence values are estimates,
