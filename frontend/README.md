@@ -225,6 +225,18 @@ Google's [generateContent API](https://ai.google.dev/api/generate-content), syst
 instructions for a Principal Quantum-Classical Systems Architect, and a JSON
 response schema. No additional SDK is required.
 
+Generation is capped at 1,024 output tokens with temperature 0.1, one candidate,
+and an 18-second deadline covering generation and response reading. The JSON
+schema permits exactly the three diagnostic keys. A separate live-output gate
+requires 20–900 characters and 1–4 sentences per section, handles decimal values
+without treating their decimal points as sentence boundaries, and normalizes
+whitespace/Unicode before checking known unsupported hardware claims. It rejects
+calibration, error-correction buffers, other unmodeled hardware actions, and
+claims of actual physical-device execution; explicit model limitations remain
+valid. Unexpected fields, malformed/truncated JSON, and rejected claims trigger
+the local fallback. The gate is separate from legacy history parsing so stricter
+generation limits do not make existing saved runs unreadable.
+
 The response is `{ insight }` with `runId`, optional comparison ID, source/model,
 timestamp, fallback reason/notice, and three validated text sections:
 `routingDiagnosis`, `spaceTimeTradeOff`, and `optimizationRecommendation`.
@@ -237,6 +249,9 @@ output return a clearly labeled deterministic local diagnostic with the same
 sections. Gemini calls time out after 18 seconds; the browser also handles an
 unreachable advisor endpoint. Fallbacks remain usable and can be saved. Analysis
 never blocks the simulator. Raw provider errors and secrets are not exposed.
+Response metadata distinguishes `source: "gemini"` from `source: "fallback"`;
+fallbacks use `model: null`, a specific `fallbackReason` (including
+`invalid_response` for failed output validation), and a human-readable `notice`.
 
 After generation, the existing background save queue updates the same run UUID
 with `advisorInsight`. A nullable JSONB column was added by migration

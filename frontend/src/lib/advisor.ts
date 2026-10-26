@@ -31,7 +31,7 @@ const notices: Record<FallbackReason, string> = {
   rate_limited: "Gemini is rate-limited. Showing a deterministic local diagnostic; retry analysis later.",
   timeout: "Gemini took too long to respond. Showing a deterministic local diagnostic.",
   provider_error: "Gemini is temporarily unavailable or its configuration was rejected. Showing a deterministic local diagnostic.",
-  invalid_response: "Gemini returned an incomplete diagnostic. Showing a deterministic local diagnostic.",
+  invalid_response: "Gemini returned a diagnostic that did not pass validation. Showing a deterministic local diagnostic.",
   network_error: "The AI advisor could not be reached. Showing a deterministic local diagnostic.",
 };
 

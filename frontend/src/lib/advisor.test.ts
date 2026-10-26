@@ -6,6 +6,7 @@ import { createRunRecord, serializeRun } from "./run-record";
 import type { CompletedRun } from "@/types/run-history";
 import type { SimulationRun } from "@/generated/prisma/client";
 import { ADVISOR_BODY_LIMIT, advisorDigest, validateAdvisorRequest } from "./advisor-input";
+import { ADVISOR_OUTPUT_TOKENS, ADVISOR_RESPONSE_SCHEMA, ADVISOR_TEMPERATURE, ADVISOR_TIMEOUT_MS } from "./advisor-output";
 
 const fixture = (): CompletedRun => ({
   id: "4d9c09fa-7843-4c63-9d2b-556f74c4e5ab", completedAt: "2026-10-26T16:00:00.000Z",
@@ -63,6 +64,11 @@ test("advisor route handles Gemini success, missing keys, limits, timeouts, and 
     assert.equal(context.current.request.routing.stage_2_node, "QPU");
     assert.ok(context.previous);
     assert.equal(body.generationConfig.responseMimeType, "application/json");
+    assert.equal(body.generationConfig.temperature, ADVISOR_TEMPERATURE);
+    assert.equal(body.generationConfig.maxOutputTokens, ADVISOR_OUTPUT_TOKENS);
+    assert.equal(body.generationConfig.candidateCount, 1);
+    assert.deepEqual(body.generationConfig.responseJsonSchema, ADVISOR_RESPONSE_SCHEMA);
+    assert.ok(options.signal instanceof AbortSignal);
     if (behavior === "network") throw new Error("test-server-secret");
     if (behavior === "timeout") throw new DOMException("secret timeout detail", "TimeoutError");
     if (behavior === "429" || behavior === "503") return Response.json({ error: "test-server-secret" }, { status: Number(behavior) });
@@ -92,6 +98,87 @@ test("advisor route handles Gemini success, missing keys, limits, timeouts, and 
   } finally {
     if (priorKey === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = priorKey;
     if (priorModel === undefined) delete process.env.GEMINI_MODEL; else process.env.GEMINI_MODEL = priorModel;
+  }
+});
+
+test("output validation failures return the local diagnostic with explicit fallback metadata", async (t) => {
+  const priorKey = process.env.GEMINI_API_KEY;
+  process.env.GEMINI_API_KEY = "test-key";
+  let returned: unknown;
+  t.mock.method(globalThis, "fetch", async () => Response.json({ candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify(returned) }] } }] }));
+  const input = validateAdvisorRequest({ current: fixture(), previous: fixture() });
+  const expected = deterministicInsight(input.current, input.previous, "invalid_response");
+  const valid = { routingDiagnosis: "QPU capacity is below the minimum required by this scale.", spaceTimeTradeOff: "4,096 is below the required 4,099 logical qubits.", optimizationRecommendation: "Increase available_qubits to 6,144 for Windowed Parallel." };
+  try {
+    for (returned of [
+      { ...valid, optimizationRecommendation: "Perform pulse calibration to improve survival." },
+      { ...valid, optimizationRecommendation: "Reserve fault-tolerant buffer qubits for this run." },
+      { ...valid, routingDiagnosis: "The workload ran on a real QPU with measured latency." },
+      { ...valid, spaceTimeTradeOff: "Only one section present.", routingDiagnosis: undefined },
+      { ...valid, optimizationRecommendation: "" },
+      { ...valid, optimizationRecommendation: "x".repeat(901) },
+      { ...valid, extraField: "not allowed" },
+      { ...valid, routingDiagnosis: "This is the first sentence. This is the second. This is the third. This is the fourth. This is the fifth." },
+    ]) {
+      const response = await POST(request(input));
+      assert.equal(response.status, 200);
+      const insight = (await response.json()).insight;
+      assert.equal(insight.source, "fallback");
+      assert.equal(insight.model, null);
+      assert.equal(insight.fallbackReason, "invalid_response");
+      assert.match(insight.notice, /did not pass validation/);
+      assert.deepEqual(insight.sections, expected.sections);
+      assert.equal(insight.previousRunId, input.previous!.id);
+    }
+    returned = valid;
+    const insight = (await (await POST(request(input))).json()).insight;
+    assert.equal(insight.source, "gemini");
+    assert.ok(insight.model);
+    assert.equal(insight.fallbackReason, null);
+    assert.equal(insight.notice, null);
+    assert.deepEqual(insight.sections, valid);
+  } finally {
+    if (priorKey === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = priorKey;
+  }
+});
+
+test("the generation deadline aborts a slow provider and returns a deterministic timeout diagnostic", async (t) => {
+  const priorKey = process.env.GEMINI_API_KEY;
+  process.env.GEMINI_API_KEY = "test-key";
+  const deadline = new AbortController();
+  t.mock.method(AbortSignal, "timeout", (milliseconds: number) => {
+    assert.equal(milliseconds, ADVISOR_TIMEOUT_MS);
+    return deadline.signal;
+  });
+  t.mock.method(globalThis, "fetch", (_url: string, options: RequestInit) => new Promise((_resolve, reject) => {
+    const signal = options.signal!;
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    queueMicrotask(() => deadline.abort(new DOMException("Test deadline reached", "TimeoutError")));
+  }));
+  try {
+    const insight = (await (await POST(request({ current: fixture() }))).json()).insight;
+    assert.equal(deadline.signal.aborted, true);
+    assert.equal(insight.source, "fallback");
+    assert.equal(insight.fallbackReason, "timeout");
+    assert.match(insight.notice, /too long/);
+    assert.ok(insight.sections.optimizationRecommendation.includes("4,099"));
+  } finally {
+    if (priorKey === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = priorKey;
+  }
+});
+
+test("a timeout while reading the provider's response body is also labeled as a timeout", async (t) => {
+  const priorKey = process.env.GEMINI_API_KEY;
+  process.env.GEMINI_API_KEY = "test-key";
+  t.mock.method(globalThis, "fetch", async () => ({ ok: true, status: 200,
+    json: async () => { throw new DOMException("Provider body timed out", "TimeoutError"); },
+  }));
+  try {
+    const insight = (await (await POST(request({ current: fixture() }))).json()).insight;
+    assert.equal(insight.source, "fallback");
+    assert.equal(insight.fallbackReason, "timeout");
+  } finally {
+    if (priorKey === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = priorKey;
   }
 });
 
