@@ -1,4 +1,4 @@
-import { DEFAULT_ROUTING, formatValue, PIPELINE, qubitThresholds, totalLatency } from "@/lib/telemetry";
+import { formatValue, PIPELINE, qubitThresholds, totalLatency } from "@/lib/telemetry";
 import type { CompletedRun } from "@/types/run-history";
 import type { AdvisorInsight, AdvisorSections, FallbackReason } from "@/types/advisor";
 
@@ -66,8 +66,4 @@ export function deterministicInsight(current: CompletedRun, previous: CompletedR
       spaceTimeTradeOff: spaceTime,
       optimizationRecommendation: recommendation,
     } };
-}
-
-export function advisorContext(run: CompletedRun) {
-  return { request: { ...run.request, routing: { ...DEFAULT_ROUTING, ...run.request.routing } }, telemetry: run.telemetry };
 }

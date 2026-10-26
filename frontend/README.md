@@ -197,9 +197,29 @@ the optional comparison includes the previous run, even when several settings
 changed. A new successful simulation resets the panel and cancels stale analysis.
 
 `POST /api/advisor` accepts `{ current: CompletedRun, previous?: CompletedRun }`;
-a completed run contains `{ id, completedAt, request, telemetry }`. It validates
-the workload, routing, capacity and telemetry before sending only request and
-telemetry context to Gemini. The API key stays in a server-side request header;
+a completed run contains `{ id, completedAt, request, telemetry }`. A dedicated
+pre-flight validator checks both runs before any AI call; the advisor route has
+no database dependency. Invalid payloads return HTTP 400. Supported scales are
+15, 21, 35, 512, and 2048. Routing/profile/workload/status/tier values must match
+known enums; capacity is an integer from 1 to 2,147,483,647, matching FastAPI.
+Latencies must be finite and nonnegative, qubit/depth metrics must be bounded
+integers, and coherence must be in 0–100%. Stage nodes must match routing and
+QPU capacity must match the request. Omitted routing/capacity use CPU/QPU/CPU
+and 133; extra stage positions are rejected.
+
+The body reader enforces a **64 KiB UTF-8 byte limit**, including streamed bodies
+and requests with absent or misleading Content-Length headers. Oversized bodies
+return HTTP 413 and stop reading immediately; invalid UTF-8/JSON returns 400.
+Tokens are Unicode-normalized, stripped of control/format characters, trimmed,
+and checked against allowlists. Display fields and arbitrary metadata are never
+forwarded to Gemini. The prompt contains only normalized active configuration,
+execution mode, canonical bottleneck category, total/stage latencies, allowlisted
+numeric/boolean metrics and tier enums, plus the server's local recommendation.
+Run IDs, timestamps, labels, stage descriptions, nested metric objects, and
+previous AI output are excluded. Reordered or verbose equivalent input produces
+the same prompt digest. These checks also protect deterministic fallback text.
+
+The API key stays in a server-side request header;
 it is never sent to the browser or stored with history. The integration uses
 Google's [generateContent API](https://ai.google.dev/api/generate-content), system
 instructions for a Principal Quantum-Classical Systems Architect, and a JSON
