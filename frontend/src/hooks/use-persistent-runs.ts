@@ -45,7 +45,7 @@ export function usePersistentRuns() {
     return refresh();
   }, [refresh]);
 
-  const persist = useCallback(async (run: CompletedRun) => {
+  const persist = useCallback(async function persistRun(run: CompletedRun) {
     if (inFlight.current.has(run.id)) return;
     inFlight.current.add(run.id);
     if (mounted.current) setSavingCount(inFlight.current.size);
@@ -56,7 +56,7 @@ export function usePersistentRuns() {
       });
       const result = await response.json() as SaveRunResult;
       if (result.status === "saved" && response.ok && result.run?.id === run.id) {
-        pending.current.delete(run.id);
+        if (pending.current.get(run.id) === run) pending.current.delete(run.id);
         if (mounted.current) {
           setRuns((current) => mergeRuns(current, [result.run]));
           setPendingCount(pending.current.size); setAvailability("ready"); setMessage(null);
@@ -72,6 +72,8 @@ export function usePersistentRuns() {
     } finally {
       inFlight.current.delete(run.id);
       if (mounted.current) setSavingCount(inFlight.current.size);
+      const newer = pending.current.get(run.id);
+      if (newer && newer !== run) void persistRun(newer);
     }
   }, []);
 

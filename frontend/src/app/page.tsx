@@ -4,6 +4,7 @@ import { useEffect, useReducer, useState } from "react";
 import Link from "next/link";
 import { PersistentRunHistory } from "@/components/persistent-run-history";
 import { ParallelizationTiers } from "@/components/parallelization-tiers";
+import { TelemetryAdvisor } from "@/components/telemetry-advisor";
 import { usePersistentRuns } from "@/hooks/use-persistent-runs";
 import {
   Activity, ArrowDown, ArrowRight, Check, ChevronDown, CircleAlert, CircuitBoard, Cpu,
@@ -175,8 +176,10 @@ export default function Home() {
     const request = submittedRequest;
     void simulate(request, controller.signal).then((data) => {
       if (active && !controller.signal.aborted) {
-        dispatch({ type: "success", snapshot: { request, data } });
-        saveRun({ id: crypto.randomUUID(), completedAt: new Date().toISOString(), request, telemetry: data });
+        const id = crypto.randomUUID();
+        const completedAt = new Date().toISOString();
+        dispatch({ type: "success", snapshot: { id, completedAt, request, data } });
+        saveRun({ id, completedAt, request, telemetry: data });
       }
     }).catch((error: unknown) => {
       // Superseded requests never replace a newer selection's result.
@@ -391,6 +394,10 @@ export default function Home() {
             </div>
           )}
         </section>
+        <TelemetryAdvisor key={snapshot?.id ?? "idle"} snapshot={snapshot} previous={latest?.before}
+          onInsight={saveRun} simulationLoading={loading} saving={persistentHistory.savingCount > 0}
+          savedInsight={persistentHistory.runs.find((run) => run.id === snapshot?.id)?.advisorInsight}
+          persistenceMessage={persistentHistory.message} />
         <PersistentRunHistory history={persistentHistory} />
         <footer className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-slate-800/70 pt-5 text-[10px] leading-5 text-slate-500">
           <p className="flex items-center gap-2"><Radio size={12} />{data?.execution_mode.replaceAll("_", " ") ?? "AWAITING TELEMETRY"}</p>

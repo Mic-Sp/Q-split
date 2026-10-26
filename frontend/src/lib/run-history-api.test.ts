@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { PrismaClient, SimulationRun } from "@/generated/prisma/client";
 import { GET, POST } from "@/app/api/runs/route";
+import { deterministicInsight } from "@/lib/advisor";
+import type { CompletedRun } from "@/types/run-history";
+import { DATABASE_CLIENT_SCHEMA } from "@/lib/db";
 
 const fixture = () => ({
   id: "c367fe2e-f083-4996-8cbd-c895d7a26b8d", completedAt: "2026-10-26T16:00:00.000Z",
@@ -16,7 +19,7 @@ const fixture = () => ({
   },
 });
 const postRequest = (body: unknown) => new Request("http://localhost/api/runs", { method: "POST", body: JSON.stringify(body) });
-const cache = globalThis as unknown as { qSplitDatabase?: { url: string; client: PrismaClient } };
+const cache = globalThis as unknown as { qSplitDatabase?: { url: string; client: PrismaClient; schemaVersion?: string } };
 
 test("history routes handle configuration, validation, saves, ordering, and failures without a live database", async () => {
   const previousUrl = process.env.DATABASE_URL;
@@ -39,11 +42,12 @@ test("history routes handle configuration, validation, saves, ordering, and fail
     let fail: string | null = null;
     cache.qSplitDatabase = {
       url: fakeUrl,
+      schemaVersion: DATABASE_CLIENT_SCHEMA,
       client: {
         simulationRun: {
-          upsert: async ({ where, create }: { where: { id: string }; create: SimulationRun }) => {
+          upsert: async ({ where, create, update }: { where: { id: string }; create: SimulationRun; update: Partial<SimulationRun> }) => {
             if (fail) throw Object.assign(new Error("secret-password must not be returned"), { code: fail });
-            const row = rows.get(where.id) ?? { ...create, createdAt: new Date("2026-10-26T16:00:01.000Z") };
+            const row = rows.has(where.id) ? { ...rows.get(where.id)!, ...update } : { ...create, createdAt: new Date("2026-10-26T16:00:01.000Z") };
             rows.set(where.id, row); return row;
           },
           findMany: async ({ take, orderBy }: { take: number; orderBy: unknown }) => {
@@ -60,6 +64,14 @@ test("history routes handle configuration, validation, saves, ordering, and fail
     assert.equal(saved.status, "saved"); assert.equal(saved.run.circuitDepth, "562");
     await POST(postRequest(fixture()));
     assert.equal(rows.size, 1, "Retries use the same unique run ID");
+    const withInsight = fixture() as CompletedRun;
+    withInsight.advisorInsight = deterministicInsight(withInsight, undefined, "missing_key");
+    response = await POST(postRequest(withInsight));
+    assert.equal((await response.json()).run.advisorInsight.source, "fallback");
+    await POST(postRequest(fixture()));
+    response = await GET(new Request("http://localhost/api/runs"));
+    assert.equal((await response.json()).runs[0].advisorInsight.source, "fallback", "Late ordinary saves must not erase an insight");
+    assert.equal(rows.size, 1, "Saving an insight must update the existing run");
     const newer = fixture(); newer.id = "c367fe2e-f083-4996-8cbd-c895d7a26b8e"; newer.completedAt = "2026-10-26T17:00:00.000Z";
     await POST(postRequest(newer));
     response = await GET(new Request("http://localhost/api/runs?limit=1"));

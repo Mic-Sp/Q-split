@@ -39,7 +39,7 @@ export async function POST(request: Request) {
     const db = getDatabase();
     if (!db) return Response.json({ status: "unconfigured", message: DATABASE_NOT_CONFIGURED }, { headers });
     const run = await withDatabaseTimeout(db.simulationRun.upsert({
-      where: { id: data.id }, create: data, update: {},
+      where: { id: data.id }, create: data, update: data.advisorInsight === undefined ? {} : { advisorInsight: data.advisorInsight },
     }));
     return Response.json({ status: "saved", run: serializeRun(run) }, { status: 201, headers });
   } catch (error) {

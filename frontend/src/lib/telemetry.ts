@@ -28,7 +28,7 @@ export function totalLatency(data: HybridTelemetryResponse): number {
 }
 
 export interface MetricDelta { label: string; before: string; after: string }
-export interface Snapshot { request: SimulationRequest; data: HybridTelemetryResponse }
+export interface Snapshot { id: string; completedAt: string; request: SimulationRequest; data: HybridTelemetryResponse }
 export interface Transition { id: number; before: Snapshot; after: Snapshot; changes: MetricDelta[] }
 
 export function describeChanges(before: Snapshot, after: Snapshot): MetricDelta[] {

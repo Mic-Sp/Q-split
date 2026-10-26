@@ -2,6 +2,7 @@ import type { Prisma, SimulationRun } from "@/generated/prisma/client";
 import { DEFAULT_ROUTING, parseTelemetry, PIPELINE, totalLatency } from "@/lib/telemetry";
 import type { CompletedRun, SavedSimulationRun } from "@/types/run-history";
 import type { SimulationRequest, StageStatus } from "@/types/telemetry";
+import { parseAdvisorInsight } from "@/lib/advisor";
 
 function invalid(message: string): never {
   throw new Error(message);
@@ -61,6 +62,7 @@ export function createRunRecord(value: unknown): Prisma.SimulationRunCreateInput
       ...(request.available_qubits === undefined ? {} : { available_qubits: request.available_qubits }),
     } as Prisma.InputJsonValue,
     telemetry: telemetry as unknown as Prisma.InputJsonValue,
+    ...(run.advisorInsight === undefined ? {} : { advisorInsight: parseAdvisorInsight(run.advisorInsight, run.id) as unknown as Prisma.InputJsonValue }),
   };
 }
 
@@ -76,5 +78,6 @@ export function serializeRun(run: SimulationRun): SavedSimulationRun {
     coherenceSurvivalPct: run.coherenceSurvivalPct,
     request: run.requestPayload as unknown as SimulationRequest,
     telemetry: run.telemetry as unknown as SavedSimulationRun["telemetry"],
+    advisorInsight: run.advisorInsight ? parseAdvisorInsight(run.advisorInsight, run.id) : null,
   };
 }

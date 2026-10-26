@@ -3,8 +3,11 @@ import { PrismaNeon } from "@prisma/adapter-neon";
 import { PrismaClient } from "@/generated/prisma/client";
 
 const globalDatabase = globalThis as unknown as {
-  qSplitDatabase?: { url: string; client: PrismaClient };
+  qSplitDatabase?: { url: string; client: PrismaClient; schemaVersion?: string };
 };
+
+// Invalidate the development singleton after regenerating a changed Prisma schema.
+export const DATABASE_CLIENT_SCHEMA = "simulation-run-advisor-v1";
 
 export const DATABASE_NOT_CONFIGURED = "Persistent history is not configured. Add your Neon DATABASE_URL to frontend/.env.local and restart the app. Simulations still work normally.";
 
@@ -17,7 +20,7 @@ export function getDatabase(): PrismaClient | null {
   } catch {
     return null;
   }
-  if (globalDatabase.qSplitDatabase?.url === connectionString) return globalDatabase.qSplitDatabase.client;
+  if (globalDatabase.qSplitDatabase?.url === connectionString && globalDatabase.qSplitDatabase.schemaVersion === DATABASE_CLIENT_SCHEMA) return globalDatabase.qSplitDatabase.client;
   if (globalDatabase.qSplitDatabase) void globalDatabase.qSplitDatabase.client.$disconnect().catch(() => {});
   const adapter = new PrismaNeon({
     connectionString,
@@ -27,7 +30,7 @@ export function getDatabase(): PrismaClient | null {
     idleTimeoutMillis: 10_000,
   });
   const client = new PrismaClient({ adapter });
-  globalDatabase.qSplitDatabase = { url: connectionString, client };
+  globalDatabase.qSplitDatabase = { url: connectionString, client, schemaVersion: DATABASE_CLIENT_SCHEMA };
   return client;
 }
 

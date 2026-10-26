@@ -42,6 +42,7 @@ model SimulationRun {
   coherenceSurvivalPct Float?
   requestPayload       Json        @db.JsonB
   telemetry            Json        @db.JsonB
+  advisorInsight       Json?       @db.JsonB
 
   @@index([completedAt(sort: Desc), id(sort: Desc)])
   @@index([workloadId, completedAt(sort: Desc)])

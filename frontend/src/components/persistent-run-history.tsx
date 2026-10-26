@@ -4,6 +4,7 @@ import { ChevronDown, CircleAlert, Database, LoaderCircle, RefreshCw } from "luc
 import { formatValue } from "@/lib/telemetry";
 import type { usePersistentRuns } from "@/hooks/use-persistent-runs";
 import type { StageStatus } from "@/types/telemetry";
+import { AdvisorDiagnostic } from "@/components/advisor-diagnostic";
 
 const statusColors: Record<StageStatus, string> = {
   OPTIMAL: "border-emerald-400/25 bg-emerald-400/10 text-emerald-300",
@@ -39,6 +40,11 @@ export function PersistentRunHistory({ history }: { history: ReturnType<typeof u
         </summary>
         <div className="space-y-4 border-t border-slate-800 p-4 sm:p-5">
           <p className="text-xs leading-6 text-slate-300 [overflow-wrap:anywhere]">{run.primaryBottleneck}</p>
+          {run.advisorInsight && <div className="space-y-3" aria-label="Saved advisor insight">
+            <p className="text-xs font-semibold text-cyan-300">AI Telemetry Advisor · {run.advisorInsight.source === "gemini" ? run.advisorInsight.model : "Local deterministic diagnostic"}</p>
+            {run.advisorInsight.notice && <p className="text-xs leading-5 text-amber-200">{run.advisorInsight.notice}</p>}
+            <AdvisorDiagnostic insight={run.advisorInsight} />
+          </div>}
           {run.request.available_qubits !== undefined && <p className="text-xs leading-6 text-cyan-200 [overflow-wrap:anywhere]">
             QPU capacity: {formatValue(run.request.available_qubits)} qubits
             {run.stage2Node === "QPU" && <> · Allocated / Available: {formatValue(run.telemetry.stages.stage_2_quantum_kernel.metrics.qubits_allocated)} / {formatValue(run.request.available_qubits)} · {formatValue(run.telemetry.stages.stage_2_quantum_kernel.metrics.parallelization_tier)}</>}

@@ -1,10 +1,12 @@
 import type { HybridTelemetryResponse, SimulationRequest, StageNode, StageStatus } from "@/types/telemetry";
+import type { AdvisorInsight } from "@/types/advisor";
 
 export interface CompletedRun {
   id: string;
   completedAt: string;
   request: SimulationRequest;
   telemetry: HybridTelemetryResponse;
+  advisorInsight?: AdvisorInsight;
 }
 
 export interface SavedSimulationRun {
@@ -29,6 +31,7 @@ export interface SavedSimulationRun {
   coherenceSurvivalPct: number | null;
   request: SimulationRequest;
   telemetry: HybridTelemetryResponse;
+  advisorInsight: AdvisorInsight | null;
 }
 
 export type HistoryAvailability = "ready" | "unconfigured" | "unavailable";

@@ -170,6 +170,8 @@ duplicates. Re-running a simulation creates a separate history record.
 - `GET /api/runs?limit=20` returns the newest runs (limit 1–50, no caching).
 - `POST /api/runs` accepts `{ id, completedAt, request, telemetry }`, validates it,
   derives summary metrics on the server, and performs an idempotent save.
+  An optional `advisorInsight` updates only that run's saved diagnostic; ordinary
+  save retries do not erase an existing insight.
 - Missing configuration returns an `unconfigured` notice. An unavailable database
   or missing table returns a sanitized `unavailable` response; no driver error or
   credentials are exposed to the browser.
@@ -177,6 +179,52 @@ duplicates. Re-running a simulation creates a separate history record.
   unsaved runs are lost if the tab closes or reloads. The history section displays
   database records only, rather than presenting unsaved runs as persisted.
 - Saved history belongs to this app's database; no per-user account scope exists.
+
+### AI Telemetry Advisor
+
+Set server-only values in `.env.local` and your deployment environment:
+
+```dotenv
+GEMINI_API_KEY="YOUR_API_KEY"
+# Optional override; the default is a current, low-latency Flash model.
+GEMINI_MODEL="gemini-3.5-flash-lite"
+```
+
+The advisor is on demand: run a simulation, then click **Generate analysis**.
+Editing controls, loading history, and running simulations never call Gemini.
+Analysis uses the completed run's captured settings. With two completed runs,
+the optional comparison includes the previous run, even when several settings
+changed. A new successful simulation resets the panel and cancels stale analysis.
+
+`POST /api/advisor` accepts `{ current: CompletedRun, previous?: CompletedRun }`;
+a completed run contains `{ id, completedAt, request, telemetry }`. It validates
+the workload, routing, capacity and telemetry before sending only request and
+telemetry context to Gemini. The API key stays in a server-side request header;
+it is never sent to the browser or stored with history. The integration uses
+Google's [generateContent API](https://ai.google.dev/api/generate-content), system
+instructions for a Principal Quantum-Classical Systems Architect, and a JSON
+response schema. No additional SDK is required.
+
+The response is `{ insight }` with `runId`, optional comparison ID, source/model,
+timestamp, fallback reason/notice, and three validated text sections:
+`routingDiagnosis`, `spaceTimeTradeOff`, and `optimizationRecommendation`.
+Sections cover hardware limits, stage placement, ancilla/depth tiers, and one
+specific next experiment. Prompts distinguish analytical timings and modeled
+usable qubits from physical hardware measurements/error-correction requirements.
+
+Missing keys, provider HTTP 429, timeouts, network errors, or invalid/truncated
+output return a clearly labeled deterministic local diagnostic with the same
+sections. Gemini calls time out after 18 seconds; the browser also handles an
+unreachable advisor endpoint. Fallbacks remain usable and can be saved. Analysis
+never blocks the simulator. Raw provider errors and secrets are not exposed.
+
+After generation, the existing background save queue updates the same run UUID
+with `advisorInsight`. A nullable JSONB column was added by migration
+`20261026010000_advisor_insights` and applied to the configured Neon database.
+Existing runs have no insight until one is generated. Saved diagnostics appear
+inside expanded history rows after a reload. If the database is unavailable,
+the insight stays visible in this tab and **Retry saving** retries without
+another Gemini call. Unsaved insights are lost on reload, like unsaved runs.
 
 Checks that do **not** apply database migrations:
 
