@@ -2,6 +2,8 @@
 
 import { useEffect, useReducer, useState } from "react";
 import Link from "next/link";
+import { PersistentRunHistory } from "@/components/persistent-run-history";
+import { usePersistentRuns } from "@/hooks/use-persistent-runs";
 import {
   Activity, ArrowDown, ArrowRight, Check, ChevronDown, CircleAlert, CircuitBoard, Cpu,
   FlaskConical, GitCompareArrows, Layers3, LoaderCircle, Play, Radio, Workflow, Zap,
@@ -82,7 +84,7 @@ function PipelineCard({ index, stage, selectedNode, onNodeChange, pending }: {
   pending: boolean;
 }) {
   const config = PIPELINE[index];
-  const node = stage?.node ?? selectedNode;
+  const node = selectedNode;
   const nodeStyle = NODE_STYLE[node];
   const NodeIcon = nodeStyle.icon;
   const style = stage ? STATUS[stage.status] : null;
@@ -106,7 +108,7 @@ function PipelineCard({ index, stage, selectedNode, onNodeChange, pending }: {
         <div className="grid grid-cols-3 gap-1 rounded-lg border border-slate-800 bg-slate-950 p-1">
           {NODES.map((target) => <button key={target} type="button" aria-pressed={selectedNode === target} onClick={() => onNodeChange(target)} className={["min-h-10 rounded-md px-2 py-2 text-xs font-semibold transition-colors", selectedNode === target ? "bg-cyan-400/15 text-cyan-200 ring-1 ring-inset ring-cyan-400/30" : "text-slate-400 hover:bg-slate-800 hover:text-slate-100"].join(" ")}>{target}</button>)}
         </div>
-        <p className="mt-2 min-h-8 text-[10px] leading-4 text-slate-500">{stage && stage.node !== selectedNode ? `Selected ${selectedNode} · showing previous ${stage.node} result` : pending ? "Updating telemetry for the selected route…" : "Changes run automatically · modeled allocation"}</p>
+        <p className="mt-2 min-h-8 text-[10px] leading-4 text-slate-500">{stage && stage.node !== selectedNode ? `Selected ${selectedNode} · showing previous ${stage.node} result` : pending ? "Simulation in progress for the submitted route…" : "Selection applies when you click Run simulation"}</p>
       </fieldset>
       <h3 title={stage?.name ?? config.label} className="min-h-12 line-clamp-2 text-base font-semibold leading-6 text-slate-100 [overflow-wrap:anywhere]">{stage?.name ?? config.label}</h3>
       <div className="my-5 border-y border-slate-800/80 py-4">
@@ -121,7 +123,7 @@ function PipelineCard({ index, stage, selectedNode, onNodeChange, pending }: {
             <dt className="text-[10px] leading-4 text-slate-400 [overflow-wrap:anywhere]">{metricLabels[key] ?? key.replaceAll("_", " ")}</dt>
             <dd className={["mt-1 font-mono text-xs leading-5 [overflow-wrap:anywhere]", key === "coherence_survival_pct" ? style?.text : "text-slate-200"].join(" ")}>{key === "routing_model" ? "Illustrative estimate" : typeof value === "boolean" ? value ? "Yes" : "No" : formatValue(value)}</dd>
           </div>
-        )) : <div className="col-span-2 h-24 animate-pulse rounded-lg bg-slate-800/40" aria-hidden="true" />}
+        )) : <div className={["col-span-2 h-24 rounded-lg bg-slate-800/40", pending ? "animate-pulse" : ""].join(" ")} aria-hidden="true" />}
       </dl>
       <div className="mt-auto rounded-lg bg-slate-950/70 p-3.5">
         <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Stage output</p>
@@ -134,24 +136,29 @@ function PipelineCard({ index, stage, selectedNode, onNodeChange, pending }: {
 }
 
 export default function Home() {
+  const persistentHistory = usePersistentRuns();
+  const { saveRun } = persistentHistory;
   const [workload, setWorkload] = useState<WorkloadId>("shors_crypto");
   const [scale, setScale] = useState(15);
   const [hardware, setHardware] = useState<HardwareProfile>("ibm_heron_nisq");
   const [routing, setRouting] = useState<RoutingConfig>(DEFAULT_ROUTING);
-  const [revision, setRevision] = useState(0);
+  const [submittedRequest, setSubmittedRequest] = useState<SimulationRequest | null>(null);
   const [state, dispatch] = useReducer(reducer, {
-    loading: true, slow: false, error: null, snapshot: null, history: [], completed: 0,
+    loading: false, slow: false, error: null, snapshot: null, history: [], completed: 0,
   });
 
   useEffect(() => {
+    if (!submittedRequest) return;
     let active = true;
     const controller = new AbortController();
     const slowNotice = setTimeout(() => { if (active) dispatch({ type: "slow" }); }, 10000);
     const timeout = setTimeout(() => controller.abort(new Error("The engine took too long to respond. Please retry; it may be waking up.")), 90000);
-    const request: SimulationRequest = { workload_id: workload, scale_param: scale, hardware_profile: hardware, routing };
-    dispatch({ type: "start" });
+    const request = submittedRequest;
     void simulate(request, controller.signal).then((data) => {
-      if (active && !controller.signal.aborted) dispatch({ type: "success", snapshot: { request, data } });
+      if (active && !controller.signal.aborted) {
+        dispatch({ type: "success", snapshot: { request, data } });
+        saveRun({ id: crypto.randomUUID(), completedAt: new Date().toISOString(), request, telemetry: data });
+      }
     }).catch((error: unknown) => {
       // Superseded requests never replace a newer selection's result.
       if (!active || (controller.signal.aborted && controller.signal.reason?.name === "AbortError")) return;
@@ -163,7 +170,7 @@ export default function Home() {
       dispatch({ type: "error", error: message });
     }).finally(() => { clearTimeout(timeout); clearTimeout(slowNotice); });
     return () => { active = false; clearTimeout(timeout); clearTimeout(slowNotice); controller.abort(); };
-  }, [workload, scale, hardware, routing, revision]);
+  }, [submittedRequest, saveRun]);
 
   const { snapshot, loading, error } = state;
   const data = snapshot?.data;
@@ -175,6 +182,17 @@ export default function Home() {
   const style = STATUS[severity];
   const limited = data && !data.primary_bottleneck.startsWith("NONE");
   const latest = state.history[0];
+  const configurationChanged = snapshot && (
+    snapshot.request.workload_id !== workload || snapshot.request.scale_param !== scale ||
+    snapshot.request.hardware_profile !== hardware || PIPELINE.some(({ routingKey }) =>
+      (snapshot.request.routing?.[routingKey] ?? DEFAULT_ROUTING[routingKey]) !== routing[routingKey])
+  );
+  const runSimulation = () => {
+    dispatch({ type: "start" });
+    setSubmittedRequest({
+      workload_id: workload, scale_param: scale, hardware_profile: hardware, routing: { ...routing },
+    });
+  };
   const updateNode = (key: keyof RoutingConfig, node: StageNode) => {
     setRouting((current) => current[key] === node ? current : { ...current, [key]: node });
   };
@@ -190,8 +208,8 @@ export default function Home() {
             </span>
           </Link>
           <div role="status" className="flex items-center gap-2 rounded-full border border-slate-800 bg-slate-900/70 px-3 py-1.5 text-xs text-slate-400">
-            <span className={["size-1.5 rounded-full", loading ? "animate-pulse bg-sky-400" : error ? "bg-rose-400" : "bg-cyan-400"].join(" ")} />
-            {loading ? "Connecting to engine" : error ? "Request unsuccessful" : "Engine connected"}
+            <span className={["size-1.5 rounded-full", loading ? "animate-pulse bg-sky-400" : error ? "bg-rose-400" : data ? "bg-cyan-400" : "bg-slate-500"].join(" ")} />
+            {loading ? "Simulation in progress" : error ? "Request unsuccessful" : data ? "Engine connected" : "Ready to simulate"}
           </div>
         </div>
       </header>
@@ -232,13 +250,13 @@ export default function Home() {
                 ))}
               </div>
             </fieldset>
-            <button type="button" disabled={loading} onClick={() => setRevision((n) => n + 1)} className="flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg bg-cyan-400 px-5 text-sm font-semibold text-slate-950 transition-colors hover:bg-cyan-300 disabled:cursor-wait disabled:opacity-60">
+            <button type="button" disabled={loading} onClick={runSimulation} className="flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg bg-cyan-400 px-5 text-sm font-semibold text-slate-950 transition-colors hover:bg-cyan-300 disabled:cursor-wait disabled:opacity-60">
               {loading ? <LoaderCircle size={15} className="animate-spin" /> : <Play size={15} fill="currentColor" />}
               {loading ? "Simulating…" : "Run simulation"}
             </button>
           </div>
           <p className="mt-4 text-xs leading-5 text-slate-500">
-            {workload === "quantum_mips" ? "Quantum-MIPS is a preview preset. The engine currently returns an availability message for this workload." : "Controls update automatically. N = 15 runs a Qiskit Aer circuit; larger scales use an analytical hardware model."}
+            {workload === "quantum_mips" ? "Quantum-MIPS is a preview preset. Click Run simulation to request its availability from the engine." : "Click Run simulation to apply your selections. N = 15 runs a Qiskit Aer circuit; larger scales use an analytical hardware model."}
           </p>
         </section>
 
@@ -249,7 +267,7 @@ export default function Home() {
               <p className="text-sm font-medium text-cyan-200">{state.slow ? "The engine is taking a little longer" : "Running your simulation"}</p>
               <p className="mt-1 text-xs leading-6 text-slate-400">{state.slow ? "The Render engine may be waking up. We’ll wait up to 90 seconds; you can keep this page open or try again." : "Fetching engine telemetry. Your controls remain available while the simulation runs."}</p>
             </div>
-            {state.slow && <button type="button" onClick={() => setRevision((n) => n + 1)} className="shrink-0 rounded-md border border-cyan-400/30 px-3 py-2 text-xs text-cyan-200">Try again</button>}
+            {state.slow && <button type="button" onClick={runSimulation} className="shrink-0 rounded-md border border-cyan-400/30 px-3 py-2 text-xs text-cyan-200">Try again</button>}
           </div>
         )}
 
@@ -261,22 +279,22 @@ export default function Home() {
               <p className="mt-1 text-sm leading-6 text-rose-200/75 [overflow-wrap:anywhere]">{error}</p>
               {snapshot && <p className="mt-2 text-xs text-slate-400">Showing the last successful simulation below.</p>}
             </div>
-            <button type="button" onClick={() => setRevision((n) => n + 1)} className="rounded-md border border-rose-400/30 px-3 py-2 text-xs text-rose-200">Retry</button>
+            <button type="button" onClick={runSimulation} className="rounded-md border border-rose-400/30 px-3 py-2 text-xs text-rose-200">Retry</button>
           </div>
         )}
 
         <section aria-label="Simulation results" aria-busy={loading} className="space-y-6">
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-            <p className="text-slate-400">{data && snapshot ? <><span className="font-medium text-slate-200">{data.scale_label}</span><span className="mx-2 text-slate-700">/</span>{hardwareLabel(snapshot.request.hardware_profile)}</> : "Preparing your first simulation"}</p>
+            <p className="text-slate-400">{data && snapshot ? <><span className="font-medium text-slate-200">{data.scale_label}</span><span className="mx-2 text-slate-700">/</span>{hardwareLabel(snapshot.request.hardware_profile)}</> : "Choose a configuration, then click Run simulation"}</p>
             <p className="flex items-center gap-1.5 text-slate-500">{loading
               ? <><LoaderCircle size={12} className="animate-spin" />{data ? "Updating · previous result shown" : "Waiting for engine telemetry"}</>
-              : data ? <><Check size={13} className="text-emerald-400" />Simulation {state.completed} complete</> : "No simulation results yet"}</p>
+              : configurationChanged ? "Configuration changed · previous result shown" : data ? <><Check size={13} className="text-emerald-400" />Simulation {state.completed} complete</> : "No simulation results yet"}</p>
           </div>
           <div aria-label="Primary bottleneck" className={["flex items-start gap-4 rounded-xl border p-5", data ? [style.border, style.background].join(" ") : "border-slate-800 bg-slate-900/50"].join(" ")}>
             <span className={["mt-0.5", data ? style.text : "text-slate-500"].join(" ")}>{limited ? <CircleAlert size={22} /> : <Activity size={22} />}</span>
             <div className="min-w-0">
               <p className={["mb-1.5 text-[10px] font-semibold uppercase tracking-[0.18em]", data ? style.text : "text-slate-500"].join(" ")}>{data ? limited ? "Hardware limitation detected" : "Pipeline operating within limits" : "Primary bottleneck"}</p>
-              <h2 className="text-sm font-medium leading-6 text-slate-200 [overflow-wrap:anywhere]" data-testid="bottleneck">{data?.primary_bottleneck ?? "Waiting for the engine to evaluate the pipeline."}</h2>
+              <h2 className="text-sm font-medium leading-6 text-slate-200 [overflow-wrap:anywhere]" data-testid="bottleneck">{data?.primary_bottleneck ?? "Run a simulation to evaluate this pipeline."}</h2>
               {data && <p className="mt-1 text-xs leading-5 text-slate-400">{data.execution_mode === "LIVE_QISKIT_AER" ? "Circuit executed on a classical Qiskit Aer simulator. Reported stage timings and coherence are model estimates." : "Analytical projections of hardware requirements and coherence; no large-scale quantum circuit is executed."}</p>}
             </div>
           </div>
@@ -334,11 +352,12 @@ export default function Home() {
           ) : (
             <div className="flex flex-col items-center gap-2 px-6 py-10 text-center">
               <GitCompareArrows size={24} className="mb-1 text-slate-600" />
-              <p className="text-sm text-slate-400">{data ? "Baseline captured. Change a control to compare results." : "Your first successful run establishes a baseline."}</p>
+              <p className="text-sm text-slate-400">{data ? "Baseline captured. Adjust your configuration and run again to compare results." : "Your first successful run establishes a baseline."}</p>
               <p className="text-xs text-slate-600">Scale, hardware, status, latency, and stage metrics are tracked automatically.</p>
             </div>
           )}
         </section>
+        <PersistentRunHistory history={persistentHistory} />
         <footer className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-slate-800/70 pt-5 text-[10px] leading-5 text-slate-500">
           <p className="flex items-center gap-2"><Radio size={12} />{data?.execution_mode.replaceAll("_", " ") ?? "AWAITING TELEMETRY"}</p>
           <p>Simulated workloads. Estimated hardware limits. No physical QPU connection.</p>

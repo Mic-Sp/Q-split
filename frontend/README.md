@@ -39,11 +39,13 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 ### Dashboard behavior
 
-The dashboard at `src/app/page.tsx` runs the default Shor's N = 15 simulation on
-load. Changing the workload, target scale, hardware profile, or a stage's node automatically
-posts to `/api/simulate`. The Run simulation button repeats the current request.
-Superseded requests are canceled, and failed requests retain the last successful
-result with an error notice and retry action.
+The dashboard at `src/app/page.tsx` starts idle with the Shor's N = 15 configuration
+selected. Only clicking Run simulation (or an explicit retry action) posts to
+`/api/simulate`. Changing the workload, target scale, hardware profile, or stage
+nodes only edits the configuration. Each request captures the configuration at
+the time of the click, so edits during a run do not submit or change that request.
+Previous results are labeled when they differ from the selected configuration.
+Failed requests retain the last successful result with an error notice and retry action.
 
 Loading feedback appears immediately. After 10 seconds, a cold-start notice
 offers Try again; requests time out after 90 seconds with a Retry button. Retrying
@@ -53,8 +55,9 @@ local backend; select the local URL using the environment configuration above.
 Each pipeline card has CPU/GPU/QPU node-assignment pills. The default route is
 CPU → QPU → CPU; each stage can be assigned independently. Every request includes
 the full `routing` object (`stage_1_node`, `stage_2_node`, `stage_3_node`). Selection
-changes appear immediately, while returned node labels, latency, and status update
-when the engine responds. Previous results remain labeled during updates or errors.
+changes, processor icons, and processor labels appear immediately. Latency, status,
+and metrics update only after manually running a simulation and receiving its
+response. Previous results remain labeled during updates or errors.
 
 The updated local backend runs on `http://127.0.0.1:8001`, configured in
 `.env.local`. The Render deployment must include `RoutingConfig` before it can
@@ -76,6 +79,73 @@ API contracts are in `src/types/telemetry.ts`. The request helper, response
 validation, and delta comparison are in `src/lib/telemetry.ts`.
 
 Run `npm run lint` and `npm run build` to check the frontend.
+
+### Persistent Run History (Neon + Prisma)
+
+Successful simulations are saved by a separate background request to the Next.js
+server. A failed save never changes the simulation result or disables Run
+simulation. Saved history loads on page open; this does not start a simulation.
+Expand a saved run to review its configuration, summary, and complete JSON telemetry.
+
+Configure these **server-only** values in `frontend/.env.local` (never use a
+`NEXT_PUBLIC_` prefix for database credentials):
+
+```dotenv
+# Pooled application connection from Neon Console → Connect
+DATABASE_URL="postgresql://USER:PASSWORD@YOUR_ENDPOINT-pooler.REGION.aws.neon.tech/neondb?sslmode=require"
+# Direct connection for schema migrations
+DATABASE_URL_UNPOOLED="postgresql://USER:PASSWORD@YOUR_ENDPOINT.REGION.aws.neon.tech/neondb?sslmode=require"
+```
+
+Prisma CLI uses `prisma.config.ts` to load the same `.env.local` file as Next.js.
+Client generation and builds work without connection strings. The app lazily
+creates a server-only Prisma client with bounded connection/query timeouts.
+
+The schema is in `prisma/schema.prisma`. The initial migration is in
+`prisma/migrations/20261026000000_simulation_runs/migration.sql` and has been
+applied to the configured Neon database. For a new environment, confirm the
+target connection strings, then apply the reviewed migrations from `frontend/`
+with:
+
+```bash
+npm run db:migrate
+```
+
+Restart Next.js after configuring the URLs. Deployments also need these
+environment variables set on their server. `DATABASE_URL_UNPOOLED` takes
+precedence for Prisma CLI commands, with `DATABASE_URL` as a fallback.
+
+The database stores timestamps, workload/scale/hardware, all three stage targets,
+execution mode, total latency, bottleneck severity and description, qubits, circuit
+depth, coherence, normalized request JSON, and the complete telemetry JSONB.
+Large circuit depths use PostgreSQL BIGINT and serialize as decimal strings.
+Each execution gets a unique UUID; retrying its save uses the same UUID to avoid
+duplicates. Re-running a simulation creates a separate history record.
+
+- `GET /api/runs?limit=20` returns the newest runs (limit 1–50, no caching).
+- `POST /api/runs` accepts `{ id, completedAt, request, telemetry }`, validates it,
+  derives summary metrics on the server, and performs an idempotent save.
+- Missing configuration returns an `unconfigured` notice. An unavailable database
+  or missing table returns a sanitized `unavailable` response; no driver error or
+  credentials are exposed to the browser.
+- Failed saves stay queued in the current tab. Retry saving resubmits that queue;
+  unsaved runs are lost if the tab closes or reloads. The history section displays
+  database records only, rather than presenting unsaved runs as persisted.
+- Saved history belongs to this app's database; no per-user account scope exists.
+
+Checks that do **not** apply database migrations:
+
+```bash
+npm run db:generate
+npm run db:validate
+npm test
+npm run typecheck
+npm run build
+```
+
+The tests cover record validation/serialization, summaries, large integer values,
+default and mismatched routing, history API responses, idempotent save contracts,
+and database failure handling using an in-process repository double, not Neon.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 

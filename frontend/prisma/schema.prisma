@@ -1,0 +1,48 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum StageNode {
+  CPU
+  GPU
+  QPU
+}
+
+enum StageStatus {
+  OPTIMAL
+  WARNING
+  CRITICAL_BOTTLENECK
+}
+
+model SimulationRun {
+  // A stable client-generated UUID makes background-save retries idempotent.
+  id                   String      @id @db.Uuid
+  completedAt          DateTime    @db.Timestamptz(3)
+  createdAt            DateTime    @default(now()) @db.Timestamptz(3)
+  workloadId           String
+  workloadName         String
+  scaleParam           Int
+  scaleLabel           String
+  hardwareProfile      String
+  stage1Node           StageNode
+  stage2Node           StageNode
+  stage3Node           StageNode
+  executionMode        String
+  totalLatencyMs       Float
+  bottleneckStatus     StageStatus
+  primaryBottleneck    String
+  qubitsRequired       Int?
+  // RSA-scale depths exceed PostgreSQL's 32-bit integer range.
+  circuitDepth         BigInt?
+  coherenceSurvivalPct Float?
+  requestPayload       Json        @db.JsonB
+  telemetry            Json        @db.JsonB
+
+  @@index([completedAt(sort: Desc), id(sort: Desc)])
+  @@index([workloadId, completedAt(sort: Desc)])
+}

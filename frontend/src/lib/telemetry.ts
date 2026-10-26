@@ -13,7 +13,7 @@ export const PIPELINE = [
 
 export function formatValue(value: unknown): string {
   if (value === undefined) return "—";
-  if (typeof value === "number") return new Intl.NumberFormat("en-US", { maximumFractionDigits: 3 }).format(value);
+  if (typeof value === "number" || typeof value === "bigint") return new Intl.NumberFormat("en-US", { maximumFractionDigits: 3 }).format(value);
   return typeof value === "string" ? value : JSON.stringify(value) ?? "—";
 }
 
