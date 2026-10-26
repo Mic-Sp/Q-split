@@ -1,0 +1,83 @@
+Q-Split is a Next.js dashboard for the hybrid quantum-classical FastAPI profiler.
+
+## Getting Started
+
+The application always uses a dark slate theme, configured in
+`src/app/globals.css` with the `dark` class set in the root layout.
+
+### Backend URL
+
+Set the API URL in `frontend/.env.local`:
+
+```dotenv
+NEXT_PUBLIC_API_URL=https://q-split-engine.onrender.com
+```
+
+For local backend testing, use `NEXT_PUBLIC_API_URL=http://localhost:8000`
+instead. Import `API_BASE_URL` from `@/lib/config` for API requests; it defaults
+to `http://localhost:8000` when the variable is missing or empty. The fallback
+applies to configuration, not failed network requests.
+
+Restart the development server after changing `.env.local`. Production builds
+must be rebuilt to pick up changes to `NEXT_PUBLIC_API_URL`.
+
+### Development server
+
+First, run the development server:
+
+```bash
+npm run dev
+# or
+yarn dev
+# or
+pnpm dev
+# or
+bun dev
+```
+
+Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+
+### Dashboard behavior
+
+The dashboard at `src/app/page.tsx` runs the default Shor's N = 15 simulation on
+load. Changing the workload, target scale, or hardware profile automatically
+posts to `/api/simulate`. The Run simulation button repeats the current request.
+Superseded requests are canceled, and failed requests retain the last successful
+result with an error notice and retry action.
+
+Loading feedback appears immediately. After 10 seconds, a cold-start notice
+offers Try again; requests time out after 90 seconds with a Retry button. Retrying
+cancels the previous request. Network failures do not automatically switch to a
+local backend; select the local URL using the environment configuration above.
+
+The pipeline cards show CPU → QPU → CPU stage telemetry. Green indicates optimal,
+amber indicates a warning, and rose indicates a critical bottleneck. The delta
+tracker compares consecutive successful responses, retaining six transitions in
+memory until the page reloads. Failed and canceled requests do not enter history.
+
+N = 15 executes a circuit using Qiskit Aer on a classical simulator. Larger scales
+use analytical projections. Stage timings and coherence values are estimates,
+not physical QPU measurements. Quantum-MIPS currently returns HTTP 501 from the
+backend and displays an availability message.
+
+API contracts are in `src/types/telemetry.ts`. The request helper, response
+validation, and delta comparison are in `src/lib/telemetry.ts`.
+
+Run `npm run lint` and `npm run build` to check the frontend.
+
+This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+
+## Learn More
+
+To learn more about Next.js, take a look at the following resources:
+
+- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
+- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+
+You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+
+## Deploy on Vercel
+
+The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+
+Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
