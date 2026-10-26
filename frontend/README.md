@@ -41,7 +41,7 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 The dashboard at `src/app/page.tsx` starts idle with the Shor's N = 15 configuration
 selected. Only clicking Run simulation (or an explicit retry action) posts to
-`/api/simulate`. Changing the workload, target scale, hardware profile, or stage
+`/api/simulate`. Changing the workload, target scale, hardware profile, QPU capacity, or stage
 nodes only edits the configuration. Each request captures the configuration at
 the time of the click, so edits during a run do not submit or change that request.
 Previous results are labeled when they differ from the selected configuration.
@@ -59,10 +59,11 @@ changes, processor icons, and processor labels appear immediately. Latency, stat
 and metrics update only after manually running a simulation and receiving its
 response. Previous results remain labeled during updates or errors.
 
-The updated local backend runs on `http://127.0.0.1:8001`, configured in
-`.env.local`. The Render deployment must include `RoutingConfig` before it can
-handle custom routes. A response that ignores the requested node assignments
-produces an error rather than displaying a successful custom simulation.
+The local backend URL is selected in `.env.local` (normally
+`http://localhost:8000`). The Render deployment must include the current
+`RoutingConfig` and `available_qubits` contract. A response that ignores node
+assignments or QPU capacity produces an error instead of displaying misleading
+telemetry.
 
 Green indicates optimal,
 amber indicates a warning, and rose indicates a critical bottleneck. The delta
@@ -70,8 +71,9 @@ tracker compares consecutive successful responses, retaining six transitions in
 memory until the page reloads. Node changes are included alongside metrics.
 Failed and canceled requests do not enter history.
 
-N = 15 executes a circuit using Qiskit Aer on a classical simulator. Larger scales
-use analytical projections. Stage timings and coherence values are estimates,
+N = 15 in sequential mode executes an eight-qubit circuit using Qiskit Aer on a
+classical simulator. Parallel tiers and larger scales use analytical projections.
+Stage timings and coherence values are estimates,
 not physical QPU measurements. Quantum-MIPS currently returns HTTP 501 from the
 backend and displays an availability message.
 
@@ -79,6 +81,49 @@ API contracts are in `src/types/telemetry.ts`. The request helper, response
 validation, and delta comparison are in `src/lib/telemetry.ts`.
 
 Run `npm run lint` and `npm run build` to check the frontend.
+
+### QPU capacity and parallelization
+
+Requests accept `available_qubits`, a positive integer defaulting to 133. Presets
+are 16, 133, 1121, 2048, 4096, and 16384; a numeric input and threshold shortcuts
+allow exact boundary experiments. The 133 and 1121 labels reference the
+[Heron r1 and Condor milestones](https://www.ibm.com/quantum/blog/quantum-roadmap-2033);
+larger values are exploratory capacities. The profiler models usable logical
+qubits, excluding physical error-correction overhead and device connectivity.
+Capacity is independent of the selected noise profile and is reused per stage.
+
+Here `n` is the modulus bit length; RSA-512/RSA-2048 use 512/2048 bits directly.
+
+| Available capacity | Allocated qubits | Tier | Modeled circuit depth |
+| --- | --- | --- | --- |
+| Below `2n + 3` (8 for N = 15) | 0 | Blocked | 0, no execution |
+| Minimum through `< 3n` | Minimum | Space-Optimized Sequential | `floor(4.5 n³)` |
+| `3n` through `< ceil(5.5n)` | `3n` | Windowed Parallel | `ceil(4.5 n² log₂ n)` |
+| `ceil(5.5n)` or more | `ceil(5.5n)` | Carry-Lookahead Parallel | `ceil(4.5 n log₂² n)` |
+
+The N = 15 sequential circuit uses its actual compiled depth rather than the
+cubic analytical formula. NISQ coherence uses `100 exp(-depth / 1200)` across
+tiers; ideal coherence is 100%. Analytical QPU time uses 0.00025 ms per depth
+layer. These coefficients are illustrative assumptions, not hardware benchmarks.
+Additional qubits beyond the last threshold remain idle and do not change depth
+or latency. Stage telemetry exposes `available_qubits`, `qubits_allocated`,
+`minimum_qubits_required`, `idle_qubits`, `parallelization_tier`,
+`depth_complexity`, and `parallel_speedup_ceiling_reached` alongside depth and
+coherence. The UI shows allocation / capacity and the active tier together.
+Tier threshold buttons show formula, depth, architectural trade-offs, and math
+for the selected scale on hover, keyboard focus, or touch. Tooltips escape
+container clipping, support Escape/outside-tap dismissal, and allow arrow/Page
+keys to scroll long content while retaining focus on the threshold button.
+
+Insufficient capacity returns normal HTTP 200 telemetry with critical status and
+`INSUFFICIENT QPU QUBIT CAPACITY`, zero QPU latency, and blocked downstream stages.
+Every QPU-assigned stage checks capacity; classical pre/post routines still have
+no QPU implementation even when capacity is sufficient. CPU/GPU kernel emulation
+retains its existing memory limits and is unaffected by QPU capacity.
+
+Run history preserves capacity in request JSON and all allocation/tier metrics
+in telemetry JSON, including blocked runs. Existing history remains readable;
+this addition requires no database schema migration.
 
 ### Persistent Run History (Neon + Prisma)
 

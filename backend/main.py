@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Dict, Any, Literal, Optional
 import math
 from fractions import Fraction
@@ -39,9 +39,10 @@ class RoutingConfig(BaseModel):
 
 class SimulationRequest(BaseModel):
     workload_id: str = "shors_crypto"       # "shors_crypto" or "quantum_mips"
-    scale_param: int = 15                   # For Shor's: 15, 21, 35, 512, 2048
+    scale_param: int = Field(default=15, strict=True, ge=2, le=2_147_483_647)
     hardware_profile: str = "ibm_heron_nisq" # "ideal_sim" or "ibm_heron_nisq"
     routing: Optional[RoutingConfig] = None
+    available_qubits: int = Field(default=133, strict=True, ge=1, le=2_147_483_647)
 
 class StageTelemetry(BaseModel):
     name: str
@@ -118,20 +119,59 @@ def execute_live_shors_15(a: int = 7, noisy: bool = True) -> Dict[str, Any]:
         frac = Fraction(phase).limit_denominator(15)
         measured_phases.append(f"|{bitstring}⟩ ({frac.numerator}/{frac.denominator})")
         if frac.denominator in [2, 4] and frac.denominator % 2 == 0:
-            extracted_r = frac.denominator
+            candidate = frac.denominator
+            p = math.gcd(a ** (candidate // 2) - 1, 15)
+            q = math.gcd(a ** (candidate // 2) + 1, 15)
+            if 1 < p < 15 and 1 < q < 15 and p * q == 15:
+                extracted_r = candidate
 
     return {
         "qubits": 8,
         "depth": t_qc.depth(),
         "top_measurements": ", ".join(measured_phases[:3]),
         "period_r": extracted_r,
-        "coherence_pct": 94.2 if noisy else 100.0
+        "coherence_pct": round(100.0 * math.exp(-t_qc.depth() / 1200.0), 2) if noisy else 100.0
     }
 
 # ==========================================
 # 3. SHOR'S HYBRID PIPELINE BUILDER
 # ==========================================
-def _run_default_shors_pipeline(scale_param: int, hardware_profile: str) -> HybridTelemetryResponse:
+def qpu_capacity_plan(scale_param: int, available_qubits: int) -> Dict[str, Any]:
+    """Illustrative logical-qubit/depth model; not a physical device benchmark.
+
+    Use the same coefficient and log base for all tiers so transitions lower
+    depth monotonically. Integer allocations round 5.5n up, never over budget.
+    Capacity is per stage, not a sum across sequential pipeline stages.
+    """
+    n = scale_param if scale_param in [512, 2048] else (scale_param - 1).bit_length()
+    minimum = 8 if scale_param == 15 else 2 * n + 3
+    if available_qubits < minimum:
+        allocated, tier, complexity, depth = 0, "Blocked · insufficient capacity", "Not executed", 0
+    elif available_qubits >= math.ceil(5.5 * n):
+        allocated, tier, complexity = math.ceil(5.5 * n), "Carry-Lookahead Parallel", "O(n log^2 n)"
+        depth = math.ceil(4.5 * n * math.log2(n) ** 2)
+    elif available_qubits >= 3 * n:
+        # For tiny custom moduli (n < 3), 3n can be below the baseline.
+        allocated, tier, complexity = max(minimum, 3 * n), "Windowed Parallel", "O(n^2 log n)"
+        depth = math.ceil(4.5 * n ** 2 * math.log2(n))
+    else:
+        allocated, tier, complexity = minimum, "Space-Optimized Sequential", "O(n^3)"
+        depth = int(4.5 * n ** 3)
+    return {
+        "minimum_qubits_required": minimum,
+        "available_qubits": available_qubits,
+        "qubits_allocated": allocated,
+        "idle_qubits": available_qubits - allocated,
+        "parallelization_tier": tier,
+        "depth_complexity": complexity,
+        "parallel_speedup_ceiling_reached": allocated > 0 and available_qubits >= math.ceil(5.5 * n),
+        "circuit_depth": depth,
+    }
+
+
+def _run_default_shors_pipeline(
+    scale_param: int, hardware_profile: str, qpu_plan: Optional[Dict[str, Any]] = None,
+) -> HybridTelemetryResponse:
     noisy = (hardware_profile == "ibm_heron_nisq")
     a = 7 if scale_param != 21 else 2
 
@@ -144,7 +184,7 @@ def _run_default_shors_pipeline(scale_param: int, hardware_profile: str) -> Hybr
         scale_label = f"N = {scale_param} ({n_bits}-bit Composite Integer)"
 
     # --- CASE A: LIVE QISKIT EXECUTION (N = 15) ---
-    if scale_param == 15:
+    if scale_param == 15 and (qpu_plan is None or qpu_plan["parallelization_tier"] == "Space-Optimized Sequential"):
         qpu_res = execute_live_shors_15(a=7, noisy=noisy)
         r = qpu_res["period_r"]
         p = math.gcd(a**(r // 2) - 1, 15)
@@ -190,15 +230,15 @@ def _run_default_shors_pipeline(scale_param: int, hardware_profile: str) -> Hybr
         )
 
     # --- CASE B: ANALYTICAL NISQ PROFILER (N = 21, 35, RSA-512, RSA-2048) ---
-    qubits_req = 2 * n_bits + 3
-    circuit_depth = int(4.5 * (n_bits ** 3))
+    qubits_req = 8 if scale_param == 15 else 2 * n_bits + 3
+    circuit_depth = qpu_plan["circuit_depth"] if qpu_plan else int(4.5 * (n_bits ** 3))
     gate_exec_ms = round(circuit_depth * 0.00025, 2)
 
     if not noisy:
         coherence_pct = 100.0
         qpu_status = "OPTIMAL"
         post_status = "OPTIMAL"
-        bottleneck = "CLASSICAL SIMULATION RAM WALL (2^N Statevector Limit)"
+        bottleneck = "NONE (Noise-Free QPU Analytical Projection)" if qpu_plan else "CLASSICAL SIMULATION RAM WALL (2^N Statevector Limit)"
     else:
         # Exponential T1/T2 decay based on circuit depth (~1500 gate coherence budget on NISQ)
         coherence_pct = round(max(0.0, 100.0 * math.exp(-circuit_depth / 1200.0)), 2)
@@ -212,6 +252,7 @@ def _run_default_shors_pipeline(scale_param: int, hardware_profile: str) -> Hybr
             bottleneck = f"CATASTROPHIC QPU DECOHERENCE ({circuit_depth:,} Gates Exceed T1/T2 Window)"
 
     factor_lookup = {
+        15: ("r = 4", "15 = 3 × 5"),
         21: ("r = 6", "21 = 3 × 7"),
         35: ("r = 12", "35 = 5 × 7"),
         512: ("Thermal Noise", "FAILED (Requires ~1M Physical Surface-Code Qubits)"),
@@ -240,7 +281,7 @@ def _run_default_shors_pipeline(scale_param: int, hardware_profile: str) -> Hybr
                 latency_ms=gate_exec_ms,
                 status=qpu_status,
                 output_summary=(
-                    f"Required {qubits_req:,} logical qubits and {circuit_depth:,} sequential gates. "
+                    f"Minimum {qubits_req:,} logical qubits; circuit depth {circuit_depth:,}. "
                     f"Coherence survival: {coherence_pct}%."
                 ),
                 metrics={
@@ -287,18 +328,19 @@ def run_shors_pipeline(
     scale_param: int,
     hardware_profile: str,
     routing: Optional[RoutingConfig] = None,
+    available_qubits: int = 133,
 ) -> HybridTelemetryResponse:
     """Profile projected stage placement; the N=15 reference circuit uses Aer.
 
-    Omitted, null, empty, and explicit default routing retain the original API
-    response. Custom routes describe modeled costs and feasibility, not device
-    measurements. Classical emulation has no physical QPU decoherence.
+    Routes and ancilla parallelization describe modeled costs and feasibility,
+    not device measurements. Classical emulation ignores physical QPU capacity.
     """
     targets = routing or RoutingConfig()
+    plan = qpu_capacity_plan(scale_param, available_qubits)
     core_profile = hardware_profile if targets.stage_2_node == "QPU" else "ideal_sim"
-    response = _run_default_shors_pipeline(scale_param, core_profile)
-    if targets == RoutingConfig():
-        return response
+    response = _run_default_shors_pipeline(
+        scale_param, core_profile, plan if targets.stage_2_node == "QPU" else None,
+    )
 
     reasons = {"stage_2_quantum_kernel": response.primary_bottleneck}
     for key, target in zip(STAGE_KEYS, (
@@ -309,6 +351,33 @@ def run_shors_pipeline(
         stage.metrics["routing_model"] = "ILLUSTRATIVE_V1 (not device measurements)"
         stage.metrics["routing_supported"] = True
         stage.metrics["execution_feasible"] = True
+
+        if target == "QPU":
+            # Only the quantum kernel has an implemented QPU algorithm. Other
+            # QPU routes still get capacity validation before route validation.
+            capacity = {k: v for k, v in plan.items() if k != "circuit_depth"}
+            stage.metrics.update(capacity)
+            if plan["qubits_allocated"] == 0:
+                stage.latency_ms = 0.0
+                stage.status = "CRITICAL_BOTTLENECK"
+                stage.metrics.update({"execution_feasible": False, "circuit_depth": 0,
+                                      "coherence_survival_pct": 0.0, "io_state_prep_ms": 0.0})
+                stage.output_summary = (
+                    f"BLOCKED: minimum {plan['minimum_qubits_required']:,} qubits required; "
+                    f"only {available_qubits:,} available. No QPU execution performed."
+                )
+                reasons[key] = "INSUFFICIENT QPU QUBIT CAPACITY"
+                continue
+            if key == "stage_2_quantum_kernel":
+                stage.output_summary += (
+                    f" {plan['qubits_allocated']:,} / {available_qubits:,} qubits allocated / available; "
+                    f"{plan['parallelization_tier']} ({plan['depth_complexity']}). "
+                    f"{plan['idle_qubits']:,} qubits idle."
+                )
+                stage.metrics["depth_model"] = (
+                    "Compiled 8-qubit Aer reference circuit" if response.execution_mode == "LIVE_QISKIT_AER"
+                    else "Illustrative analytical projection (4.5 coefficient, log base 2)"
+                )
 
         if key == "stage_2_quantum_kernel":
             if target == "QPU":
@@ -360,6 +429,9 @@ def run_shors_pipeline(
             stage.status = "CRITICAL_BOTTLENECK"
             stage.metrics["routing_supported"] = False
             stage.metrics["execution_feasible"] = False
+            stage.metrics.update({"qubits_allocated": 0, "idle_qubits": available_qubits,
+                                  "parallelization_tier": "Unavailable · unsupported QPU route",
+                                  "parallel_speedup_ceiling_reached": False})
             stage.output_summary = (
                 f"UNSUPPORTED ROUTE: {stage.name} is a classical host routine in this "
                 "profiler and requires CPU or GPU placement; no QPU implementation is available."
@@ -375,6 +447,11 @@ def run_shors_pipeline(
             stage.status = "CRITICAL_BOTTLENECK"
             stage.metrics["execution_feasible"] = False
             stage.output_summary = f"STARVED: {blocked_by} did not produce usable input."
+            if stage.node == "QPU":
+                stage.metrics.update({"qubits_allocated": 0, "idle_qubits": available_qubits,
+                                      "circuit_depth": 0, "coherence_survival_pct": 0.0,
+                                      "parallelization_tier": "Blocked · upstream stage unavailable",
+                                      "parallel_speedup_ceiling_reached": False})
             reasons[key] = stage.output_summary
         if stage.metrics["execution_feasible"] is False and blocked_by is None:
             blocked_by = stage.name
@@ -406,7 +483,7 @@ def health_check():
 @app.post("/api/simulate", response_model=HybridTelemetryResponse)
 def simulate_workload(req: SimulationRequest):
     if req.workload_id == "shors_crypto":
-        return run_shors_pipeline(req.scale_param, req.hardware_profile, req.routing)
+        return run_shors_pipeline(req.scale_param, req.hardware_profile, req.routing, req.available_qubits)
     elif req.workload_id == "quantum_mips":
         # Socket ready for Thursday/Friday Quantum AI Vector Preset!
         raise HTTPException(status_code=501, detail="Quantum-MIPS AI Preset unlocks in Sprint Phase 2.")

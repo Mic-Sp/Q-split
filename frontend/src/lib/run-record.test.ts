@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createRunRecord, serializeRun } from "./run-record";
-import { formatValue } from "./telemetry";
+import { formatValue, qubitThresholds } from "./telemetry";
 import type { SimulationRun } from "@/generated/prisma/client";
 
 function completed() {
@@ -83,4 +83,37 @@ test("missing optional metrics remain null rather than becoming zero", () => {
   assert.equal(record.qubitsRequired, null);
   assert.equal(record.circuitDepth, null);
   assert.equal(record.coherenceSurvivalPct, null);
+});
+
+test("preserves QPU capacity and tier in saved JSON without a schema migration", () => {
+  const input = completed();
+  Object.assign(input.request, { available_qubits: 16384 });
+  Object.assign(input.telemetry.stages.stage_2_quantum_kernel.metrics, {
+    available_qubits: 16384, qubits_allocated: 11264, idle_qubits: 5120,
+    parallelization_tier: "Carry-Lookahead Parallel", depth_complexity: "O(n log^2 n)",
+  });
+  const record = createRunRecord(input);
+  assert.deepEqual(record.requestPayload, input.request);
+  const saved = serializeRun({ ...record, createdAt: new Date() } as SimulationRun);
+  assert.equal(saved.request.available_qubits, 16384);
+  assert.equal(saved.telemetry.stages.stage_2_quantum_kernel.metrics.qubits_allocated, 11264);
+});
+
+test("rejects invalid capacity and mismatched QPU telemetry", () => {
+  for (const available_qubits of [0, -1, 1.5, true, "133", null, 2147483648]) {
+    const input = completed();
+    Object.assign(input.request, { available_qubits });
+    assert.throws(() => createRunRecord(input), /available qubits/);
+  }
+  const input = completed();
+  Object.assign(input.request, { available_qubits: 133 });
+  assert.throws(() => createRunRecord(input), /capacity does not match/);
+});
+
+test("UI threshold shortcuts match N15 special case and RSA capacities", () => {
+  assert.deepEqual(qubitThresholds(15), { minimum: 8, windowed: 12, ceiling: 22 });
+  assert.deepEqual(qubitThresholds(21), { minimum: 13, windowed: 15, ceiling: 28 });
+  assert.deepEqual(qubitThresholds(35), { minimum: 15, windowed: 18, ceiling: 33 });
+  assert.deepEqual(qubitThresholds(512), { minimum: 1027, windowed: 1536, ceiling: 2816 });
+  assert.deepEqual(qubitThresholds(2048), { minimum: 4099, windowed: 6144, ceiling: 11264 });
 });

@@ -13,6 +13,7 @@ export interface SimulationRequest {
   workload_id: WorkloadId;
   scale_param: number;
   hardware_profile: HardwareProfile;
+  available_qubits?: number;
   routing?: Partial<RoutingConfig> | null;
 }
 

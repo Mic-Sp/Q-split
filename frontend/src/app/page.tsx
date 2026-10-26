@@ -3,18 +3,20 @@
 import { useEffect, useReducer, useState } from "react";
 import Link from "next/link";
 import { PersistentRunHistory } from "@/components/persistent-run-history";
+import { ParallelizationTiers } from "@/components/parallelization-tiers";
 import { usePersistentRuns } from "@/hooks/use-persistent-runs";
 import {
   Activity, ArrowDown, ArrowRight, Check, ChevronDown, CircleAlert, CircuitBoard, Cpu,
   FlaskConical, GitCompareArrows, Layers3, LoaderCircle, Play, Radio, Workflow, Zap,
 } from "lucide-react";
 import {
-  DEFAULT_ROUTING, describeChanges, formatValue, PIPELINE, simulate, totalLatency,
+  DEFAULT_AVAILABLE_QUBITS, DEFAULT_ROUTING, describeChanges, formatValue, PIPELINE, simulate, totalLatency,
   type Snapshot, type Transition,
 } from "@/lib/telemetry";
 import type { HardwareProfile, RoutingConfig, SimulationRequest, StageNode, StageStatus, StageTelemetry, WorkloadId } from "@/types/telemetry";
 
 const SCALES = [15, 21, 35, 512, 2048];
+const QUBIT_PRESETS = [16, 133, 1121, 2048, 4096, 16384];
 const scaleLabel = (scale: number) => scale < 512 ? `N = ${scale}` : `RSA-${scale}`;
 const hardwareLabel = (profile: HardwareProfile) => profile === "ideal_sim" ? "Ideal Noise-Free" : "IBM Heron NISQ";
 const summaryValue = (value: unknown) => typeof value === "number" && Math.abs(value) >= 1_000_000
@@ -32,6 +34,10 @@ const NODE_STYLE = {
   QPU: { icon: Layers3, text: "text-violet-300", frame: "border-violet-400/20 bg-violet-400/10 text-violet-300" },
 };
 const NODES: StageNode[] = ["CPU", "GPU", "QPU"];
+const CAPACITY_PANEL_METRICS = new Set([
+  "available_qubits", "qubits_allocated", "idle_qubits", "parallelization_tier",
+  "depth_complexity", "parallel_speedup_ceiling_reached",
+]);
 
 interface DashboardState {
   loading: boolean;
@@ -74,6 +80,10 @@ const metricLabels: Record<string, string> = {
   launch_transfer_overhead_ms: "Launch / transfer · ms", compute_latency_factor: "Compute latency factor",
   simulation_method: "Simulation method", statevector_memory_required: "Statevector memory required",
   statevector_memory_budget_gib: "Memory budget · GiB",
+  available_qubits: "Available QPU qubits", qubits_allocated: "Qubits allocated",
+  minimum_qubits_required: "Minimum qubits required", idle_qubits: "Idle qubits",
+  parallelization_tier: "Parallelization tier", depth_complexity: "Depth scaling",
+  parallel_speedup_ceiling_reached: "Parallel speedup ceiling reached", depth_model: "Depth model",
 };
 
 function PipelineCard({ index, stage, selectedNode, onNodeChange, pending }: {
@@ -117,8 +127,16 @@ function PipelineCard({ index, stage, selectedNode, onNodeChange, pending }: {
           {stage ? formatValue(stage.latency_ms) : "—"}<span className="ml-2 text-sm text-slate-500">ms</span>
         </p>
       </div>
+      {stage?.node === "QPU" && typeof stage.metrics.available_qubits === "number" && (
+        <div data-testid={`qpu-capacity-${index + 1}`} className="mb-4 rounded-lg border border-cyan-400/20 bg-cyan-400/5 p-3">
+          <p className="text-[10px] text-slate-400">Qubits Allocated / Available</p>
+          <p className="mt-1 font-mono text-lg text-cyan-200">{formatValue(stage.metrics.qubits_allocated)} / {formatValue(stage.metrics.available_qubits)}</p>
+          <p className="mt-2 text-xs font-medium text-cyan-300 [overflow-wrap:anywhere]">{formatValue(stage.metrics.parallelization_tier)}</p>
+          <p className="mt-1 text-[10px] leading-5 text-slate-400">{formatValue(stage.metrics.idle_qubits)} idle · {formatValue(stage.metrics.depth_complexity)}{stage.metrics.parallel_speedup_ceiling_reached === true ? " · Speedup ceiling reached" : ""}</p>
+        </div>
+      )}
       <dl className="mb-6 grid grid-cols-2 gap-2">
-        {stage ? Object.entries(stage.metrics).map(([key, value]) => (
+        {stage ? Object.entries(stage.metrics).filter(([key]) => !CAPACITY_PANEL_METRICS.has(key)).map(([key, value]) => (
           <div key={key} className="min-w-0 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2.5">
             <dt className="text-[10px] leading-4 text-slate-400 [overflow-wrap:anywhere]">{metricLabels[key] ?? key.replaceAll("_", " ")}</dt>
             <dd className={["mt-1 font-mono text-xs leading-5 [overflow-wrap:anywhere]", key === "coherence_survival_pct" ? style?.text : "text-slate-200"].join(" ")}>{key === "routing_model" ? "Illustrative estimate" : typeof value === "boolean" ? value ? "Yes" : "No" : formatValue(value)}</dd>
@@ -141,6 +159,7 @@ export default function Home() {
   const [workload, setWorkload] = useState<WorkloadId>("shors_crypto");
   const [scale, setScale] = useState(15);
   const [hardware, setHardware] = useState<HardwareProfile>("ibm_heron_nisq");
+  const [availableQubits, setAvailableQubits] = useState(String(DEFAULT_AVAILABLE_QUBITS));
   const [routing, setRouting] = useState<RoutingConfig>(DEFAULT_ROUTING);
   const [submittedRequest, setSubmittedRequest] = useState<SimulationRequest | null>(null);
   const [state, dispatch] = useReducer(reducer, {
@@ -182,15 +201,18 @@ export default function Home() {
   const style = STATUS[severity];
   const limited = data && !data.primary_bottleneck.startsWith("NONE");
   const latest = state.history[0];
+  const capacity = Number(availableQubits);
+  const validCapacity = Number.isSafeInteger(capacity) && capacity >= 1 && capacity <= 2_147_483_647;
   const configurationChanged = snapshot && (
     snapshot.request.workload_id !== workload || snapshot.request.scale_param !== scale ||
-    snapshot.request.hardware_profile !== hardware || PIPELINE.some(({ routingKey }) =>
+    snapshot.request.hardware_profile !== hardware || snapshot.request.available_qubits !== capacity || PIPELINE.some(({ routingKey }) =>
       (snapshot.request.routing?.[routingKey] ?? DEFAULT_ROUTING[routingKey]) !== routing[routingKey])
   );
   const runSimulation = () => {
+    if (!validCapacity) return;
     dispatch({ type: "start" });
     setSubmittedRequest({
-      workload_id: workload, scale_param: scale, hardware_profile: hardware, routing: { ...routing },
+      workload_id: workload, scale_param: scale, hardware_profile: hardware, available_qubits: capacity, routing: { ...routing },
     });
   };
   const updateNode = (key: keyof RoutingConfig, node: StageNode) => {
@@ -250,13 +272,25 @@ export default function Home() {
                 ))}
               </div>
             </fieldset>
-            <button type="button" disabled={loading} onClick={runSimulation} className="flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg bg-cyan-400 px-5 text-sm font-semibold text-slate-950 transition-colors hover:bg-cyan-300 disabled:cursor-wait disabled:opacity-60">
+            <button type="button" disabled={loading || !validCapacity} onClick={runSimulation} className="flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg bg-cyan-400 px-5 text-sm font-semibold text-slate-950 transition-colors hover:bg-cyan-300 disabled:cursor-wait disabled:opacity-60">
               {loading ? <LoaderCircle size={15} className="animate-spin" /> : <Play size={15} fill="currentColor" />}
               {loading ? "Simulating…" : "Run simulation"}
             </button>
           </div>
+          <div className="mt-6 border-t border-slate-800 pt-5">
+            <label htmlFor="available-qubits" className="mb-3 block text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">04 / Available QPU Qubits</label>
+            <div className="flex flex-wrap items-center gap-3">
+              <input id="available-qubits" type="number" min={1} max={2147483647} step={1} value={availableQubits} onChange={(event) => setAvailableQubits(event.target.value)} aria-invalid={!validCapacity} aria-describedby="capacity-help" className="w-36 rounded-lg border border-slate-700 bg-slate-950 px-3 py-3 font-mono text-sm text-cyan-200" />
+              <div role="group" aria-label="QPU capacity presets" className="flex flex-wrap gap-1.5">{QUBIT_PRESETS.map((value) => (
+                <button key={value} type="button" aria-pressed={capacity === value} onClick={() => setAvailableQubits(String(value))} className={["rounded-lg border px-3 py-2 font-mono text-xs", capacity === value ? "border-cyan-400/50 bg-cyan-400/10 text-cyan-200" : "border-slate-800 text-slate-400 hover:border-slate-600"].join(" ")}>{formatValue(value)}</button>
+              ))}</div>
+            </div>
+            <p id="capacity-help" className="mt-3 text-xs leading-6 text-slate-400">{validCapacity ? "Per QPU stage. Select a tier threshold below to explore the trade-off; changes apply on Run simulation." : "Enter a whole qubit count from 1 to 2,147,483,647."}</p>
+            <ParallelizationTiers scale={scale} onSelect={(value) => setAvailableQubits(String(value))} />
+            <p className="mt-3 text-[10px] leading-5 text-slate-500">133 and 1,121 reflect Heron r1 and Condor milestones; larger presets are exploratory capacities. These are modeled usable qubits; physical error-correction overhead is excluded. Extra capacity above the carry-lookahead threshold stays idle.</p>
+          </div>
           <p className="mt-4 text-xs leading-5 text-slate-500">
-            {workload === "quantum_mips" ? "Quantum-MIPS is a preview preset. Click Run simulation to request its availability from the engine." : "Click Run simulation to apply your selections. N = 15 runs a Qiskit Aer circuit; larger scales use an analytical hardware model."}
+            {workload === "quantum_mips" ? "Quantum-MIPS is a preview preset. Click Run simulation to request its availability from the engine." : "N = 15 in sequential mode runs a Qiskit Aer circuit. Parallel tiers and larger scales use an analytical hardware model. QPU capacity does not limit CPU/GPU emulation."}
           </p>
         </section>
 
@@ -302,7 +336,7 @@ export default function Home() {
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             {[
               { label: "Pipeline latency", value: data ? totalLatency(data) : undefined, unit: "ms", icon: Activity },
-              { label: "Logical qubits", value: quantum?.metrics.qubits_required, unit: "qubits", icon: Layers3 },
+              { label: quantum?.node === "QPU" ? "Qubits allocated / available" : "Logical qubits", value: quantum?.node === "QPU" ? `${formatValue(quantum.metrics.qubits_allocated)} / ${formatValue(quantum.metrics.available_qubits)}` : quantum?.metrics.qubits_required, unit: "qubits", icon: Layers3 },
               { label: "Circuit depth", value: quantum?.metrics.circuit_depth, unit: "gates", icon: Workflow },
               { label: "Coherence survival", value: quantum?.metrics.coherence_survival_pct, unit: "%", icon: Zap },
             ].map(({ label, value, unit, icon: Icon }) => (

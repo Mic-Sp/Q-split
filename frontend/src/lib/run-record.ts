@@ -25,11 +25,15 @@ export function createRunRecord(value: unknown): Prisma.SimulationRunCreateInput
   if (request.routing != null && (typeof request.routing !== "object" || Array.isArray(request.routing) ||
       Object.keys(request.routing).some((key) => !Object.prototype.hasOwnProperty.call(DEFAULT_ROUTING, key)) ||
       Object.values(request.routing).some((node) => !["CPU", "GPU", "QPU"].includes(node)))) invalid("Invalid node routing.");
+  if (request.available_qubits !== undefined && (!Number.isSafeInteger(request.available_qubits) ||
+      request.available_qubits < 1 || request.available_qubits > 2_147_483_647)) invalid("Invalid available qubits.");
   const routing = { ...DEFAULT_ROUTING, ...request.routing };
   const telemetry = parseTelemetry(run.telemetry);
   if (telemetry.workload_id !== request.workload_id) invalid("Workload metadata does not match telemetry.");
   for (const { key, routingKey } of PIPELINE) {
     if (telemetry.stages[key].node !== routing[routingKey]) invalid("Node routing does not match telemetry.");
+    if (telemetry.stages[key].node === "QPU" && request.available_qubits !== undefined &&
+        telemetry.stages[key].metrics.available_qubits !== request.available_qubits) invalid("QPU capacity does not match telemetry.");
   }
   const stages = Object.values(telemetry.stages);
   if (stages.some((stage) => stage.latency_ms < 0)) invalid("Latency cannot be negative.");
@@ -53,7 +57,9 @@ export function createRunRecord(value: unknown): Prisma.SimulationRunCreateInput
     bottleneckStatus, primaryBottleneck: telemetry.primary_bottleneck,
     qubitsRequired: qubits, circuitDepth: depth === null ? null : BigInt(depth),
     coherenceSurvivalPct: coherence as number | null,
-    requestPayload: { workload_id: request.workload_id, scale_param: request.scale_param, hardware_profile: request.hardware_profile, routing } as Prisma.InputJsonValue,
+    requestPayload: { workload_id: request.workload_id, scale_param: request.scale_param, hardware_profile: request.hardware_profile, routing,
+      ...(request.available_qubits === undefined ? {} : { available_qubits: request.available_qubits }),
+    } as Prisma.InputJsonValue,
     telemetry: telemetry as unknown as Prisma.InputJsonValue,
   };
 }

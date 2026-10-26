@@ -39,6 +39,10 @@ export function PersistentRunHistory({ history }: { history: ReturnType<typeof u
         </summary>
         <div className="space-y-4 border-t border-slate-800 p-4 sm:p-5">
           <p className="text-xs leading-6 text-slate-300 [overflow-wrap:anywhere]">{run.primaryBottleneck}</p>
+          {run.request.available_qubits !== undefined && <p className="text-xs leading-6 text-cyan-200 [overflow-wrap:anywhere]">
+            QPU capacity: {formatValue(run.request.available_qubits)} qubits
+            {run.stage2Node === "QPU" && <> · Allocated / Available: {formatValue(run.telemetry.stages.stage_2_quantum_kernel.metrics.qubits_allocated)} / {formatValue(run.request.available_qubits)} · {formatValue(run.telemetry.stages.stage_2_quantum_kernel.metrics.parallelization_tier)}</>}
+          </p>}
           <dl className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">{[
             ["Logical qubits", formatValue(run.qubitsRequired ?? undefined)], ["Circuit depth", run.circuitDepth === null ? "—" : formatValue(BigInt(run.circuitDepth))],
             ["Coherence", run.coherenceSurvivalPct === null ? "—" : `${formatValue(run.coherenceSurvivalPct)}%`], ["Execution mode", run.executionMode.replaceAll("_", " ")],
