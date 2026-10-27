@@ -13,6 +13,7 @@ import { restoredConfiguration } from "@/lib/benchmark-snapshot";
 import type { SavedSimulationRun } from "@/types/run-history";
 import { usePersistentRuns } from "@/hooks/use-persistent-runs";
 import { coherenceBudget, pipelineTiming, type CoherenceBudgetStatus } from "@/lib/kpi-metrics";
+import { formatDuration, formatRawMilliseconds } from "@/lib/duration";
 import {
   Activity, ArrowDown, ArrowRight, Check, ChevronDown, CircleAlert, CircuitBoard, Cpu,
   GitCompareArrows, Layers3, LoaderCircle, Play, Radio, Workflow, Zap,
@@ -86,11 +87,11 @@ function StatusBadge({ status }: { status: StageStatus }) {
 }
 
 const metricLabels: Record<string, string> = {
-  qubits_required: "Logical qubits", circuit_depth: "Circuit depth", io_state_prep_ms: "State preparation · ms",
+  qubits_required: "Logical qubits", circuit_depth: "Circuit depth", io_state_prep_ms: "State preparation", io_readout_ms: "Readout",
   coherence_survival_pct: "Coherence survival · %", algorithm: "Algorithm", complexity: "Complexity",
   base_a: "Coprime base", factors_found: "Factors found",
   routing_model: "Latency estimate", routing_supported: "Route supported", execution_feasible: "Execution feasible",
-  launch_transfer_overhead_ms: "Launch / transfer · ms", compute_latency_factor: "Compute latency factor",
+  launch_transfer_overhead_ms: "Launch / transfer", compute_latency_factor: "Compute latency factor",
   simulation_method: "Simulation method", statevector_memory_required: "Statevector memory required",
   statevector_memory_budget_gib: "Memory budget · GiB",
   available_qubits: "Available QPU qubits", qubits_allocated: "Qubits allocated",
@@ -136,8 +137,8 @@ function PipelineCard({ index, stage, selectedNode, onNodeChange, pending }: {
       <h3 title={stage?.name ?? config.label} className="line-clamp-1 text-[11px] font-semibold leading-4 text-slate-100 [overflow-wrap:anywhere]">{stage?.name ?? config.label}</h3>
       <div className="console-header -mx-2.5 my-1.5 flex items-center justify-between gap-2 border-y border-slate-700/80 px-2.5 py-1">
         <span className="text-[9px] font-bold uppercase tracking-wider text-slate-200">Stage latency</span>
-        <p data-testid={"stage-latency-" + (index + 1)} className="font-mono text-base tracking-tight text-slate-100 [overflow-wrap:anywhere]">
-          {stage ? formatValue(stage.latency_ms) : "—"}<span className="ml-1 text-[10px] text-slate-500">ms</span>
+        <p data-testid={"stage-latency-" + (index + 1)} title={formatRawMilliseconds(stage?.latency_ms)} className="font-mono text-base tracking-tight text-slate-100 [overflow-wrap:anywhere]">
+          {formatDuration(stage?.latency_ms)}
         </p>
       </div>
       {stage?.node === "QPU" && typeof stage.metrics.available_qubits === "number" && (
@@ -152,8 +153,8 @@ function PipelineCard({ index, stage, selectedNode, onNodeChange, pending }: {
       <dl className="mb-2 grid grid-cols-2 gap-1 xl:grid-cols-3">
         {stage ? Object.entries(stage.metrics).filter(([key]) => !CAPACITY_PANEL_METRICS.has(key) && key !== "classical_cpu_baseline").map(([key, value]) => (
           <div key={key} className="min-w-0 rounded-md border border-slate-800 bg-slate-950/60 px-2 py-1">
-            <dt className="text-[9px] leading-3 text-slate-400 [overflow-wrap:anywhere]">{metricLabels[key] ?? key.replaceAll("_", " ")}</dt>
-            <dd title={formatValue(value)} className={["mt-0.5 font-mono text-[10px] leading-4 [overflow-wrap:anywhere]", key === "coherence_survival_pct" ? style?.text : "text-slate-200"].join(" ")}>{key === "routing_model" ? "Modeled" : key === "depth_model" ? String(value).startsWith("Compiled") ? "Aer reference" : "Analytical" : typeof value === "boolean" ? value ? "Yes" : "No" : formatValue(value)}</dd>
+            <dt className="text-[9px] leading-3 text-slate-400 [overflow-wrap:anywhere]">{metricLabels[key] ?? key.replace(/_ms$/, "").replaceAll("_", " ")}</dt>
+            <dd title={key.endsWith("_ms") ? formatRawMilliseconds(value) : formatValue(value)} className={["mt-0.5 font-mono text-[10px] leading-4 [overflow-wrap:anywhere]", key === "coherence_survival_pct" ? style?.text : "text-slate-200"].join(" ")}>{key.endsWith("_ms") ? formatDuration(value) : key === "routing_model" ? "Modeled" : key === "depth_model" ? String(value).startsWith("Compiled") ? "Aer reference" : "Analytical" : typeof value === "boolean" ? value ? "Yes" : "No" : formatValue(value)}</dd>
           </div>
         )) : <div className={["col-span-full h-12 rounded-lg bg-slate-800/40", pending ? "animate-pulse" : ""].join(" ")} aria-hidden="true" />}
       </dl>
@@ -372,10 +373,10 @@ export default function Home() {
                   <p className="text-[9px] font-bold uppercase leading-3 tracking-wider text-slate-100">{label}</p><Icon size={12} className="shrink-0 text-cyan-300/70" />
                 </div>
                 <div className="px-2.5 py-1.5">
-                <p title={formatValue(value) + " " + unit} className="break-words font-mono text-base leading-5 tracking-tight">{summaryValue(value)}<span className="ml-1 text-[10px] text-slate-500">{unit}</span></p>
+                <p title={label === "Pipeline latency" ? formatRawMilliseconds(value) : formatValue(value) + " " + unit} className="break-words font-mono text-base leading-5 tracking-tight">{label === "Pipeline latency" ? formatDuration(value) : <>{summaryValue(value)}<span className="ml-1 text-[10px] text-slate-500">{unit}</span></>}</p>
                 {label === "Pipeline latency" && <dl aria-label="Pipeline latency breakdown" title="Includes separately reported QPU I/O; GPU launch/transfer overhead is counted once. Blocked stages contribute no time." className="mt-1 space-y-0.5 text-[9px] leading-3">
-                  <div className="flex flex-wrap justify-between gap-x-2"><dt className="text-slate-500">Pure Compute Time</dt><dd className="font-mono text-slate-300">{formatValue(timing?.computeMs)} ms</dd></div>
-                  <div className="flex flex-wrap justify-between gap-x-2"><dt className="text-slate-500">Interconnect &amp; State-Prep Overhead</dt><dd className="font-mono text-slate-300">{formatValue(timing?.overheadMs)} ms</dd></div>
+                  <div className="flex flex-wrap justify-between gap-x-2"><dt className="text-slate-500">Pure Compute Time</dt><dd title={formatRawMilliseconds(timing?.computeMs)} className="font-mono text-slate-300">{formatDuration(timing?.computeMs)}</dd></div>
+                  <div className="flex flex-wrap justify-between gap-x-2"><dt className="text-slate-500">Interconnect &amp; State-Prep Overhead</dt><dd title={formatRawMilliseconds(timing?.overheadMs)} className="font-mono text-slate-300">{formatDuration(timing?.overheadMs)}</dd></div>
                 </dl>}
                 {label === "Coherence survival" && <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
                   <p className="text-[9px] leading-3 text-slate-500">{coherence?.classical ? "Deterministic Classical Emulation" : "vs. 100% deterministic classical baseline"}</p>
@@ -474,8 +475,8 @@ function DeltaTable({ changes }: { changes: Transition["changes"] }) {
         <tbody>{changes.map((change) => (
           <tr key={change.label} className="border-b border-slate-800/60 last:border-0">
             <th scope="row" className="py-1.5 pr-3 font-normal capitalize text-slate-400 [overflow-wrap:anywhere]">{change.label}</th>
-            <td className="py-1.5 pr-3 font-mono text-slate-400 [overflow-wrap:anywhere]">{change.before}</td>
-            <td className="py-1.5 font-mono text-slate-200 [overflow-wrap:anywhere]">{change.after}</td>
+            <td title={change.beforeRaw} className="py-1.5 pr-3 font-mono text-slate-400 [overflow-wrap:anywhere]">{change.before}</td>
+            <td title={change.afterRaw} className="py-1.5 font-mono text-slate-200 [overflow-wrap:anywhere]">{change.after}</td>
           </tr>
         ))}</tbody>
       </table>

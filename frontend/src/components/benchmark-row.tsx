@@ -7,6 +7,7 @@ import { AdvisorTelemetryBar } from "@/components/advisor-telemetry";
 import { cachedInsight } from "@/lib/advisor-telemetry";
 import { SNAPSHOT_NAME_LIMIT } from "@/lib/benchmark-snapshot";
 import { coherenceBudget, pipelineTiming } from "@/lib/kpi-metrics";
+import { formatDuration, formatRawMilliseconds } from "@/lib/duration";
 import { DEFAULT_AVAILABLE_QUBITS, formatValue } from "@/lib/telemetry";
 import type { SavedSimulationRun } from "@/types/run-history";
 
@@ -44,8 +45,8 @@ export function BenchmarkRow({ run, busy, selected, selectionDisabled, onSelect,
       <td className="p-2"><p>{run.scaleLabel}</p><p className="mt-1 text-[9px] text-slate-500">{run.hardwareProfile === "ideal_sim" ? "Ideal Noise-Free" : "IBM Heron NISQ"}</p></td>
       <td className="whitespace-nowrap p-2 font-mono">{run.stage1Node} → {run.stage2Node} → {run.stage3Node}</td>
       <td className="p-2"><p className="font-mono text-cyan-200">{kernel.node === "QPU" ? `${formatValue(metrics.qubits_allocated)} / ${formatValue(metrics.available_qubits ?? run.request.available_qubits ?? DEFAULT_AVAILABLE_QUBITS)}` : "— (Classical)"}</p><p className="mt-1 text-[9px] text-slate-400">{kernel.node === "QPU" ? formatValue(metrics.parallelization_tier) : `${formatValue(metrics.qubits_required)} logical qubits`}</p></td>
-      <td className="p-2 font-mono"><p>{formatValue(timing.computeMs)} ms <span className="font-sans text-slate-500">compute</span></p><p className="mt-1 text-amber-200">{formatValue(timing.overheadMs)} ms <span className="font-sans text-slate-500">I/O</span></p></td>
-      <td className="p-2 font-mono text-cyan-200">{formatValue(timing.totalMs)} ms</td>
+      <td className="p-2 font-mono"><p title={formatRawMilliseconds(timing.computeMs)}>{formatDuration(timing.computeMs)} <span className="font-sans text-slate-500">compute</span></p><p title={formatRawMilliseconds(timing.overheadMs)} className="mt-1 text-amber-200">{formatDuration(timing.overheadMs)} <span className="font-sans text-slate-500">I/O</span></p></td>
+      <td title={formatRawMilliseconds(timing.totalMs)} className="p-2 font-mono text-cyan-200">{formatDuration(timing.totalMs)}</td>
       <td className="p-2"><p className="font-mono">{formatValue(coherence.survival)}{coherence.survival === undefined ? "" : "%"}</p>{coherence.status && <span className={`mt-1 inline-flex rounded border px-1 py-0.5 text-[8px] font-semibold ${budgetStyle[coherence.status]}`}>{coherence.status}</span>}</td>
       <td className="p-2 text-[9px] leading-4 [overflow-wrap:anywhere]">{run.primaryBottleneck}</td>
       <td className="p-2"><div className="flex flex-col items-start gap-1">

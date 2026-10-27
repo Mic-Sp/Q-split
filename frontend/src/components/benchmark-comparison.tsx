@@ -26,8 +26,8 @@ export function BenchmarkComparison({ runs, onRemove }: { runs: SavedSimulationR
         <tbody>{columns[0].metrics.map((metric, index) => <tr key={metric.label} className="border-b border-slate-800/70 last:border-0">
           <th scope="row" className="p-2 align-top font-medium text-slate-400">{metric.label}</th>
           {columns.map(column => { const cell = column.metrics[index]; return <td key={column.run.id} className={`p-2 align-top [overflow-wrap:anywhere] ${cell.changed ? "bg-cyan-400/5" : ""}`}>
-            <p className="font-mono text-slate-200">{cell.value}</p>
-            {cell.delta && <p className={`mt-0.5 text-[9px] ${cell.changed ? "text-cyan-300" : "text-slate-500"}`}>{cell.delta}</p>}
+            <p title={cell.raw} className="font-mono text-slate-200">{cell.value}</p>
+            {cell.delta && <p title={cell.rawDelta} className={`mt-0.5 text-[9px] ${cell.changed ? "text-cyan-300" : "text-slate-500"}`}>{cell.delta}</p>}
           </td>; })}
         </tr>)}</tbody>
       </table>

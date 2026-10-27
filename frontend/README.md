@@ -198,6 +198,15 @@ saved records, structured requests/telemetry, snapshot metadata, and advisor
 usage; circuit depths retain their serialized decimal strings. No schema change
 or new database request is required for comparison or export.
 
+Latency readouts share `src/lib/duration.ts`: under 1,000 ms uses two decimal
+places in milliseconds, under 60,000 ms uses two decimal places in seconds,
+then minutes/seconds, hours/minutes, and days/hours above 24 hours. Composite
+durations retain completed smaller units. KPI, stage, legend, history/comparison,
+and state-delta readouts expose unshortened source milliseconds on hover. Tiny
+nonzero comparison deltas that would round to zero read `<0.01 ms`. Exports and
+stored telemetry retain numeric milliseconds for analysis; display formatting
+never mutates source metrics.
+
 After a simulation completes, enter a label beside the pipeline Run button and
 choose **Capture Benchmark Snapshot**. This names and pins that completed run;
 unsaved edits to the controls do not alter its captured configuration. Existing

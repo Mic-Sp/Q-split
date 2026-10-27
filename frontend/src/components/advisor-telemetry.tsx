@@ -1,5 +1,6 @@
 import { AdvisorSourceBadge } from "@/components/advisor-source-badge";
 import type { AdvisorInsight } from "@/types/advisor";
+import { formatDuration, formatRawMilliseconds } from "@/lib/duration";
 
 const tokens = (value: number) => value.toLocaleString("en-US");
 const usd = (value: number) => `$${value.toFixed(6)}`;
@@ -14,7 +15,7 @@ export function AdvisorTelemetryBar({ insight }: { insight: AdvisorInsight }) {
       <div><dt className="mb-1.5 text-slate-500">Execution source</dt><dd><AdvisorSourceBadge source={insight.source} />{current?.shared && <span className="ml-2 text-slate-400">Shared response</span>}</dd></div>
       <div><dt className="mb-1.5 text-slate-500">API tokens · Input / Output / Total</dt><dd className="font-mono tabular-nums text-cyan-100">{current ? `${tokens(current.inputTokens)} / ${tokens(current.outputTokens)} / ${tokens(current.totalTokens)}` : "Unavailable"}{current?.tokenSource === "estimated" && <span className="ml-1 font-sans text-slate-500">≈ estimated</span>}</dd></div>
       <div><dt className="mb-1.5 text-slate-500">Estimated run cost · USD</dt><dd className={`font-mono tabular-nums ${reused ? "text-emerald-300" : "text-cyan-100"}`}>{current ? usd(current.estimatedCostUsd) : "Unavailable"}{insight.source === "cached" && <span className="ml-1 font-sans text-[9px]">(Cache Saved)</span>}</dd></div>
-      <div><dt className="mb-1.5 text-slate-500">Lookup latency</dt><dd className="font-mono tabular-nums text-cyan-100">{current?.latencyMs != null ? `${tokens(current.latencyMs)} ms` : "—"}</dd></div>
+      <div><dt className="mb-1.5 text-slate-500">Lookup latency</dt><dd title={formatRawMilliseconds(current?.latencyMs)} className="font-mono tabular-nums text-cyan-100">{formatDuration(current?.latencyMs)}</dd></div>
     </dl>
     {reused && <p className="border-t border-slate-800/80 px-3 py-2 text-[10px] leading-5 text-slate-400">
       {original ? <>Original generation{original.tokenSource === "estimated" ? " (estimated)" : ""}: <span className="font-mono">{tokens(original.inputTokens)} / {tokens(original.outputTokens)} / {tokens(original.totalTokens)}</span> tokens · <span className="font-mono text-emerald-300">{usd(current?.costSavedUsd ?? 0)}</span> saved this lookup.</> : "Original token metrics unavailable for this older diagnostic."}

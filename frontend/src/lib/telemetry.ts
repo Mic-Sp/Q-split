@@ -1,4 +1,6 @@
 import { API_BASE_URL } from "@/lib/config";
+import { formatDuration, formatRawMilliseconds } from "@/lib/duration";
+import { pipelineTiming } from "@/lib/kpi-metrics";
 import type { HybridTelemetryResponse, RoutingConfig, SimulationRequest } from "@/types/telemetry";
 
 export const DEFAULT_ROUTING: RoutingConfig = {
@@ -27,14 +29,17 @@ export function totalLatency(data: HybridTelemetryResponse): number {
   return Object.values(data.stages).reduce((sum, stage) => sum + stage.latency_ms, 0);
 }
 
-export interface MetricDelta { label: string; before: string; after: string }
+export interface MetricDelta { label: string; before: string; after: string; beforeRaw?: string; afterRaw?: string }
 export interface Snapshot { id: string; completedAt: string; request: SimulationRequest; data: HybridTelemetryResponse }
 export interface Transition { id: number; before: Snapshot; after: Snapshot; changes: MetricDelta[] }
 
 export function describeChanges(before: Snapshot, after: Snapshot): MetricDelta[] {
   const changes: MetricDelta[] = [];
-  const add = (label: string, from: unknown, to: unknown) => {
-    if (JSON.stringify(from) !== JSON.stringify(to)) changes.push({ label, before: formatValue(from), after: formatValue(to) });
+  const add = (label: string, from: unknown, to: unknown, duration = false) => {
+    if (JSON.stringify(from) !== JSON.stringify(to)) changes.push({ label,
+      before: duration ? formatDuration(from) : formatValue(from), after: duration ? formatDuration(to) : formatValue(to),
+      ...(duration ? { beforeRaw: formatRawMilliseconds(from), afterRaw: formatRawMilliseconds(to) } : {}),
+    });
   };
   add("Workload", before.data.workload_name, after.data.workload_name);
   add("Scale", before.data.scale_label, after.data.scale_label);
@@ -42,15 +47,15 @@ export function describeChanges(before: Snapshot, after: Snapshot): MetricDelta[
   add("Available QPU qubits", before.request.available_qubits, after.request.available_qubits);
   add("Execution mode", before.data.execution_mode, after.data.execution_mode);
   add("Primary bottleneck", before.data.primary_bottleneck, after.data.primary_bottleneck);
-  add("Total latency (ms)", totalLatency(before.data), totalLatency(after.data));
+  add("Total latency", pipelineTiming(before.data).totalMs, pipelineTiming(after.data).totalMs, true);
   for (const { key, label } of PIPELINE) {
     const previous = before.data.stages[key];
     const current = after.data.stages[key];
     add(`${label} · node`, previous?.node, current?.node);
     add(`${label} · status`, previous?.status, current?.status);
-    add(`${label} · latency (ms)`, previous?.latency_ms, current?.latency_ms);
+    add(`${label} · latency`, previous?.latency_ms, current?.latency_ms, true);
     const keys = new Set([...Object.keys(previous?.metrics ?? {}), ...Object.keys(current?.metrics ?? {})]);
-    for (const metric of keys) add(`${label} · ${metric.replaceAll("_", " ")}`, previous?.metrics[metric], current?.metrics[metric]);
+    for (const metric of keys) add(`${label} · ${metric.replace(/_ms$/, "").replaceAll("_", " ")}`, previous?.metrics[metric], current?.metrics[metric], metric.endsWith("_ms"));
   }
   return changes;
 }

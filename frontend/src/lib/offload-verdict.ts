@@ -1,5 +1,6 @@
 import { pipelineLatencyBuckets } from "@/lib/kpi-metrics";
 import { DEFAULT_AVAILABLE_QUBITS, formatValue, PIPELINE, qubitThresholds } from "@/lib/telemetry";
+import { formatDuration } from "@/lib/duration";
 import type { HybridTelemetryResponse, SimulationRequest } from "@/types/telemetry";
 
 export interface OffloadVerdict {
@@ -46,7 +47,7 @@ export function offloadVerdict(data: HybridTelemetryResponse, request: Simulatio
   const cpuKernel = baseline?.feasible === true && finite(baseline.kernel_ms) && baseline.kernel_ms > 0 ? baseline.kernel_ms : null;
   if (timing.totalMs > 0 && timing.overheadMs / timing.totalMs > 0.4) {
     const cpuComparison = cpuTotal !== null && cpuTotal < timing.totalMs
-      ? `CPU execution remains faster (${formatValue(cpuTotal)} ms versus ${formatValue(timing.totalMs)} ms) because offload I/O penalties erase the compute gain.`
+      ? `CPU execution remains faster (${formatDuration(cpuTotal)} versus ${formatDuration(timing.totalMs)}) because offload I/O penalties erase the compute gain.`
       : "CPU placement for short host routines avoids launch/transfer penalties; compare end-to-end CPU timing before expanding offload.";
     return { title: "Interconnect Dominated", status: "warning",
       message: `Bus, transfer, and state-preparation overhead consumes ${(timing.overheadMs / timing.totalMs * 100).toFixed(1)}% of modeled wall-clock time. ${cpuComparison}` };

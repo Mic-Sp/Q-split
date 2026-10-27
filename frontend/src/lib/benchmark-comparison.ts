@@ -1,5 +1,6 @@
 import { coherenceBudget, pipelineTiming } from "@/lib/kpi-metrics";
 import { DEFAULT_AVAILABLE_QUBITS } from "@/lib/telemetry";
+import { formatDuration, formatDurationDelta, formatRawMilliseconds } from "@/lib/duration";
 import type { SavedSimulationRun } from "@/types/run-history";
 
 export const MAX_COMPARISON_RUNS = 3;
@@ -44,6 +45,8 @@ export interface ComparisonMetric {
   value: string;
   delta: string | null;
   changed: boolean;
+  raw?: string;
+  rawDelta?: string;
 }
 
 export function benchmarkComparison(runs: SavedSimulationRun[]) {
@@ -60,6 +63,12 @@ export function benchmarkComparison(runs: SavedSimulationRun[]) {
     const categorical = (label: string, value: string, baseline: string): ComparisonMetric => ({
       label, value, delta: index === 0 ? null : value === baseline ? "Same as reference" : "Changed from reference", changed: index > 0 && value !== baseline,
     });
+    const duration = (label: string, value: number, baseline: number): ComparisonMetric => ({
+      label, value: formatDuration(value), raw: formatRawMilliseconds(value),
+      delta: index === 0 ? null : `${formatDurationDelta(value - baseline)} vs reference`,
+      rawDelta: index === 0 ? undefined : `${value > baseline ? "+" : value < baseline ? "−" : ""}${formatRawMilliseconds(Math.abs(value - baseline))}`,
+      changed: index > 0 && value !== baseline,
+    });
     const depth = metrics.circuitDepth === null ? null : BigInt(metrics.circuitDepth);
     const baselineDepth = reference.circuitDepth === null ? null : BigInt(reference.circuitDepth);
     const coherence = numeric("Coherence survival", metrics.coherenceSurvival, reference.coherenceSurvival, "%", "pp");
@@ -68,9 +77,9 @@ export function benchmarkComparison(runs: SavedSimulationRun[]) {
     return {
       run,
       metrics: [
-        numeric("Total latency", metrics.totalMs, reference.totalMs, "ms"),
-        numeric("Pure compute", metrics.computeMs, reference.computeMs, "ms"),
-        numeric("Interconnect overhead", metrics.overheadMs, reference.overheadMs, "ms"),
+        duration("Total latency", metrics.totalMs, reference.totalMs),
+        duration("Pure compute", metrics.computeMs, reference.computeMs),
+        duration("Interconnect overhead", metrics.overheadMs, reference.overheadMs),
         numeric("Allocated QPU qubits", metrics.allocatedQubits, reference.allocatedQubits, "qubits"),
         numeric("Available QPU qubits", metrics.availableQubits, reference.availableQubits, "qubits"),
         categorical("Parallel tier", metrics.parallelTier ?? "Not reported", reference.parallelTier ?? "Not reported"),

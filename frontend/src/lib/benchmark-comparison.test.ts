@@ -72,10 +72,10 @@ test("comparison matrix uses the first run as reference with correct compute, ov
   assert.equal(columns.length, 2);
   assert.ok(columns[0].metrics.every(metric => metric.delta === null && !metric.changed));
   const metrics = Object.fromEntries(columns[1].metrics.map(metric => [metric.label, metric]));
-  assert.equal(metrics["Total latency"].value, "3.5 ms");
-  assert.equal(metrics["Total latency"].delta, "-1 ms vs reference");
+  assert.equal(metrics["Total latency"].value, "3.50 ms");
+  assert.equal(metrics["Total latency"].delta, "−1.00 ms vs reference");
   assert.equal(metrics["Pure compute"].value, "1.75 ms");
-  assert.equal(metrics["Interconnect overhead"].delta, "0 ms vs reference");
+  assert.equal(metrics["Interconnect overhead"].delta, "0.00 ms vs reference");
   assert.equal(metrics["Interconnect overhead"].changed, false);
   assert.equal(metrics["Allocated QPU qubits"].delta, "-4 qubits vs reference");
   assert.equal(metrics["Parallel tier"].delta, "Changed from reference");
@@ -85,7 +85,7 @@ test("comparison matrix uses the first run as reference with correct compute, ov
   assert.match(metrics["Bottleneck status"].value, /CRITICAL_BOTTLENECK.*Decoherence/);
   assert.equal(metrics["Bottleneck status"].changed, true);
   const reversed = benchmarkComparison([candidate, baseline]);
-  assert.equal(reversed[1].metrics[0].delta, "+1 ms vs reference");
+  assert.equal(reversed[1].metrics[0].delta, "+1.00 ms vs reference");
   assert.deepEqual(benchmarkComparison([]), []);
 });
 
@@ -96,7 +96,7 @@ test("matrix handles zero baselines, blocked stages, absent metrics, and classic
   const missing = fixture("missing");
   missing.telemetry.stages.stage_2_quantum_kernel.metrics = {}; missing.circuitDepth = null;
   const columns = benchmarkComparison([zero, missing]);
-  assert.match(columns[0].metrics[0].value, /^0 ms$/);
+  assert.match(columns[0].metrics[0].value, /^0\.00 ms$/);
   assert.match(columns[0].metrics[7].value, /EXCEEDED/);
   assert.match(columns[1].metrics[0].delta!, /^\+/);
   for (const index of [3, 6, 7]) { assert.match(columns[1].metrics[index].value, /Not reported/); assert.equal(columns[1].metrics[index].delta, null); }
@@ -118,7 +118,8 @@ test("comparison retains exact integer circuit depths and tiny latency deltas", 
   const column = benchmarkComparison([baseline, candidate])[1];
   assert.equal(column.metrics[6].value, "9,007,199,254,740,994 gates");
   assert.equal(column.metrics[6].delta, "+1 gates vs reference");
-  assert.equal(column.metrics[0].delta, "+0.000001 ms vs reference");
+  assert.equal(column.metrics[0].delta, "+<0.01 ms vs reference");
+  assert.match(column.metrics[0].rawDelta!, /^\+0\.000001/);
 });
 
 test("CSV flattens system metrics consistently with KPI math and round-trips Unicode, quotes, commas, and diagnostics", () => {
@@ -174,4 +175,22 @@ test("JSON export preserves complete payloads, snapshot metadata, token usage, a
   assert.deepEqual(run, before);
   assert.equal(JSON.parse(text)[0].telemetry.stages.stage_2_quantum_kernel.metrics.nested.phases[1], 0.5);
   assert.equal(benchmarkJson([]), "[]\n");
+});
+
+test("large-duration displays do not change numeric millisecond CSV or JSON exports", () => {
+  for (const latency of [2_687.44, 151_000, 9_663_805.05, 273_600_000]) {
+    const run = fixture();
+    for (const stage of Object.values(run.telemetry.stages)) { stage.latency_ms = 0; stage.metrics = {}; }
+    run.telemetry.stages.stage_2_quantum_kernel.latency_ms = latency;
+    const original = structuredClone(run);
+    const display = benchmarkComparison([run])[0].metrics[0];
+    assert.doesNotMatch(display.value, /ms$/);
+    const csv = parseCsv(benchmarkCsv([run]));
+    for (const key of ["Pure Compute ms", "Total Latency ms"]) {
+      const value = csv[1][csv[0].indexOf(key)];
+      assert.equal(Number(value), latency); assert.match(value, /^\d+(\.\d+)?$/);
+    }
+    assert.equal(JSON.parse(benchmarkJson([run]))[0].telemetry.stages.stage_2_quantum_kernel.latency_ms, latency);
+    assert.deepEqual(run, original);
+  }
 });
