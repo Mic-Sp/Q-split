@@ -1,21 +1,18 @@
-import { API_BASE_URL } from "@/lib/config";
 import { formatDuration, formatRawMilliseconds } from "@/lib/duration";
 import { pipelineTiming } from "@/lib/kpi-metrics";
 import { HARDWARE_PROFILES, hardwareLabel } from "@/lib/hardware-profiles";
-import type { HardwareProfile, HybridTelemetryResponse, RoutingConfig, SimulationRequest } from "@/types/telemetry";
+import type { HardwareProfile, HybridTelemetryResponse, RoutingConfig, SimulationRequest, WorkloadId } from "@/types/telemetry";
+import { workloadThresholds } from "@/lib/workloads";
 
 export const DEFAULT_ROUTING: RoutingConfig = {
   stage_1_node: "CPU", stage_2_node: "QPU", stage_3_node: "CPU",
 };
 export const DEFAULT_AVAILABLE_QUBITS = 133;
 
-export function qubitThresholds(scale: number) {
-  const n = scale === 512 || scale === 2048 ? scale : Math.ceil(Math.log2(scale));
-  return { minimum: scale === 15 ? 8 : 2 * n + 3, windowed: 3 * n, ceiling: Math.ceil(5.5 * n) };
-}
+export const qubitThresholds = workloadThresholds;
 
-export function hardwareDefaultQubits(profile: HardwareProfile, scale: number): number {
-  return HARDWARE_PROFILES[profile].referenceQubits ?? qubitThresholds(scale).ceiling;
+export function hardwareDefaultQubits(profile: HardwareProfile, scale: number, workload: WorkloadId = "shors_crypto"): number {
+  return HARDWARE_PROFILES[profile].referenceQubits ?? qubitThresholds(scale, workload).ceiling;
 }
 
 export const PIPELINE = [
@@ -89,7 +86,7 @@ export function parseTelemetry(value: unknown): HybridTelemetryResponse {
 }
 
 export async function simulate(request: SimulationRequest, signal: AbortSignal): Promise<HybridTelemetryResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/simulate`, {
+  const response = await fetch("/api/simulate", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request), signal,
   });
   const body: unknown = await response.json().catch(() => null);
@@ -98,6 +95,7 @@ export async function simulate(request: SimulationRequest, signal: AbortSignal):
     throw new Error(typeof detail === "string" ? `${detail} (HTTP ${response.status})` : `Simulation failed (HTTP ${response.status}). Please try again.`);
   }
   const data = parseTelemetry(body);
+  if (data.workload_id !== request.workload_id) throw new Error("The engine did not honor the selected workload. Use an updated backend and retry.");
   // Older deployments may silently ignore unknown request fields. Do not show
   // their fixed-route response as a successful custom routing simulation.
   for (const { key, routingKey } of PIPELINE) {
@@ -105,7 +103,7 @@ export async function simulate(request: SimulationRequest, signal: AbortSignal):
     if (data.stages[key].node !== expected) {
       throw new Error("The engine did not honor the selected stage routing. Use an updated backend and retry.");
     }
-    if (expected === "QPU" && request.available_qubits !== undefined &&
+    if (expected === "QPU" && key === "stage_2_quantum_kernel" && request.available_qubits !== undefined &&
         data.stages[key].metrics.available_qubits !== request.available_qubits) {
       throw new Error("The engine did not honor the selected QPU capacity. Use an updated backend and retry.");
     }

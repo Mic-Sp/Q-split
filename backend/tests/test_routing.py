@@ -18,10 +18,13 @@ from backend.main import (
     SimulationRequest,
     STAGE_KEYS,
     HARDWARE_PROFILES,
+    QUANTUM_MIPS_SCALES,
     qpu_capacity_plan,
     classical_cpu_baseline,
     app,
     run_shors_pipeline,
+    execute_live_quantum_mips_64,
+    quantum_mips_qubit_thresholds,
 )
 
 
@@ -55,6 +58,14 @@ class RoutingTests(unittest.TestCase):
         })
         self.kernel.start()
         self.addCleanup(self.kernel.stop)
+        self.mips_kernel = patch("backend.main.execute_live_quantum_mips_64", return_value={
+            "reference_circuit_depth": 640, "aer_reference_qubits": 10, "aer_shots": 1024,
+            "aer_counts": {"101101": 1020, "000000": 4}, "top_1_token_index": 45,
+            "measured_peak_probability": 1020 / 1024, "aer_compile_time_ms": 2.0,
+            "aer_runtime_ms": 1.25, "aer_total_time_ms": 3.25,
+        })
+        self.mips_kernel.start()
+        self.addCleanup(self.mips_kernel.stop)
 
     def post(self, payload):
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
@@ -175,9 +186,69 @@ class RoutingTests(unittest.TestCase):
         self.assertFalse(result.stages[STAGE_KEYS[2]].metrics["routing_supported"])
         self.assertIn("UNSUPPORTED QPU ROUTING", result.primary_bottleneck)
 
-    def test_other_workload_http_statuses_are_preserved(self):
-        self.assertEqual(self.post({"workload_id": "quantum_mips", "routing": {"stage_2_node": "GPU"}})[0], 501)
+    def test_supported_and_unknown_workloads_dispatch(self):
+        self.assertEqual(self.post({"workload_id": "quantum_mips", "routing": {"stage_2_node": "GPU"}})[0], 200)
         self.assertEqual(self.post({"workload_id": "unknown"})[0], 400)
+
+    def test_quantum_mips_schema_accepts_scales_and_profiles_without_running_shors(self):
+        with patch("backend.main.run_shors_pipeline", side_effect=AssertionError("Quantum-MIPS must not execute Shor's")):
+            for scale, profile in itertools.product(QUANTUM_MIPS_SCALES, HARDWARE_PROFILES):
+                with self.subTest(scale=scale, profile=profile):
+                    status, body = self.post({"workload_id": "quantum_mips", "scale_param": scale,
+                                              "hardware_profile": profile, "available_qubits": 96})
+                    self.assertEqual(status, 200)
+                    self.assertEqual(body["workload_id"], "quantum_mips")
+                    self.assertEqual(set(body["stages"]), set(STAGE_KEYS))
+            self.assertEqual(self.post({"workload_id": "quantum_mips"})[0], 200)
+
+    def test_quantum_mips_http_all_27_routes_five_scales_four_profiles_and_three_tiers(self):
+        for nodes, scale, profile, tier in itertools.product(
+            itertools.product(["CPU", "GPU", "QPU"], repeat=3), QUANTUM_MIPS_SCALES,
+            HARDWARE_PROFILES, ["minimum_qubits_required", "windowed_qubits_required", "ceiling_qubits_required"],
+        ):
+            routing = dict(zip(["stage_1_node", "stage_2_node", "stage_3_node"], nodes))
+            capacity = quantum_mips_qubit_thresholds(scale)[tier]
+            with self.subTest(nodes=nodes, scale=scale, profile=profile, tier=tier):
+                status, body = self.post({"workload_id": "quantum_mips", "scale_param": scale,
+                                          "hardware_profile": profile, "available_qubits": capacity, "routing": routing})
+                self.assertEqual(status, 200)
+                self.assertEqual(body["workload_id"], "quantum_mips")
+                self.assertEqual(body["scale_label"], QUANTUM_MIPS_SCALES[scale]["label"])
+                stages = list(body["stages"].values())
+                self.assertEqual([stage["node"] for stage in stages], list(nodes))
+                blocked = False
+                for stage in stages:
+                    self.assertTrue(math.isfinite(stage["latency_ms"]))
+                    self.assertGreaterEqual(stage["latency_ms"], 0)
+                    blocked = blocked or not stage["metrics"]["execution_feasible"]
+                    if blocked:
+                        self.assertFalse(stage["metrics"]["execution_feasible"])
+                        self.assertEqual(stage["latency_ms"], 0)
+
+    def test_quantum_mips_live_aer_runs_through_http_for_cpu_gpu_and_qpu(self):
+        # Override the speed-oriented fixture with the actual compiled circuit.
+        with patch("backend.main.execute_live_quantum_mips_64", side_effect=execute_live_quantum_mips_64):
+            for node in ["CPU", "GPU", "QPU"]:
+                status, body = self.post({"workload_id": "quantum_mips", "scale_param": 64,
+                                          "hardware_profile": "ideal_sim", "available_qubits": 10,
+                                          "routing": {"stage_2_node": node}})
+                self.assertEqual(status, 200)
+                self.assertEqual(body["execution_mode"], "LIVE_QISKIT_AER")
+                metrics = body["stages"][STAGE_KEYS[1]]["metrics"]
+                self.assertEqual(metrics["aer_reference_qubits"], 10)
+                self.assertEqual(metrics["top_1_token_index"], 45)
+                self.assertGreater(metrics["measured_peak_probability"], 0.95)
+                self.assertGreater(metrics["aer_runtime_ms"], 0)
+                self.assertEqual(sum(metrics["aer_counts"].values()), metrics["aer_shots"])
+
+    def test_quantum_mips_invalid_scales_and_schema_fields_reject_before_execution(self):
+        for value in [15, 65, 64.0, "64", None, True]:
+            with self.subTest(scale=value):
+                status, _ = self.post({"workload_id": "quantum_mips", "scale_param": value})
+                self.assertEqual(status, 422)
+        for patch_fields in [{"available_qubits": 0}, {"available_qubits": True}, {"hardware_profile": "unknown"}, {"routing": {"stage_2_node": "TPU"}}]:
+            status, _ = self.post({"workload_id": "quantum_mips", "scale_param": 64, **patch_fields})
+            self.assertEqual(status, 422)
 
     def test_capacity_validation_and_default(self):
         self.assertEqual(SimulationRequest().available_qubits, 133)

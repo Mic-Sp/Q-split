@@ -5,18 +5,18 @@ import type { CompletedRun } from "@/types/run-history";
 import type { HybridTelemetryResponse, RoutingConfig, SimulationRequest, StageTelemetry } from "@/types/telemetry";
 import { HARDWARE_PROFILE_IDS } from "@/types/telemetry";
 import { HARDWARE_PROFILES } from "@/lib/hardware-profiles";
+import { WORKLOADS, validWorkloadScale, workloadScaleLabel } from "@/lib/workloads";
 import { pipelineTiming } from "@/lib/kpi-metrics";
 
 export const ADVISOR_BODY_LIMIT = 65_536;
 const MAX_QUBITS = 2_147_483_647; // Matches FastAPI's positive int32 capacity contract.
-const SCALES = [15, 21, 35, 512, 2048];
-const TIERS = ["Space-Optimized Sequential", "Windowed Parallel", "Carry-Lookahead Parallel",
+const TIERS = ["Sequential Minimum", "Multi-Oracle Ceiling", "Blocked · statevector memory", "Space-Optimized Sequential", "Windowed Parallel", "Carry-Lookahead Parallel",
   "Blocked · insufficient capacity", "Blocked · upstream stage unavailable", "Unavailable · unsupported QPU route"];
 const DEPTHS = ["O(n^3)", "O(n^2 log n)", "O(n log^2 n)", "Not executed"];
 const BOTTLENECKS = ["NONE", "INSUFFICIENT QPU QUBIT CAPACITY", "UNSUPPORTED QPU ROUTING",
   "CPU STATEVECTOR MEMORY LIMIT", "GPU STATEVECTOR MEMORY LIMIT", "CPU STATEVECTOR EMULATION OVERHEAD",
   "GPU STATEVECTOR EMULATION OVERHEAD", "GPU LAUNCH/TRANSFER OVERHEAD", "NISQ TWO-QUBIT GATE NOISE",
-  "CATASTROPHIC QPU DECOHERENCE", "CLASSICAL SIMULATION RAM WALL"];
+  "CATASTROPHIC QPU DECOHERENCE", "QPU COHERENCE BUDGET DEGRADED", "CLASSICAL SIMULATION RAM WALL"];
 
 function invalid(): never { throw new Error("Invalid advisor request."); }
 function object(value: unknown): Record<string, unknown> {
@@ -47,6 +47,10 @@ function metrics(value: unknown): StageTelemetry["metrics"] {
   const source = object(value);
   const result: StageTelemetry["metrics"] = {};
   const numeric = [
+    ["index_bits", 1, 31, true], ["candidate_count", 1, 1048576, true], ["grover_iterations", 0, 10000, true],
+    ["statevector_qubits", 0, MAX_QUBITS, true], ["planned_qubits", 0, MAX_QUBITS, true],
+    ["compute_latency_ms", 0, Number.MAX_SAFE_INTEGER, false], ["depth_multiplier", 0, 1, false],
+    ["measured_peak_probability", 0, 1, false], ["aer_runtime_ms", 0, Number.MAX_SAFE_INTEGER, false],
     ["qubits_required", 1, MAX_QUBITS, true], ["available_qubits", 1, MAX_QUBITS, true],
     ["qubits_allocated", 0, MAX_QUBITS, true], ["minimum_qubits_required", 1, MAX_QUBITS, true],
     ["idle_qubits", 0, MAX_QUBITS, true], ["circuit_depth", 0, Number.MAX_SAFE_INTEGER, true],
@@ -58,9 +62,9 @@ function metrics(value: unknown): StageTelemetry["metrics"] {
     ["coherence_decay_scale", 1, Number.MAX_SAFE_INTEGER, false], ["io_readout_ms", 0, Number.MAX_SAFE_INTEGER, false],
   ] as const;
   for (const [key, min, max, integer] of numeric) {
-    if (Object.hasOwn(source, key)) result[key] = number(source[key], min, max, integer);
+    if (Object.hasOwn(source, key) && !(key === "depth_multiplier" && source[key] === null)) result[key] = number(source[key], min, max, integer);
   }
-  for (const key of ["routing_supported", "execution_feasible", "parallel_speedup_ceiling_reached"]) {
+  for (const key of ["routing_supported", "execution_feasible", "parallel_speedup_ceiling_reached", "aer_executed", "retrieval_reliable"]) {
     if (Object.hasOwn(source, key)) {
       if (typeof source[key] !== "boolean") invalid();
       result[key] = source[key];
@@ -88,10 +92,11 @@ function validateRun(value: unknown): CompletedRun {
       if (Object.hasOwn(source, key)) routing[key] = choice(source[key], ["CPU", "GPU", "QPU"]);
     }
   }
-  const scale = number(config.scale_param, 15, 2048, true);
-  if (!SCALES.includes(scale)) invalid();
+  const workload = choice(config.workload_id, ["shors_crypto", "quantum_mips"]);
+  const scale = number(config.scale_param, 1, 1048576, true);
+  if (!validWorkloadScale(workload, scale)) invalid();
   const request: SimulationRequest = {
-    workload_id: choice(config.workload_id, ["shors_crypto", "quantum_mips"]),
+    workload_id: workload,
     scale_param: scale,
     hardware_profile: choice(config.hardware_profile, HARDWARE_PROFILE_IDS),
     available_qubits: config.available_qubits === undefined ? DEFAULT_AVAILABLE_QUBITS : number(config.available_qubits, 1, MAX_QUBITS, true),
@@ -120,9 +125,9 @@ function validateRun(value: unknown): CompletedRun {
     if (node === "QPU" && numeric.available_qubits !== undefined && numeric.available_qubits !== request.available_qubits) invalid();
     const available = numeric.available_qubits ?? request.available_qubits;
     for (const field of ["qubits_allocated", "idle_qubits"]) {
-      if (typeof numeric[field] === "number" && numeric[field] > (available as number)) invalid();
+      if (typeof numeric[field] === "number" && node === "QPU" && numeric[field] > (available as number)) invalid();
     }
-    normalized[key] = { name: label, node,
+    normalized[key] = { name: WORKLOADS[workload].stages[PIPELINE.findIndex(stage => stage.key === key)] ?? label, node,
       latency_ms: number(stage.latency_ms, 0, Number.MAX_SAFE_INTEGER),
       status: choice(stage.status, ["OPTIMAL", "WARNING", "CRITICAL_BOTTLENECK"]),
       output_summary: "", metrics: numeric };
@@ -131,12 +136,11 @@ function validateRun(value: unknown): CompletedRun {
   // Dynamic explanations are deliberately discarded; only a recognized fixed
   // reason reaches the model or the deterministic fallback.
   const reason = clean(source.primary_bottleneck, ADVISOR_BODY_LIMIT);
-  const bottleneck = BOTTLENECKS.find((prefix) => reason === prefix || reason.startsWith(`${prefix} (`)) ?? "UNCLASSIFIED BOTTLENECK";
-  const n = scale === 512 || scale === 2048 ? scale : Math.ceil(Math.log2(scale));
+  const bottleneck = BOTTLENECKS.find((prefix) => reason === prefix || reason.startsWith(`${prefix} (`) || reason.startsWith(`${prefix}:`)) ?? "UNCLASSIFIED BOTTLENECK";
   const telemetry: HybridTelemetryResponse = {
     workload_id: request.workload_id,
-    workload_name: request.workload_id === "shors_crypto" ? "Shor's Factoring Pipeline" : "Quantum-MIPS AI",
-    scale_label: scale >= 512 ? `RSA-${scale}` : `N = ${scale} (${n}-bit Composite Integer)`,
+    workload_name: WORKLOADS[workload].label,
+    scale_label: workloadScaleLabel(scale, workload),
     execution_mode: choice(source.execution_mode, ["LIVE_QISKIT_AER", "NISQ_ANALYTICAL_PROFILER"]),
     primary_bottleneck: bottleneck, stages: normalized,
   };

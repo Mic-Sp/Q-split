@@ -1,8 +1,12 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing import Dict, Any, Literal, Optional
 import math
+from time import perf_counter
 from fractions import Fraction
 from qiskit import QuantumCircuit, transpile
 from qiskit.circuit.library import QFTGate
@@ -27,7 +31,31 @@ app.add_middleware(
 # 1. UNIFIED PYDANTIC CONTRACT
 # ==========================================
 StageNode = Literal["CPU", "GPU", "QPU"]
+WorkloadId = Literal["shors_crypto", "quantum_mips"]
 HardwareProfile = Literal["ibm_heron_nisq", "google_weber_grid", "ionq_forte_trapped_ion", "ideal_sim"]
+
+QUANTUM_MIPS_WORKLOAD_NAME = "Quantum-MIPS · Sub-Linear LLM Vector Retrieval"
+QUANTUM_MIPS_DEFAULT_SCALE = 64
+QUANTUM_MIPS_SCALES = {
+    64: {"index_bits": 6, "label": "M = 64 (6-bit Toy KV-Cache Block)"},
+    1024: {"index_bits": 10, "label": "M = 1,024 (10-bit HNSW Subgraph)"},
+    32768: {"index_bits": 15, "label": "M = 32k (15-bit Long-Context KV-Cache)"},
+    131072: {"index_bits": 17, "label": "M = 128k (17-bit LLM Vocabulary Unembedding)"},
+    1048576: {"index_bits": 20, "label": "M = 1M (20-bit Enterprise RAG Vector Index)"},
+}
+
+
+@app.exception_handler(RequestValidationError)
+async def validate_simulation_request(request: Request, error: RequestValidationError):
+    errors = error.errors()
+    # Keep the existing HTTP 400 contract for unknown workload strings while
+    # exposing a real workload enum in Pydantic/OpenAPI. Other failures use 422.
+    if (request.url.path == "/api/simulate" and len(errors) == 1
+            and errors[0]["loc"] == ("body", "workload_id")
+            and errors[0]["type"] == "literal_error"
+            and isinstance(errors[0].get("input"), str)):
+        return JSONResponse(status_code=400, content={"detail": f"Unknown workload_id: {errors[0]['input']}"})
+    return await request_validation_exception_handler(request, error)
 
 # Comparative architecture assumptions, not measured processor specifications.
 # The requested 72-qubit Google preset is exploratory: the published Weber
@@ -53,11 +81,24 @@ class RoutingConfig(BaseModel):
 
 
 class SimulationRequest(BaseModel):
-    workload_id: str = "shors_crypto"       # "shors_crypto" or "quantum_mips"
+    workload_id: WorkloadId = "shors_crypto"
     scale_param: int = Field(default=15, strict=True, ge=2, le=2_147_483_647)
     hardware_profile: HardwareProfile = "ibm_heron_nisq"
     routing: Optional[RoutingConfig] = None
     available_qubits: int = Field(default=133, strict=True, ge=1, le=2_147_483_647)
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_workload_scale(cls, value):
+        if isinstance(value, dict) and value.get("workload_id") == "quantum_mips" and "scale_param" not in value:
+            return {**value, "scale_param": QUANTUM_MIPS_DEFAULT_SCALE}
+        return value
+
+    @model_validator(mode="after")
+    def validate_workload_scale(self):
+        if self.workload_id == "quantum_mips" and self.scale_param not in QUANTUM_MIPS_SCALES:
+            raise ValueError("Quantum-MIPS scale_param must be one of 64, 1024, 32768, 131072, 1048576.")
+        return self
 
 class StageTelemetry(BaseModel):
     name: str
@@ -68,7 +109,7 @@ class StageTelemetry(BaseModel):
     metrics: Dict[str, Any]
 
 class HybridTelemetryResponse(BaseModel):
-    workload_id: str
+    workload_id: WorkloadId
     workload_name: str
     scale_label: str
     execution_mode: str                     # "LIVE_QISKIT_AER" or "NISQ_ANALYTICAL_PROFILER"
@@ -148,9 +189,117 @@ def execute_live_shors_15(a: int = 7, noisy: bool = True) -> Dict[str, Any]:
         "coherence_pct": round(100.0 * math.exp(-t_qc.depth() / 1200.0), 2) if noisy else 100.0
     }
 
+
+QUANTUM_MIPS_TARGET_INDEX = 45  # |101101>: a marked-state demonstration, not a real vector search.
+QUANTUM_MIPS_AER_SHOTS = 1024
+
+
+def build_quantum_mips_grover_circuit() -> QuantumCircuit:
+    """Six index qubits and four clean ancillas, uncomputed after each reflection.
+
+    A known marked state demonstrates amplification; no inner-product dataset
+    or Dürr-Høyer adaptive maximum-finding oracle is claimed to execute here.
+    """
+    circuit = QuantumCircuit(10, 6)
+    index = list(range(6))
+    target = format(QUANTUM_MIPS_TARGET_INDEX, "06b")
+    zero_bits = [qubit for qubit, bit in enumerate(reversed(target)) if bit == "0"]
+
+    def reflect_all_ones():
+        circuit.ccx(0, 1, 6)
+        circuit.ccx(6, 2, 7)
+        circuit.ccx(7, 3, 8)
+        circuit.ccx(8, 4, 9)
+        circuit.cz(9, 5)
+        circuit.ccx(8, 4, 9)
+        circuit.ccx(7, 3, 8)
+        circuit.ccx(6, 2, 7)
+        circuit.ccx(0, 1, 6)
+
+    circuit.h(index)
+    for _ in range(math.floor(math.pi / 4 * math.sqrt(64))):
+        circuit.x(zero_bits)
+        reflect_all_ones()
+        circuit.x(zero_bits)
+        circuit.h(index)
+        circuit.x(index)
+        reflect_all_ones()
+        circuit.x(index)
+        circuit.h(index)
+    circuit.measure(index, index)
+    return circuit
+
+
+def execute_live_quantum_mips_64() -> Dict[str, Any]:
+    """Run the 10-qubit ideal Aer reference and report actual counts and timings.
+
+    Hardware noise/topology are applied as projections by the stage builder,
+    separately from these measured, deterministic-seed reference samples.
+    """
+    circuit = build_quantum_mips_grover_circuit()
+    simulator = AerSimulator(method="statevector", max_parallel_threads=1)
+    started = perf_counter()
+    compiled = transpile(circuit, basis_gates=["cx", "rz", "sx", "x"],
+                         optimization_level=1, seed_transpiler=7)
+    compiled_at = perf_counter()
+    counts = simulator.run(compiled, shots=QUANTUM_MIPS_AER_SHOTS, seed_simulator=7).result().get_counts()
+    finished = perf_counter()
+    peak = max(counts, key=counts.get)
+    return {"reference_circuit_depth": compiled.depth(), "aer_reference_qubits": compiled.num_qubits,
+            "aer_shots": sum(counts.values()), "aer_counts": dict(counts),
+            "top_1_token_index": int(peak, 2), "measured_peak_probability": counts[peak] / sum(counts.values()),
+            "aer_compile_time_ms": (compiled_at - started) * 1000,
+            "aer_runtime_ms": (finished - compiled_at) * 1000,
+            "aer_total_time_ms": (finished - started) * 1000}
+
 # ==========================================
-# 3. SHOR'S HYBRID PIPELINE BUILDER
+# 3. WORKLOAD PLANNING & HYBRID PIPELINES
 # ==========================================
+def quantum_mips_qubit_thresholds(scale_param: int) -> Dict[str, int]:
+    """Register thresholds for an M-candidate index; k = ceil(log2(M)).
+
+    The helper supports future non-power-of-two M values; the public request
+    schema currently restricts Quantum-MIPS to the five defined presets.
+    """
+    if type(scale_param) is not int or not 2 <= scale_param <= 2_147_483_647:
+        raise ValueError("Candidate count must be an integer from 2 to 2,147,483,647.")
+    k = (scale_param - 1).bit_length()
+    return {"index_bits": k, "minimum_qubits_required": k + 4,
+            "windowed_qubits_required": 2 * k + 8, "ceiling_qubits_required": 4 * k + 16}
+
+
+def quantum_mips_capacity_plan(scale_param: int, available_qubits: int) -> Dict[str, Any]:
+    """Illustrative oracle tier factors; the kernel builder resolves execution depth.
+
+    Grover iterations remain O(sqrt(M)). Tier multipliers describe serial
+    inner-product accumulation, a parallel ancilla tree, or partitioned oracle
+    registers; they do not include vector data-loading or physical QPU costs.
+    """
+    thresholds = quantum_mips_qubit_thresholds(scale_param)
+    if type(available_qubits) is not int or not 1 <= available_qubits <= 2_147_483_647:
+        raise ValueError("Available qubits must be an integer from 1 to 2,147,483,647.")
+    minimum = thresholds["minimum_qubits_required"]
+    windowed = thresholds["windowed_qubits_required"]
+    ceiling = thresholds["ceiling_qubits_required"]
+    if available_qubits < minimum:
+        allocated, tier, multiplier = 0, "Blocked · insufficient capacity", None
+        oracle = "Not executed"
+    elif available_qubits >= ceiling:
+        allocated, tier, multiplier = ceiling, "Multi-Oracle Ceiling", 0.20
+        oracle = "Partitioned parallel Grover amplitude amplification across oracle registers"
+    elif available_qubits >= windowed:
+        allocated, tier, multiplier = windowed, "Windowed Parallel", 0.40
+        oracle = "Parallel tree-based inner-product accumulation across ancilla registers"
+    else:
+        allocated, tier, multiplier = minimum, "Sequential Minimum", 1.0
+        oracle = "Serial inner-product oracle across O(sqrt(M)) Grover iterations"
+    return {**thresholds, "available_qubits": available_qubits, "qubits_allocated": allocated,
+            "idle_qubits": available_qubits - allocated, "parallelization_tier": tier,
+            "depth_multiplier": multiplier, "oracle_model": oracle,
+            "execution_feasible": allocated > 0,
+            "parallel_speedup_ceiling_reached": allocated > 0 and available_qubits >= ceiling}
+
+
 def qpu_capacity_plan(scale_param: int, available_qubits: int) -> Dict[str, Any]:
     """Illustrative logical-qubit/depth model; not a physical device benchmark.
 
@@ -335,14 +484,93 @@ def _run_default_shors_pipeline(
         }
     )
 
-# Routing costs below are illustrative simulation assumptions, not benchmarks.
-# GPU classical routines include 0.30 ms of launch/transfer overhead and a 4x
+# Shor routing costs below are illustrative simulation assumptions, not benchmarks.
+# Its GPU classical routines include 0.30 ms of launch/transfer overhead and a 4x
 # compute speedup. Classical statevector emulation costs scale with 2^qubits;
 # CPU/GPU kernel multipliers are 50x/12.5x the baseline gate-time estimate.
 # The modeled statevector budgets are 16 GiB on CPU and 8 GiB on GPU, with
 # complex128 amplitudes (16 bytes). No physical GPU or QPU is dispatched.
 CLASSICAL_GPU_OVERHEAD_MS = 0.30
 CLASSICAL_GPU_COMPUTE_FACTOR = 0.25
+
+# Quantum-MIPS host-stage calibration points, not measured device timings.
+# d and the verification batch K are implicit in these reference workloads;
+# no vector matches, projection output, or softmax scores are fabricated.
+QUANTUM_MIPS_CLASSICAL_PROFILES = {
+    "stage_1_classical_pre": {
+        "name": "LSH Projection & HNSW Bucket Pruning",
+        "algorithm": "LSH Random Hyperplane & HNSW Graph Filter",
+        "complexity": "O(d · log M)",
+        "gpu_compute_factor": 0.12,
+        "cpu_latency_ms": {64: 0.25, 1024: 2.40, 32768: 18.5, 131072: 64.0, 1048576: 310.0},
+        "operation": "LSH projection and HNSW bucket filtering",
+        "qpu_limitation": "Hash bucket filtering is a classical memory-bound routine",
+    },
+    "stage_3_classical_post": {
+        "name": "Exact FP16 Dot-Product Reranking & Softmax",
+        "algorithm": "Batch FP16 Cosine Reranking & Top-K Softmax",
+        "complexity": "O(K · d)",
+        "gpu_compute_factor": 0.10,
+        "cpu_latency_ms": {64: 0.18, 1024: 1.80, 32768: 12.0, 131072: 42.0, 1048576: 195.0},
+        "operation": "FP16 cosine reranking and Top-K softmax verification",
+        "qpu_limitation": "Exact reranking and softmax verification require classical vector processing",
+    },
+}
+
+
+def _quantum_mips_classical_stage(scale_param: int, node: StageNode, stage_key: str) -> StageTelemetry:
+    if type(scale_param) is not int or scale_param not in QUANTUM_MIPS_SCALES:
+        raise ValueError("Unsupported Quantum-MIPS candidate count.")
+    if node not in ("CPU", "GPU", "QPU"):
+        raise ValueError("Stage node must be CPU, GPU, or QPU.")
+    profile = QUANTUM_MIPS_CLASSICAL_PROFILES[stage_key]
+    cpu_ms = profile["cpu_latency_ms"][scale_param]
+    metrics = {
+        "algorithm": profile["algorithm"], "complexity": profile["complexity"],
+        "candidate_count": scale_param, "index_bits": QUANTUM_MIPS_SCALES[scale_param]["index_bits"],
+        "cpu_reference_latency_ms": cpu_ms, "routing_model": "ILLUSTRATIVE_V1 (not device measurements)",
+        "routing_supported": node != "QPU", "execution_feasible": node != "QPU",
+    }
+    if node == "QPU":
+        metrics.update({"compute_latency_ms": 0.0, "launch_transfer_overhead_ms": 0.0})
+        return StageTelemetry(name=profile["name"], node=node, latency_ms=0.0, status="CRITICAL_BOTTLENECK",
+                              output_summary=f"UNSUPPORTED ROUTE: {profile['qpu_limitation']}; use CPU or GPU. No QPU execution performed.",
+                              metrics=metrics)
+
+    factor = profile["gpu_compute_factor"] if node == "GPU" else 1.0
+    overhead_ms = CLASSICAL_GPU_OVERHEAD_MS if node == "GPU" else 0.0
+    # Match the existing host-stage precision. Compute and inclusive total use
+    # the same rounding so launch/transfer is accounted for exactly once.
+    compute_ms = round(cpu_ms * factor, 2)
+    total_ms = round(compute_ms + overhead_ms, 2)
+    metrics.update({"compute_latency_factor": factor, "compute_latency_ms": compute_ms,
+                    "launch_transfer_overhead_ms": overhead_ms})
+    status = "WARNING" if node == "GPU" and total_ms >= cpu_ms else "OPTIMAL"
+    summary = f"Modeled {profile['operation']} for M = {scale_param:,} on {node}."
+    if node == "GPU":
+        summary += f" Tensor-parallel compute {compute_ms:.2f} ms + PCIe launch/transfer {overhead_ms:.2f} ms = {total_ms:.2f} ms."
+        summary += (f" Small-batch PCIe overhead makes CPU faster ({cpu_ms:.2f} ms)." if status == "WARNING"
+                    else f" Tensor parallelism is faster than the CPU reference ({cpu_ms:.2f} ms).")
+    else:
+        summary += f" CPU compute {compute_ms:.2f} ms; no PCIe launch/transfer cost."
+    return StageTelemetry(name=profile["name"], node=node, latency_ms=total_ms, status=status,
+                          output_summary=summary, metrics=metrics)
+
+
+def quantum_mips_preprocessing(scale_param: int, node: StageNode = "CPU") -> StageTelemetry:
+    """Stage 01: modeled LSH/HNSW costs; QPU routing has no implementation."""
+    return _quantum_mips_classical_stage(scale_param, node, "stage_1_classical_pre")
+
+
+def quantum_mips_postprocessing(scale_param: int, node: StageNode = "CPU") -> StageTelemetry:
+    """Stage 03: modeled FP16 reranking costs, assuming usable kernel output.
+
+    The pipeline suppresses this stage if an upstream stage is blocked. This
+    standalone builder assumes usable input and does not invent retrieval data.
+    """
+    return _quantum_mips_classical_stage(scale_param, node, "stage_3_classical_post")
+
+
 STATEVECTOR_PROFILES = {
     "CPU": {"max_qubits": 30, "memory_gib": 16, "latency_factor": 50.0},
     "GPU": {"max_qubits": 29, "memory_gib": 8, "latency_factor": 12.5},
@@ -374,6 +602,191 @@ def classical_cpu_baseline(scale_param: int) -> Dict[str, Any]:
         total_ms = round(pre_ms + kernel_ms + post_ms, 2)
     return {"feasible": feasible, "kernel_ms": kernel_ms, "total_ms": total_ms,
             "logical_qubits": qubits, "memory_budget_gib": profile["memory_gib"]}
+
+
+def _quantum_mips_emulation_plan(scale_param: int, available_qubits: int) -> Dict[str, Any]:
+    plan = quantum_mips_capacity_plan(scale_param, available_qubits)
+    if plan["qubits_allocated"] == 0:
+        # A physical QPU capacity shortage does not prevent classical emulation
+        # of the minimum register. Larger selected tiers still need their RAM.
+        plan = quantum_mips_capacity_plan(scale_param, plan["minimum_qubits_required"])
+        plan.update({"available_qubits": available_qubits, "idle_qubits": 0})
+    return plan
+
+
+def _quantum_mips_statevector_cost(plan: Dict[str, Any], reference_depth: int, node: StageNode) -> Dict[str, Any]:
+    profile = STATEVECTOR_PROFILES[node]
+    qubits = plan["qubits_allocated"]
+    required_bytes = 16 * 2 ** qubits
+    budget_bytes = profile["memory_gib"] * 2 ** 30
+    feasible = required_bytes <= budget_bytes
+    depth = math.ceil(reference_depth * plan["depth_multiplier"])
+    compute_ms = round(depth * 0.00025 * 2 ** (qubits - 10) * profile["latency_factor"], 6) if feasible else 0.0
+    overhead_ms = CLASSICAL_GPU_OVERHEAD_MS if node == "GPU" and feasible else 0.0
+    return {"statevector_qubits": qubits, "statevector_memory_required_bytes": required_bytes,
+            "statevector_memory_required": f"16 × 2^{qubits} bytes", "statevector_memory_budget_bytes": budget_bytes,
+            "statevector_memory_budget_gib": profile["memory_gib"], "execution_feasible": feasible,
+            "compute_latency_ms": compute_ms, "launch_transfer_overhead_ms": overhead_ms,
+            "latency_ms": round(compute_ms + overhead_ms, 6)}
+
+
+def _quantum_mips_cpu_baseline(scale_param: int, available_qubits: int, reference_depth: int) -> Dict[str, Any]:
+    cost = _quantum_mips_statevector_cost(_quantum_mips_emulation_plan(scale_param, available_qubits), reference_depth, "CPU")
+    kernel_ms = cost["latency_ms"] if cost["execution_feasible"] else None
+    total_ms = None if kernel_ms is None else round(
+        QUANTUM_MIPS_CLASSICAL_PROFILES["stage_1_classical_pre"]["cpu_latency_ms"][scale_param]
+        + kernel_ms + QUANTUM_MIPS_CLASSICAL_PROFILES["stage_3_classical_post"]["cpu_latency_ms"][scale_param], 6)
+    return {"feasible": cost["execution_feasible"], "kernel_ms": kernel_ms, "total_ms": total_ms,
+            "logical_qubits": cost["statevector_qubits"], "memory_budget_gib": 16}
+
+
+def _block_quantum_mips_stage(stage: StageTelemetry, reason: str) -> StageTelemetry:
+    stage.latency_ms = 0.0
+    stage.status = "CRITICAL_BOTTLENECK"
+    stage.metrics.update({"execution_feasible": False, "blocking_reason": reason, "retrieval_reliable": False})
+    for field in ("compute_latency_ms", "launch_transfer_overhead_ms", "io_state_prep_ms", "io_readout_ms"):
+        if field in stage.metrics:
+            stage.metrics[field] = 0.0
+    if "qubits_allocated" in stage.metrics:
+        stage.metrics["planned_qubits"] = stage.metrics["qubits_allocated"]
+        stage.metrics["planned_parallelization_tier"] = stage.metrics["parallelization_tier"]
+        if reason.startswith("STARVED"):
+            stage.metrics["parallelization_tier"] = "Blocked · upstream stage unavailable"
+        elif "STATEVECTOR MEMORY LIMIT" in reason:
+            stage.metrics["parallelization_tier"] = "Blocked · statevector memory"
+        stage.metrics.update({"qubits_allocated": 0, "idle_qubits": stage.metrics["available_qubits"],
+                              "circuit_depth": 0, "parallel_speedup_ceiling_reached": False})
+    stage.output_summary = reason
+    return stage
+
+
+def quantum_mips_kernel(scale_param: int, hardware_profile: HardwareProfile = "ibm_heron_nisq",
+                        node: StageNode = "QPU", available_qubits: int = 133,
+                        *, upstream_blocked_by: Optional[str] = None) -> StageTelemetry:
+    """Stage 02: actual small Grover reference or explicitly analytical projection.
+
+    Selected ancilla tiers determine the emulated register size. CPU/GPU use
+    their own RAM and timing model, independent of physical QPU architecture.
+    Aer always runs on CPU; projected GPU/QPU latency is never a measured claim.
+    """
+    if type(scale_param) is not int or scale_param not in QUANTUM_MIPS_SCALES:
+        raise ValueError("Unsupported Quantum-MIPS candidate count.")
+    if not isinstance(hardware_profile, str) or hardware_profile not in HARDWARE_PROFILES:
+        raise ValueError("Unsupported hardware profile.")
+    if node not in ("CPU", "GPU", "QPU"):
+        raise ValueError("Stage node must be CPU, GPU, or QPU.")
+    plan = (quantum_mips_capacity_plan(scale_param, available_qubits) if node == "QPU"
+            else _quantum_mips_emulation_plan(scale_param, available_qubits))
+    reference_depth = round(4.2 * math.sqrt(scale_param) * math.log2(scale_param))
+    metrics = {**plan, "qubits_required": plan["minimum_qubits_required"],
+               "algorithm": "Marked-State Grover / Inner-Product Oracle Projection", "complexity": "O(sqrt(M) · log M)",
+               "candidate_count": scale_param, "grover_iterations": math.floor(math.pi / 4 * math.sqrt(scale_param)),
+               "marked_candidate_index": QUANTUM_MIPS_TARGET_INDEX, "reference_circuit_depth": reference_depth,
+               "depth_model": "Analytical Grover/Durr-Hoyer reference: round(4.2 sqrt(M) log2(M))",
+               "circuit_depth": 0, "compute_latency_ms": 0.0, "io_state_prep_ms": 0.0,
+               "coherence_survival_pct": 0.0 if node == "QPU" else 100.0,
+               "routing_model": "ILLUSTRATIVE_V1 (not device measurements)", "routing_supported": True,
+               "aer_executed": False, "retrieval_reliable": False,
+               "model_scope": "Known marked candidate; vector loading and an adaptive maximum-finding oracle are not executed."}
+    stage = StageTelemetry(name="Quantum Inner-Product & Grover-Max Amplification", node=node, latency_ms=0.0,
+                           status="OPTIMAL", output_summary="", metrics=metrics)
+    metrics = stage.metrics
+    architecture = HARDWARE_PROFILES[hardware_profile]
+    if node == "QPU":
+        metrics.update({"hardware_architecture": hardware_profile, "connectivity_topology": architecture["topology"],
+                        "routing_depth_multiplier": architecture["depth_factor"], "gate_time_multiplier": architecture["gate_factor"]})
+        if architecture["reference_qubits"] is not None:
+            metrics["reference_qubits"] = architecture["reference_qubits"]
+        if architecture["decay_scale"] is not None:
+            metrics["coherence_decay_scale"] = architecture["decay_scale"]
+    else:
+        cost = _quantum_mips_statevector_cost(plan, reference_depth, node)
+        metrics.update({key: value for key, value in cost.items() if key != "latency_ms"})
+        metrics["simulation_method"] = "Classical statevector emulation (illustrative timing)"
+    metrics["classical_cpu_baseline"] = _quantum_mips_cpu_baseline(scale_param, available_qubits, reference_depth)
+
+    if upstream_blocked_by:
+        return _block_quantum_mips_stage(stage, f"STARVED: {upstream_blocked_by} did not produce usable input.")
+    if node == "QPU" and plan["qubits_allocated"] == 0:
+        return _block_quantum_mips_stage(stage, f"INSUFFICIENT QPU QUBIT CAPACITY: minimum {plan['minimum_qubits_required']} qubits required; {available_qubits} available.")
+    if node != "QPU" and not metrics["execution_feasible"]:
+        return _block_quantum_mips_stage(stage, f"{node} STATEVECTOR MEMORY LIMIT: {metrics['statevector_qubits']} qubits need {metrics['statevector_memory_required_bytes']:,} bytes, exceeding {metrics['statevector_memory_budget_gib']} GiB.")
+
+    live = scale_param == 64 and plan["parallelization_tier"] == "Sequential Minimum"
+    if live:
+        measured = execute_live_quantum_mips_64()
+        reference_depth = measured["reference_circuit_depth"]
+        metrics.update(measured)
+        metrics.update({"aer_executed": True, "depth_model": "Compiled 10-qubit Aer Grover reference; architecture projection is not native-device compilation"})
+    metrics["classical_cpu_baseline"] = _quantum_mips_cpu_baseline(scale_param, available_qubits, reference_depth)
+    if node == "QPU":
+        depth = math.ceil(reference_depth * plan["depth_multiplier"] * architecture["depth_factor"])
+        gate_ms = round(depth * 0.00025 * architecture["gate_factor"], 6)
+        coherence = 100.0 if architecture["decay_scale"] is None else round(100 * math.exp(-depth / architecture["decay_scale"]), 2)
+        metrics.update({"circuit_depth": depth, "compute_latency_ms": gate_ms, "io_state_prep_ms": architecture["prep_ms"],
+                        "coherence_survival_pct": coherence, "retrieval_reliable": coherence >= 35})
+        stage.latency_ms = gate_ms  # QPU preparation/readout is exclusive, counted separately.
+        stage.status = "OPTIMAL" if coherence >= 70 else "WARNING" if coherence >= 35 else "CRITICAL_BOTTLENECK"
+    else:
+        cost = _quantum_mips_statevector_cost(plan, reference_depth, node)
+        metrics.update({key: value for key, value in cost.items() if key != "latency_ms"})
+        metrics.update({"circuit_depth": math.ceil(reference_depth * plan["depth_multiplier"]),
+                        "coherence_survival_pct": 100.0, "retrieval_reliable": True})
+        stage.latency_ms = cost["latency_ms"]  # GPU launch/transfer is inclusive.
+        stage.status = "WARNING"
+    token = metrics.get("top_1_token_index", QUANTUM_MIPS_TARGET_INDEX)
+    metrics.update({"top_1_token_index": token,
+                    "result_source": "measured_noise_free_aer_reference" if live else "analytical_marked_state_projection"})
+    bits = format(token, f"0{plan['index_bits']}b")
+    stage.output_summary = (f"{'Aer reference' if live else 'Modeled'} amplified top-1 token index {token} (|{bits}⟩); "
+                            f"{metrics['grover_iterations']} iterations; {plan['parallelization_tier']}; "
+                            f"modeled coherence survival {metrics['coherence_survival_pct']}%. ")
+    if live:
+        stage.output_summary += (f"Measured ideal-reference peak probability {metrics['measured_peak_probability']:.2%} "
+                                 f"over {metrics['aer_shots']} shots; CPU Aer runtime {metrics['aer_runtime_ms']:.3f} ms. "
+                                 "Selected-route hardware latency and coherence are separate projections.")
+    else:
+        stage.output_summary += "Known marked-candidate projection; no vector-score oracle or large circuit was executed."
+    if not metrics["retrieval_reliable"]:
+        stage.output_summary += " Projected candidate is unreliable without error correction; no verified retrieval is claimed."
+    return stage
+
+
+def run_quantum_mips_pipeline(scale_param: int, hardware_profile: HardwareProfile,
+                              routing: Optional[RoutingConfig] = None, available_qubits: int = 133) -> HybridTelemetryResponse:
+    targets = routing or RoutingConfig()
+    pre = quantum_mips_preprocessing(scale_param, targets.stage_1_node)
+    kernel = quantum_mips_kernel(scale_param, hardware_profile, targets.stage_2_node, available_qubits,
+                                upstream_blocked_by=pre.name if not pre.metrics["execution_feasible"] else None)
+    post = quantum_mips_postprocessing(scale_param, targets.stage_3_node)
+    if not pre.metrics["execution_feasible"] or not kernel.metrics["execution_feasible"]:
+        source = pre.name if not pre.metrics["execution_feasible"] else kernel.name
+        _block_quantum_mips_stage(post, f"STARVED: {source} did not produce usable input.")
+    elif post.metrics["execution_feasible"]:
+        post.metrics.update({"candidate_index": kernel.metrics["top_1_token_index"],
+                             "candidate_source": kernel.metrics["result_source"],
+                             "verification_model": "Modeled FP16 cost; no candidate vectors supplied for actual reranking."})
+        if not kernel.metrics["retrieval_reliable"]:
+            post.status = "WARNING"
+            post.output_summary += " QPU candidate is unreliable; no verified top-1 retrieval is claimed."
+    stages = dict(zip(STAGE_KEYS, [pre, kernel, post]))
+    blocked = next((stage for stage in stages.values() if not stage.metrics["execution_feasible"]), None)
+    if blocked:
+        bottleneck = blocked.metrics.get("blocking_reason", f"UNSUPPORTED QPU ROUTING ({blocked.name})")
+    else:
+        rank = {"OPTIMAL": 0, "WARNING": 1, "CRITICAL_BOTTLENECK": 2}
+        limiting = max(stages.values(), key=lambda stage: (rank[stage.status], stage.latency_ms))
+        if limiting.status == "OPTIMAL":
+            bottleneck = "NONE (Quantum-MIPS modeled pipeline within limits)"
+        elif limiting is kernel:
+            bottleneck = (f"{kernel.node} STATEVECTOR EMULATION OVERHEAD" if kernel.node != "QPU" else
+                          "CATASTROPHIC QPU DECOHERENCE" if kernel.status == "CRITICAL_BOTTLENECK" else "QPU COHERENCE BUDGET DEGRADED")
+        else:
+            bottleneck = f"GPU LAUNCH/TRANSFER OVERHEAD ({limiting.name})"
+    return HybridTelemetryResponse(workload_id="quantum_mips", workload_name=QUANTUM_MIPS_WORKLOAD_NAME,
+                                   scale_label=QUANTUM_MIPS_SCALES[scale_param]["label"],
+                                   execution_mode="LIVE_QISKIT_AER" if kernel.metrics["aer_executed"] else "NISQ_ANALYTICAL_PROFILER",
+                                   primary_bottleneck=bottleneck, stages=stages)
 
 
 def run_shors_pipeline(
@@ -550,7 +963,4 @@ def simulate_workload(req: SimulationRequest):
     if req.workload_id == "shors_crypto":
         return run_shors_pipeline(req.scale_param, req.hardware_profile, req.routing, req.available_qubits)
     elif req.workload_id == "quantum_mips":
-        # Socket ready for Thursday/Friday Quantum AI Vector Preset!
-        raise HTTPException(status_code=501, detail="Quantum-MIPS AI Preset unlocks in Sprint Phase 2.")
-    else:
-        raise HTTPException(status_code=400, detail=f"Unknown workload_id: {req.workload_id}")
+        return run_quantum_mips_pipeline(req.scale_param, req.hardware_profile, req.routing, req.available_qubits)

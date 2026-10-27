@@ -1,14 +1,20 @@
 "use client";
 
 import { TierTooltip } from "@/components/tier-tooltip";
+import type { WorkloadId } from "@/types/telemetry";
+import { workloadScaleLabel } from "@/lib/workloads";
 import { useState } from "react";
 import { formatValue, qubitThresholds } from "@/lib/telemetry";
 
-export function ParallelizationTiers({ scale, onSelect, compact = false }: { scale: number; onSelect: (value: number) => void; compact?: boolean }) {
+export function ParallelizationTiers({ scale, onSelect, compact = false, workload = "shors_crypto" }: { scale: number; workload?: WorkloadId; onSelect: (value: number) => void; compact?: boolean }) {
   const [openTier, setOpenTier] = useState<string | null>(null);
-  const n = scale === 512 || scale === 2048 ? scale : Math.ceil(Math.log2(scale));
-  const thresholds = qubitThresholds(scale);
-  const tiers = [
+  const n = workload === "shors_crypto" && (scale === 512 || scale === 2048) ? scale : Math.ceil(Math.log2(scale));
+  const thresholds = qubitThresholds(scale, workload);
+  const tiers = workload === "quantum_mips" ? [
+    { label: "Sequential minimum", shortLabel: "Sequential", value: thresholds.minimum, formula: "k + 4 qubits", calculation: `${n} + 4 = ${thresholds.minimum} qubits`, depth: "1.00× sequential Grover depth", tradeoff: "Serial inner-product oracle across O(√M) Grover iterations. At M = 64 this is a live 10-qubit marked-state Aer reference; it does not execute vector loading or adaptive maximum finding." },
+    { label: "Windowed Parallel", shortLabel: "Windowed", value: thresholds.windowed, formula: "2k + 8 qubits", calculation: `2 × ${n} + 8 = ${thresholds.windowed} qubits`, depth: "0.40× sequential Grover depth", tradeoff: "Parallel tree-based inner-product accumulation uses additional ancilla registers to reduce modeled circuit depth. Classical emulation must hold the entire allocated register in RAM." },
+    { label: "Multi-Oracle ceiling", shortLabel: "Multi-Oracle", value: thresholds.ceiling, formula: "4k + 16 qubits", calculation: `4 × ${n} + 16 = ${thresholds.ceiling} qubits`, depth: "0.20× sequential Grover depth", tradeoff: "Partitioned parallel Grover amplitude amplification across multiple oracle registers. Extra qubits above this ceiling remain idle. O(√M) iterations still erode NISQ coherence at large scales; this is an analytical projection, not a physical speedup measurement." },
+  ] : [
     {
       label: "Sequential minimum", value: thresholds.minimum,
       shortLabel: "Sequential",
@@ -44,7 +50,7 @@ export function ParallelizationTiers({ scale, onSelect, compact = false }: { sca
       displayLabel={compact ? `${tier.shortLabel} · ${formatValue(tier.value)}` : undefined}
       open={openTier === tier.label} onOpenChange={(isOpen) => setOpenTier((current) => isOpen ? tier.label : current === tier.label ? null : current)}>
       <p className="font-semibold text-cyan-200">{tier.label}</p>
-      <p className="mt-1 text-[10px] text-slate-400">{scale === 512 || scale === 2048 ? `RSA-${scale}` : `N = ${scale}`} · n = {formatValue(n)} bits</p>
+      <p className="mt-1 text-[10px] text-slate-400">{workloadScaleLabel(scale, workload)} · {workload === "quantum_mips" ? "k" : "n"} = {formatValue(n)} bits</p>
       <dl className="mt-3 space-y-2">
         <div><dt className="text-[10px] uppercase tracking-wider text-slate-500">Qubit formula</dt><dd className="font-mono text-slate-200">{tier.formula}</dd></div>
         <div className="rounded-lg border border-cyan-400/15 bg-cyan-400/5 px-3 py-2"><dt className="text-[10px] text-slate-400">At the selected scale</dt><dd className="font-mono text-cyan-200">{tier.calculation}</dd></div>

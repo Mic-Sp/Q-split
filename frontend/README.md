@@ -7,16 +7,17 @@ The application always uses a dark slate theme, configured in
 
 ### Backend URL
 
-Set the API URL in `frontend/.env.local`:
+Browser requests use the same-origin Next.js `POST /api/simulate` proxy. Set its backend URL in `frontend/.env.local`:
 
 ```dotenv
-NEXT_PUBLIC_API_URL=https://q-split-engine.onrender.com
+SIMULATION_API_URL=https://q-split-engine.onrender.com
 ```
 
-For local backend testing, use `NEXT_PUBLIC_API_URL=http://localhost:8000`
-instead. Import `API_BASE_URL` from `@/lib/config` for API requests; it defaults
-to `http://localhost:8000` when the variable is missing or empty. The fallback
-applies to configuration, not failed network requests.
+For local backend testing, use `SIMULATION_API_URL=http://localhost:8000`.
+The server-only value can change between deployments without rebuilding browser
+assets. Existing `NEXT_PUBLIC_API_URL` configurations remain supported as a
+fallback; if both values are absent, the proxy uses `http://localhost:8000`.
+Network failures return a recoverable error and never select another engine.
 
 Restart the development server after changing `.env.local`. Production builds
 must be rebuilt to pick up changes to `NEXT_PUBLIC_API_URL`.
@@ -74,20 +75,146 @@ Failed and canceled requests do not enter history.
 N = 15 in sequential mode executes an eight-qubit circuit using Qiskit Aer on a
 classical simulator. Parallel tiers and larger scales use analytical projections.
 Stage timings and coherence values are estimates,
-not physical QPU measurements. Quantum-MIPS currently returns HTTP 501 from the
-backend and displays an availability message.
+not physical QPU measurements. Quantum-MIPS is available in the workload dropdown
+with M = 64 / 1,024 / 32k / 128k (LLM Vocab) / 1M (RAG Index). Switching workloads
+selects its smallest valid scale and the default CPU → QPU → CPU route. Stage
+titles and the Sequential / Windowed / Multi-Oracle tier tooltips update immediately.
+Changing scales preserves manual routing and capacity; snapshots restore exact
+saved workload, scale, architecture, capacity, and routes without applying defaults.
+Quantum-MIPS Ideal profile selection uses its own Multi-Oracle ceiling.
+
+The local verdict and advisor recommend CPU hosts at M = 64 to avoid each 0.30 ms
+GPU launch penalty, and GPU hosts at M ≥ 1,024 for 0.12× LSH / 0.10× FP16 compute.
+They separately evaluate QPU capacity/coherence: O(√M) iterations can exhaust NISQ
+budgets even with parallel ancillas. `/api/analyze-telemetry` aliases `/api/advisor`;
+both use the same validated workload facts, cache, token accounting, and fallback.
+Benchmark JSON preserves the complete workload request; CSV retains its workload
+name and raw numeric millisecond metrics.
 
 API contracts are in `src/types/telemetry.ts`. The request helper, response
 validation, and delta comparison are in `src/lib/telemetry.ts`.
 
-Run `npm run lint` and `npm run build` to check the frontend.
+Run `npm test`, `npm run typecheck`, `npm run lint`, and `npm run build` to check
+the frontend. When `backend/venv/bin/python` is installed, the frontend test suite
+also generates 1,620 actual backend payloads and exercises the proxy, advisor
+validation, verdict, benchmark serialization/restore, and numeric exports. That
+cross-language test is explicitly skipped when the backend virtualenv is absent.
+
+### Quantum-MIPS backend pipeline
+
+`backend/main.py` defines the request enum `shors_crypto | quantum_mips` and
+`QUANTUM_MIPS_WORKLOAD_NAME` (Quantum-MIPS · Sub-Linear LLM Vector Retrieval).
+Omitting the workload still selects Shor's with scale 15. Selecting Quantum-MIPS
+without a scale defaults to M=64; an explicit M must match one of the five
+`QUANTUM_MIPS_SCALES` entries:
+
+| Candidate count M | Index bits k | Scale label | Sequential minimum | Windowed | Multi-Oracle ceiling |
+| --- | --- | --- | --- | --- | --- |
+| 64 | 6 | M = 64 (6-bit Toy KV-Cache Block) | 10 | 20 | 40 |
+| 1024 | 10 | M = 1,024 (10-bit HNSW Subgraph) | 14 | 28 | 56 |
+| 32768 | 15 | M = 32k (15-bit Long-Context KV-Cache) | 19 | 38 | 76 |
+| 131072 | 17 | M = 128k (17-bit LLM Vocabulary Unembedding) | 21 | 42 | 84 |
+| 1048576 | 20 | M = 1M (20-bit Enterprise RAG Vector Index) | 24 | 48 | 96 |
+
+`quantum_mips_qubit_thresholds(M)` computes `k = ceil(log2(M))` with integer
+bit arithmetic, then `k+4`, `2k+8`, and `4k+16`. The helper also supports future
+non-power-of-two candidate counts; the request schema restricts public M presets.
+`quantum_mips_capacity_plan(M, available_qubits)` selects Sequential Minimum
+(1.0× depth), Windowed Parallel (0.40×), or Multi-Oracle Ceiling (0.20×).
+The models use a serial inner-product oracle, parallel tree accumulation, or
+partitioned parallel Grover oracle registers respectively. Extra qubits stay
+idle; capacity below the minimum allocates zero, sets `execution_feasible=false`,
+and returns `depth_multiplier=null` rather than suggesting a zero-cost speedup.
+The Stage 02 builder resolves these factors into the analytical or live-reference
+depth models below. No vector dataset is supplied or searched by this demonstration.
+
+The backend now provides `quantum_mips_preprocessing(M, node="CPU")` and
+`quantum_mips_postprocessing(M, node="CPU")`, returning normal `StageTelemetry`
+objects for Stage 01 (LSH Projection & HNSW Bucket Pruning) and Stage 03 (Exact
+FP16 Dot-Product Reranking & Softmax). The algorithms are **LSH Random Hyperplane
+& HNSW Graph Filter**, `O(d · log M)`, and **Batch FP16 Cosine Reranking & Top-K
+Softmax**, `O(K · d)`. Their illustrative calibration points are:
+
+| M | Stage 01 CPU / GPU (ms) | Stage 03 CPU / GPU (ms) |
+| --- | --- | --- |
+| 64 | 0.25 / 0.33 | 0.18 / 0.32 |
+| 1024 | 2.40 / 0.59 | 1.80 / 0.48 |
+| 32768 | 18.50 / 2.52 | 12.00 / 1.50 |
+| 131072 | 64.00 / 7.98 | 42.00 / 4.50 |
+| 1048576 | 310.00 / 37.50 | 195.00 / 19.80 |
+
+Stage 01 GPU compute uses 0.12× the CPU reference; Stage 03 uses 0.10×. Compute
+is rounded to the existing two-decimal host-stage precision, then the 0.30 ms
+PCIe launch/transfer cost is added once. Telemetry exposes `compute_latency_ms`,
+`launch_transfer_overhead_ms`, `compute_latency_factor`, and
+`cpu_reference_latency_ms`; `latency_ms` includes compute plus transfer. CPU is
+OPTIMAL, with zero launch overhead. GPU is WARNING at M=64 because CPU is faster,
+and OPTIMAL at every larger preset. QPU placement is unsupported: it returns
+CRITICAL_BOTTLENECK, `routing_supported=false`, `execution_feasible=false`, and
+zero compute/transfer time. These builders estimate costs rather than executing
+hash filters, tensor kernels, or softmax; d and K are implicit in the calibration
+points. The postprocessing builder assumes usable upstream output; the pipeline
+suppresses its latency and transfer cost after an upstream block.
+
+`quantum_mips_kernel` implements **Quantum Inner-Product & Grover-Max
+Amplification**. M=64 with the Sequential Minimum tier executes a real 10-qubit
+Qiskit Aer reference: six index qubits and four clean workspace qubits, a phase
+oracle for index 45 (`|101101⟩`), diffusion, and six amplification iterations.
+The workspace is uncomputed after each reflection. The reference demonstrates
+marked-state amplification; it does not compute vector inner products or execute
+an adaptive Dürr-Høyer maximum-finding oracle. Counts, observed peak index,
+`measured_peak_probability`, compiled depth, and actual CPU-host timing are
+returned in `aer_*` fields. `aer_runtime_ms` measures execution/result retrieval;
+compilation and total timing are separate. Samples use 1,024 shots and a fixed
+seed for reproducibility. See the [Aer simulator documentation](https://qiskit.github.io/qiskit-aer/stubs/qiskit_aer.AerSimulator.html).
+
+Parallel M=64 tiers and all larger scales use
+`reference_depth = round(4.2 sqrt(M) log2(M))`. QPU depth is
+`ceil(reference_depth × tier_multiplier × topology_factor)`; gate compute is
+`depth × 0.00025 ms × gate_factor`. Sequential M=64 instead uses its actual
+compiled reference depth before topology adjustment. QPU preparation/readout
+is exclusive of `latency_ms` and uses the selected architecture's overhead;
+IonQ's 0.85 ms combined overhead is counted once. Coherence uses the architecture
+decay scale; ideal coherence remains 100%. Measured noise-free Aer probabilities
+remain separate from projected hardware survival and latency.
+
+CPU/GPU statevector emulation uses the selected tier's allocated register size,
+with exact demand `16 × 2^register_qubits` bytes versus 16 GiB CPU / 8 GiB GPU.
+The largest fitting registers are 30/29 qubits. Oversized layouts are blocked
+before Aer runs and retain their planned register/RAM demand while actual
+allocation and execution cost are zero. Unlike Shor's capacity-independent
+classical layout, Quantum-MIPS uses capacity to choose the emulated ancilla tier.
+A capacity below the QPU minimum falls back to the minimum classical register;
+physical QPU capacity cannot block a RAM-feasible classical simulation. Changing
+physical architecture does not change CPU/GPU depth, timing, or 100% coherence.
+Classical kernel timing is an illustrative projection using the existing
+50× CPU / 12.5× GPU factors and `2^(register_qubits-10)` statevector scaling;
+GPU launch overhead is included once. Large statevectors are never allocated
+by these analytical estimates. The all-CPU counterfactual uses the same tier and
+reference depth, with no additional Aer execution.
+
+`run_quantum_mips_pipeline` composes all three stages. Unsupported host QPU routes,
+capacity blocks, and RAM failures stop downstream work. Low projected QPU survival
+is reported as degraded/critical; no verified retrieval is claimed for an
+unreliable candidate. Analytical top-1 index 45 is explicitly labeled as a known
+marked-state projection, not an observed search result. Successful backend
+requests return HTTP 200 with the full stage schema and are wired into the
+frontend controls, proxy, verdict, advisor, history, restore, and exports. Unsupported M values return 422; unknown workload
+strings retain HTTP 400. Shor's defaults, planner, and pipeline remain unchanged.
+
+Run all backend tests from the repository root with
+`backend/venv/bin/python -m unittest discover -s backend/tests -v`. Coverage
+includes real statevector/Aer correctness, actual live HTTP execution for all
+three kernel routes, and 1,620 HTTP combinations of stage routing, scale,
+architecture, and tier, plus the original Shor regressions.
 
 ### Quantum hardware architectures
 
 The Hardware profile control supports four comparative models. Clicking a profile
 sets capacity to its reference register: IBM 133, Google 72, IonQ 36. Ideal
-Noise-Free selects the current scale's Carry-Lookahead ceiling (22, 28, 33, 2816,
-or 11264). Clicking the active profile again also resets its default. Typing a
+Noise-Free selects the current workload/scale's parallelization ceiling: Shor
+Carry-Lookahead (22, 28, 33, 2816, or 11264), or Quantum-MIPS Multi-Oracle
+(40, 56, 76, 84, or 96). Clicking the active profile again also resets its default. Typing a
 custom value or clicking a capacity preset/tier afterward leaves the selected
 profile unchanged; the matching capacity preset highlights automatically.
 Changing scale alone preserves capacity overrides. Restoring a snapshot loads

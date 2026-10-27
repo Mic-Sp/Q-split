@@ -3,6 +3,7 @@ import { DEFAULT_ROUTING, parseTelemetry, PIPELINE, totalLatency } from "@/lib/t
 import type { CompletedRun, SavedSimulationRun } from "@/types/run-history";
 import type { SimulationRequest, StageStatus } from "@/types/telemetry";
 import { parseAdvisorInsight } from "@/lib/advisor";
+import { validWorkloadScale } from "@/lib/workloads";
 import { isHardwareProfile } from "@/lib/hardware-profiles";
 
 function invalid(message: string): never {
@@ -21,7 +22,7 @@ export function createRunRecord(value: unknown): Prisma.SimulationRunCreateInput
   if (typeof run.id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(run.id)) invalid("A valid run UUID is required.");
   if (typeof run.completedAt !== "string" || !Number.isFinite(Date.parse(run.completedAt))) invalid("A valid completion timestamp is required.");
   const request = run.request;
-  if (!request || !["shors_crypto", "quantum_mips"].includes(request.workload_id) ||
+  if (!request || !validWorkloadScale(request.workload_id, request.scale_param) ||
       !isHardwareProfile(request.hardware_profile) ||
       !Number.isSafeInteger(request.scale_param) || request.scale_param < 1 || request.scale_param > 2_147_483_647) invalid("Invalid simulation configuration.");
   if (request.routing != null && (typeof request.routing !== "object" || Array.isArray(request.routing) ||
@@ -34,7 +35,7 @@ export function createRunRecord(value: unknown): Prisma.SimulationRunCreateInput
   if (telemetry.workload_id !== request.workload_id) invalid("Workload metadata does not match telemetry.");
   for (const { key, routingKey } of PIPELINE) {
     if (telemetry.stages[key].node !== routing[routingKey]) invalid("Node routing does not match telemetry.");
-    if (telemetry.stages[key].node === "QPU" && request.available_qubits !== undefined &&
+    if (key === "stage_2_quantum_kernel" && telemetry.stages[key].node === "QPU" && request.available_qubits !== undefined &&
         telemetry.stages[key].metrics.available_qubits !== request.available_qubits) invalid("QPU capacity does not match telemetry.");
   }
   const stages = Object.values(telemetry.stages);

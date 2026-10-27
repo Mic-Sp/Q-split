@@ -15,6 +15,7 @@ import { usePersistentRuns } from "@/hooks/use-persistent-runs";
 import { coherenceBudget, pipelineTiming, type CoherenceBudgetStatus } from "@/lib/kpi-metrics";
 import { formatDuration, formatRawMilliseconds } from "@/lib/duration";
 import { HARDWARE_PROFILES, hardwareLabel } from "@/lib/hardware-profiles";
+import { WORKLOADS, workloadScaleLabel } from "@/lib/workloads";
 import { HARDWARE_PROFILE_IDS } from "@/types/telemetry";
 import {
   Activity, ArrowDown, ArrowRight, Check, ChevronDown, CircleAlert, CircuitBoard, Cpu,
@@ -25,10 +26,7 @@ import {
   type Snapshot, type Transition,
 } from "@/lib/telemetry";
 import type { HardwareProfile, RoutingConfig, SimulationRequest, StageNode, StageStatus, StageTelemetry, WorkloadId } from "@/types/telemetry";
-
-const SCALES = [15, 21, 35, 512, 2048];
 const QUBIT_PRESETS = [16, 36, 72, 133, 1121, 2048, 4096, 16384];
-const scaleLabel = (scale: number) => scale < 512 ? `N = ${scale}` : `RSA-${scale}`;
 const summaryValue = (value: unknown) => typeof value === "number" && Math.abs(value) >= 1_000_000
   ? new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 2 }).format(value)
   : formatValue(value);
@@ -103,14 +101,15 @@ const metricLabels: Record<string, string> = {
   parallel_speedup_ceiling_reached: "Parallel speedup ceiling reached", depth_model: "Depth model",
 };
 
-function PipelineCard({ index, stage, selectedNode, onNodeChange, pending }: {
+function PipelineCard({ index, stage, selectedNode, onNodeChange, pending, workload }: {
   index: number;
+  workload: WorkloadId;
   stage?: StageTelemetry;
   selectedNode: StageNode;
   onNodeChange: (node: StageNode) => void;
   pending: boolean;
 }) {
-  const config = PIPELINE[index];
+  const config = { ...PIPELINE[index], label: WORKLOADS[workload].stages[index] };
   const node = selectedNode;
   const nodeStyle = NODE_STYLE[node];
   const NodeIcon = nodeStyle.icon;
@@ -149,7 +148,7 @@ function PipelineCard({ index, stage, selectedNode, onNodeChange, pending }: {
           <p className="console-header border-b border-cyan-400/20 px-2 py-1 text-[9px] font-semibold leading-3 text-cyan-100">Qubits Allocated / Available</p>
           <div className="px-2 py-1.5">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1"><p className="font-mono text-sm leading-5 text-cyan-200">{formatValue(stage.metrics.qubits_allocated)} / {formatValue(stage.metrics.available_qubits)}</p><p className="max-w-full rounded border border-cyan-400/20 bg-cyan-400/10 px-1.5 py-0.5 text-[10px] font-medium leading-3 text-cyan-300 [overflow-wrap:anywhere]">{formatValue(stage.metrics.parallelization_tier)}</p></div>
-            <p className="mt-0.5 text-[9px] leading-4 text-slate-400">{formatValue(stage.metrics.idle_qubits)} idle · {formatValue(stage.metrics.depth_complexity)}{stage.metrics.parallel_speedup_ceiling_reached === true ? " · Speedup ceiling reached" : ""}</p>
+            <p className="mt-0.5 text-[9px] leading-4 text-slate-400">{formatValue(stage.metrics.idle_qubits)} idle · {stage.metrics.depth_complexity !== undefined ? formatValue(stage.metrics.depth_complexity) : typeof stage.metrics.depth_multiplier === "number" ? `${stage.metrics.depth_multiplier.toFixed(2)}× reference depth` : "Not executed"}{stage.metrics.parallel_speedup_ceiling_reached === true ? " · Speedup ceiling reached" : ""}</p>
           </div>
         </div>
       )}
@@ -244,7 +243,13 @@ export default function Home() {
   };
   const selectHardware = (profile: HardwareProfile) => {
     setHardware(profile);
-    setAvailableQubits(String(hardwareDefaultQubits(profile, scale)));
+    setAvailableQubits(String(hardwareDefaultQubits(profile, scale, workload)));
+  };
+  const selectWorkload = (next: WorkloadId) => {
+    const target = WORKLOADS[next].scales[0];
+    setWorkload(next); setScale(target);
+    setRouting({ ...DEFAULT_ROUTING });
+    if (hardware === "ideal_sim") setAvailableQubits(String(hardwareDefaultQubits(hardware, target, next)));
   };
   const restoreRun = (run: SavedSimulationRun) => {
     const restored = restoredConfiguration(run);
@@ -286,17 +291,17 @@ export default function Home() {
             <div className="min-w-0">
               <label htmlFor="workload" className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-slate-500">01 / Workload preset</label>
               <div className="relative">
-                <select id="workload" value={workload} onChange={(e) => setWorkload(e.target.value as WorkloadId)} className="min-h-9 w-full appearance-none rounded-lg border border-slate-700 bg-slate-950 py-2 pl-3 pr-8 text-xs text-slate-200">
+                <select id="workload" value={workload} onChange={(e) => selectWorkload(e.target.value as WorkloadId)} className="min-h-9 w-full appearance-none rounded-lg border border-slate-700 bg-slate-950 py-2 pl-3 pr-8 text-xs text-slate-200">
                   <option value="shors_crypto">Shor’s cryptography</option>
-                  <option value="quantum_mips">Quantum-MIPS AI · Preview</option>
+                  <option value="quantum_mips">Quantum-MIPS (LLM Vector Retrieval)</option>
                 </select>
                 <ChevronDown className="pointer-events-none absolute right-3 top-2.5 text-slate-500" size={14} />
               </div>
             </div>
             <fieldset className="min-w-0 flex-1">
               <legend className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">02 / Target scale</legend>
-              <div className="flex flex-wrap gap-1.5">{SCALES.map((value) => (
-                <button key={value} type="button" aria-pressed={scale === value} onClick={() => setScale(value)} className={["min-h-9 rounded-lg border px-2 py-2 font-mono text-[11px] transition-colors", scale === value ? "border-cyan-400/50 bg-cyan-400/10 text-cyan-300" : "border-slate-800 bg-slate-950/70 text-slate-400 hover:border-slate-600 hover:text-slate-200"].join(" ")}>{scaleLabel(value)}</button>
+              <div className="flex flex-wrap gap-1.5">{WORKLOADS[workload].scales.map((value) => (
+                <button key={value} type="button" aria-pressed={scale === value} onClick={() => setScale(value)} className={["min-h-9 rounded-lg border px-2 py-2 font-mono text-[11px] transition-colors", scale === value ? "border-cyan-400/50 bg-cyan-400/10 text-cyan-300" : "border-slate-800 bg-slate-950/70 text-slate-400 hover:border-slate-600 hover:text-slate-200"].join(" ")}>{workloadScaleLabel(value, workload)}</button>
               ))}</div>
             </fieldset>
             <fieldset className="min-w-0">
@@ -305,7 +310,7 @@ export default function Home() {
                 {HARDWARE_PROFILE_IDS.map((value) => (
                   <div key={value} className={`flex min-w-0 items-center rounded-md ${hardware === value ? "bg-slate-800 text-slate-100 shadow-sm" : "text-slate-400"}`}>
                     <button type="button" aria-pressed={hardware === value} onClick={() => selectHardware(value)} className="min-h-7 min-w-0 flex-1 px-2 py-1.5 text-left text-[10px] transition-colors hover:text-cyan-200">{hardwareLabel(value)}</button>
-                    <InfoPopover label={`About ${hardwareLabel(value)}`}><p className="font-semibold text-cyan-200">{hardwareLabel(value)}</p><p className="mt-2">{HARDWARE_PROFILES[value].description}</p><p className="mt-2 text-[10px] text-slate-400">Selecting a profile sets its reference capacity; Ideal Noise-Free selects this scale’s Carry-Lookahead ceiling. You can then override capacity manually or with presets and tiers. Restoring a snapshot preserves its saved capacity. Architecture assumptions are not device benchmarks.</p></InfoPopover>
+                    <InfoPopover label={`About ${hardwareLabel(value)}`}><p className="font-semibold text-cyan-200">{hardwareLabel(value)}</p><p className="mt-2">{HARDWARE_PROFILES[value].description}</p><p className="mt-2 text-[10px] text-slate-400">Selecting a profile sets its reference capacity; Ideal Noise-Free selects this workload’s parallelization ceiling. You can then override capacity manually or with presets and tiers. Restoring a snapshot preserves its saved capacity. Architecture assumptions are not device benchmarks.</p></InfoPopover>
                   </div>
                 ))}
               </div>
@@ -320,8 +325,8 @@ export default function Home() {
               <InfoPopover label="About QPU capacity">
                 <p className="font-semibold text-cyan-200">Available QPU capacity</p>
                 <p className="mt-2">Per QPU stage. Select a tier threshold to explore the trade-off; changes apply on Run simulation.</p>
-                <p className="mt-2">36 references Forte; 72 is the exploratory Google grid preset (published Weber: 53 active qubits). 133 and 1,121 reference Heron r1 and Condor milestones; larger presets are exploratory capacities. These are modeled usable qubits; physical error-correction overhead is excluded. Extra capacity above the carry-lookahead threshold stays idle.</p>
-                <p className="mt-2">N = 15 in sequential mode runs a Qiskit Aer circuit. Parallel tiers and larger scales use an analytical hardware model. QPU capacity does not limit CPU/GPU emulation.</p>
+                <p className="mt-2">36 references Forte; 72 is the exploratory Google grid preset (published Weber: 53 active qubits). 133 and 1,121 reference Heron r1 and Condor milestones; larger presets are exploratory capacities. These are modeled usable qubits; physical error-correction overhead is excluded. Extra capacity above the workload’s parallelization ceiling stays idle.</p>
+                <p className="mt-2">Shor N = 15 and Quantum-MIPS M = 64 in sequential mode run Qiskit Aer reference circuits. Parallel tiers and larger scales use an analytical hardware model. Quantum-MIPS emulation uses the selected ancilla tier and is limited by CPU/GPU RAM.</p>
               </InfoPopover>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -331,12 +336,11 @@ export default function Home() {
               ))}</div>
               <div className="ml-2 flex min-w-0 flex-wrap items-center gap-2 border-l border-slate-600/80 pl-4">
                 <span className="text-[9px] font-semibold uppercase tracking-wider text-slate-500">Tiers</span>
-                <ParallelizationTiers compact scale={scale} onSelect={(value) => setAvailableQubits(String(value))} />
+                <ParallelizationTiers key={workload} compact workload={workload} scale={scale} onSelect={(value) => setAvailableQubits(String(value))} />
               </div>
             </div>
             <p id="capacity-help" className={validCapacity ? "sr-only" : "mt-1 text-[10px] text-rose-300"}>{validCapacity ? "Usable qubits per QPU stage. Changes apply on Run simulation." : "Enter a whole qubit count from 1 to 2,147,483,647."}</p>
           </div>
-          {workload === "quantum_mips" && <p className="mt-2 text-[10px] text-slate-500">Quantum-MIPS is a preview preset. Click Run simulation to request its availability from the engine.</p>}
         </section>
 
         {restoreMessage && <p role="status" className="mb-2 text-[11px] text-cyan-200">{restoreMessage}</p>}
@@ -423,7 +427,7 @@ export default function Home() {
             </div>
             <div className="grid gap-3 lg:grid-cols-3">{PIPELINE.map(({ key, routingKey }, index) => (
               <div key={key} className="relative min-w-0">
-                <PipelineCard index={index} stage={data?.stages[key]} selectedNode={routing[routingKey]} onNodeChange={(node) => updateNode(routingKey, node)} pending={loading} />
+                <PipelineCard index={index} stage={snapshot?.request.workload_id === workload ? data?.stages[key] : undefined} selectedNode={routing[routingKey]} onNodeChange={(node) => updateNode(routingKey, node)} pending={loading} workload={workload} />
                 {index < 2 && <span aria-hidden="true" className="pointer-events-none absolute -bottom-3 left-1/2 z-10 grid size-6 -translate-x-1/2 place-items-center rounded-full border border-slate-700 bg-slate-950 text-slate-500 lg:-right-5 lg:bottom-auto lg:left-auto lg:top-1/2 lg:-translate-y-1/2 lg:translate-x-0"><ArrowRight size={12} className="hidden lg:block" /><ArrowDown size={12} className="lg:hidden" /></span>}
               </div>
             ))}</div>
@@ -444,15 +448,15 @@ export default function Home() {
             <div className="max-h-[520px] overflow-y-auto p-3">
               <div className="mb-3 flex flex-wrap items-center gap-2 text-[10px]">
                 <span className="text-slate-500">Latest change</span>
-                <span className="rounded-md border border-slate-700 px-2 py-1 font-mono text-slate-300">{scaleLabel(latest.before.request.scale_param)}</span>
+                <span className="rounded-md border border-slate-700 px-2 py-1 font-mono text-slate-300">{workloadScaleLabel(latest.before.request.scale_param, latest.before.request.workload_id)}</span>
                 <ArrowRight size={12} className="text-slate-500" />
-                <span className="rounded-md border border-cyan-400/25 bg-cyan-400/10 px-2 py-1 font-mono text-cyan-300">{scaleLabel(latest.after.request.scale_param)}</span>
+                <span className="rounded-md border border-cyan-400/25 bg-cyan-400/10 px-2 py-1 font-mono text-cyan-300">{workloadScaleLabel(latest.after.request.scale_param, latest.after.request.workload_id)}</span>
                 <span className="text-slate-500">{hardwareLabel(latest.after.request.hardware_profile)}</span>
               </div>
               <DeltaTable changes={latest.changes} />
               {state.history.length > 1 && <div className="mt-3 space-y-2">{state.history.slice(1).map((transition) => (
                 <details key={transition.id} className="rounded-lg border border-slate-800 px-3 py-2">
-                  <summary className="cursor-pointer text-xs text-slate-400">Run {transition.id - 1} → {transition.id} · {scaleLabel(transition.before.request.scale_param)} → {scaleLabel(transition.after.request.scale_param)} · {transition.changes.length} changes</summary>
+                  <summary className="cursor-pointer text-xs text-slate-400">Run {transition.id - 1} → {transition.id} · {workloadScaleLabel(transition.before.request.scale_param, transition.before.request.workload_id)} → {workloadScaleLabel(transition.after.request.scale_param, transition.after.request.workload_id)} · {transition.changes.length} changes</summary>
                   <div className="mt-4"><DeltaTable changes={transition.changes} /></div>
                 </details>
               ))}</div>}

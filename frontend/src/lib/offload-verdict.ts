@@ -1,6 +1,7 @@
 import { pipelineLatencyBuckets } from "@/lib/kpi-metrics";
 import { DEFAULT_AVAILABLE_QUBITS, formatValue, PIPELINE, qubitThresholds } from "@/lib/telemetry";
 import { formatDuration } from "@/lib/duration";
+import { mipsRoutingContext } from "@/lib/workloads";
 import { architectureTradeOff } from "@/lib/hardware-profiles";
 import type { HybridTelemetryResponse, SimulationRequest } from "@/types/telemetry";
 
@@ -16,12 +17,14 @@ export const SIGNIFICANT_OFFLOAD_SPEEDUP = 2;
 export function offloadVerdict(data: HybridTelemetryResponse, request: SimulationRequest): OffloadVerdict {
   const verdict = baseOffloadVerdict(data, request);
   const context = data.stages.stage_2_quantum_kernel.node === "QPU" ? architectureTradeOff(request.hardware_profile) : "";
-  return context ? { ...verdict, message: `${verdict.message} ${context}` } : verdict;
+  const mips = request.workload_id === "quantum_mips"
+    ? `${mipsRoutingContext(request.scale_param)} Grover O(√M) iterations rapidly consume NISQ coherence at large M; Multi-Oracle tiers reduce depth and long-coherence hardware improves survival, with its gate-time trade-off.` : "";
+  return { ...verdict, message: [verdict.message, context, mips].filter(Boolean).join(" ") };
 }
 
 function baseOffloadVerdict(data: HybridTelemetryResponse, request: SimulationRequest): OffloadVerdict {
   const kernel = data.stages.stage_2_quantum_kernel;
-  const minimum = qubitThresholds(request.scale_param).minimum;
+  const minimum = qubitThresholds(request.scale_param, request.workload_id).minimum;
   for (const stage of Object.values(data.stages)) {
     if (stage.node !== "QPU") continue;
     const required = finite(stage.metrics.minimum_qubits_required) ? stage.metrics.minimum_qubits_required : minimum;
@@ -34,10 +37,12 @@ function baseOffloadVerdict(data: HybridTelemetryResponse, request: SimulationRe
     message: `${unsupported.label} has no QPU implementation in this simulator. Move classical host stages to CPU or GPU before evaluating quantum offload.` };
 
   const memoryBudget = kernel.metrics.statevector_memory_budget_gib;
-  const width = finite(kernel.metrics.qubits_required) ? kernel.metrics.qubits_required : minimum;
+  const width = finite(kernel.metrics.statevector_qubits) ? kernel.metrics.statevector_qubits : finite(kernel.metrics.qubits_required) ? kernel.metrics.qubits_required : minimum;
   if (kernel.node !== "QPU" && finite(memoryBudget) && memoryBudget > 0 && width > Math.log2(memoryBudget) + 26) {
     return { title: "Classical Memory Wall", status: "blocked",
-      message: `${kernel.node} statevector emulation needs 2^${formatValue(width + 4)} bytes, exceeding its ${formatValue(memoryBudget)} GiB RAM budget. QPU routing is mandatory for this scale within the simulator, with at least ${formatValue(minimum)} usable qubits; reduce scale if capacity is unavailable.` };
+      message: `${kernel.node} statevector emulation needs 2^${formatValue(width + 4)} bytes, exceeding its ${formatValue(memoryBudget)} GiB RAM budget. ${request.workload_id === "quantum_mips"
+        ? `Select the Sequential tier or reduce scale to shrink the emulated register; alternatively route Stage 02 to QPU with at least ${formatValue(minimum)} usable qubits and reassess coherence.`
+        : `QPU routing is mandatory for this scale within the simulator, with at least ${formatValue(minimum)} usable qubits; reduce scale if capacity is unavailable.`}` };
   }
   if (Object.values(data.stages).some(stage => stage.metrics.execution_feasible === false)) return {
     title: "Execution Blocked", status: "blocked", message: "A blocked prerequisite prevents this pipeline from executing. Resolve the routing or resource limit before comparing offload latency.",
@@ -55,7 +60,9 @@ function baseOffloadVerdict(data: HybridTelemetryResponse, request: SimulationRe
   if (timing.totalMs > 0 && timing.overheadMs / timing.totalMs > 0.4) {
     const cpuComparison = cpuTotal !== null && cpuTotal < timing.totalMs
       ? `CPU execution remains faster (${formatDuration(cpuTotal)} versus ${formatDuration(timing.totalMs)}) because offload I/O penalties erase the compute gain.`
-      : "CPU placement for short host routines avoids launch/transfer penalties; compare end-to-end CPU timing before expanding offload.";
+      : request.workload_id === "quantum_mips" && request.scale_param >= 1024
+        ? "At this vector scale, GPU tensor parallelism amortizes the 0.30 ms launch cost for LSH pruning and FP16 reranking; a large overhead share alone does not make CPU hosts faster."
+        : "CPU placement for short host routines avoids launch/transfer penalties; compare end-to-end CPU timing before expanding offload.";
     return { title: "Interconnect Dominated", status: "warning",
       message: `Bus, transfer, and state-preparation overhead consumes ${(timing.overheadMs / timing.totalMs * 100).toFixed(1)}% of modeled wall-clock time. ${cpuComparison}` };
   }
