@@ -133,7 +133,7 @@ active compute from interconnect/state-preparation overhead. GPU timings already
 include launch/transfer costs, so those are separated once; QPU I/O is reported
 separately and added to the KPI total. Blocked stages contribute neither compute
 nor overhead. Original stage telemetry and saved stage-sum latencies are unchanged.
-Directly beneath the KPI cards, the latency proportion bar splits the same total
+Alongside the KPI cards in the compact telemetry summary, the latency proportion bar splits the same total
 into classical CPU/GPU compute, QPU gate execution, and interconnect/control
 overhead. Its legend reports milliseconds and actual percentage shares; nonzero
 segments have an 8px minimum width for visibility. Empty or fully blocked runs
@@ -162,6 +162,20 @@ retains the completed-run verdict until the next successful simulation, alongsid
 the existing latency bar and KPI cards.
 
 ### Persistent Run History (Neon + Prisma)
+
+The desktop dashboard keeps the control panel, compact KPI/status/verdict/latency
+summary, and three execution stage cards together above the analytics. Both Run
+simulation buttons submit the same selected configuration; the inline pipeline
+button shows uncommitted changes and shares loading/capacity validation with the
+top button. Capacity/model explanations and the complete co-design verdict remain
+available in keyboard-, pointer-, and touch-accessible info tooltips. The advisor
+and state delta tracker share a desktop row and stack on mobile; long delta tables
+scroll within their panel. Stage and advisor telemetry retain their original data.
+
+History shows the latest five saved runs by default. **Show all 20 runs** expands
+the existing fetched list, and **Show latest 5** collapses it without another
+database request. Each compact history row still expands to its complete payload,
+saved advisor diagnostic, original token usage, and zero-cost cached view.
 
 Successful simulations are saved by a separate background request to the Next.js
 server. A failed save never changes the simulation result or disables Run

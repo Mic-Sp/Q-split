@@ -4,13 +4,14 @@ import { TierTooltip } from "@/components/tier-tooltip";
 import { useState } from "react";
 import { formatValue, qubitThresholds } from "@/lib/telemetry";
 
-export function ParallelizationTiers({ scale, onSelect }: { scale: number; onSelect: (value: number) => void }) {
+export function ParallelizationTiers({ scale, onSelect, compact = false }: { scale: number; onSelect: (value: number) => void; compact?: boolean }) {
   const [openTier, setOpenTier] = useState<string | null>(null);
   const n = scale === 512 || scale === 2048 ? scale : Math.ceil(Math.log2(scale));
   const thresholds = qubitThresholds(scale);
   const tiers = [
     {
       label: "Sequential minimum", value: thresholds.minimum,
+      shortLabel: "Sequential",
       formula: "2n + 3 qubits (8 qubits for N = 15)",
       calculation: scale === 15
         ? "N = 15 uses the fixed 8-qubit reference circuit instead of 2 × 4 + 3 = 11 qubits."
@@ -20,6 +21,7 @@ export function ParallelizationTiers({ scale, onSelect }: { scale: number; onSel
     },
     {
       label: "Windowed Parallel", value: thresholds.windowed,
+      shortLabel: "Windowed",
       formula: "3n qubits",
       calculation: `3 × ${formatValue(n)} = ${formatValue(thresholds.windowed)} qubits`,
       depth: "O(n² log n) · windowed arithmetic",
@@ -27,6 +29,7 @@ export function ParallelizationTiers({ scale, onSelect }: { scale: number; onSel
     },
     {
       label: "Carry-Lookahead ceiling", value: thresholds.ceiling,
+      shortLabel: "Carry-Lookahead",
       formula: "5.5n qubits (rounded up to a whole qubit)",
       calculation: Number.isInteger(5.5 * n)
         ? `5.5 × ${formatValue(n)} = ${formatValue(thresholds.ceiling)} qubits`
@@ -36,8 +39,9 @@ export function ParallelizationTiers({ scale, onSelect }: { scale: number; onSel
     },
   ];
 
-  return <div role="group" aria-label="Parallelization thresholds" className="mt-2 flex flex-wrap gap-2">
+  return <div role="group" aria-label="Parallelization thresholds" className={`${compact ? "" : "mt-2"} flex flex-wrap gap-1.5`}>
     {tiers.map((tier) => <TierTooltip key={tier.label} label={`${tier.label} · ${formatValue(tier.value)} qubits`} onSelect={() => onSelect(tier.value)}
+      displayLabel={compact ? `${tier.shortLabel} · ${formatValue(tier.value)}` : undefined}
       open={openTier === tier.label} onOpenChange={(isOpen) => setOpenTier((current) => isOpen ? tier.label : current === tier.label ? null : current)}>
       <p className="font-semibold text-cyan-200">{tier.label}</p>
       <p className="mt-1 text-[10px] text-slate-400">{scale === 512 || scale === 2048 ? `RSA-${scale}` : `N = ${scale}`} · n = {formatValue(n)} bits</p>

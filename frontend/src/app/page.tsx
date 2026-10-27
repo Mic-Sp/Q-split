@@ -7,11 +7,12 @@ import { ParallelizationTiers } from "@/components/parallelization-tiers";
 import { TelemetryAdvisor } from "@/components/telemetry-advisor";
 import { LatencyProportion } from "@/components/latency-proportion";
 import { OffloadVerdictStrip } from "@/components/offload-verdict";
+import { InfoPopover } from "@/components/info-popover";
 import { usePersistentRuns } from "@/hooks/use-persistent-runs";
 import { coherenceBudget, pipelineTiming, type CoherenceBudgetStatus } from "@/lib/kpi-metrics";
 import {
   Activity, ArrowDown, ArrowRight, Check, ChevronDown, CircleAlert, CircuitBoard, Cpu,
-  FlaskConical, GitCompareArrows, Layers3, LoaderCircle, Play, Radio, Workflow, Zap,
+  GitCompareArrows, Layers3, LoaderCircle, Play, Radio, Workflow, Zap,
 } from "lucide-react";
 import {
   DEFAULT_AVAILABLE_QUBITS, DEFAULT_ROUTING, describeChanges, formatValue, PIPELINE, simulate,
@@ -75,7 +76,7 @@ function reducer(state: DashboardState, action: Action): DashboardState {
 function StatusBadge({ status }: { status: StageStatus }) {
   const style = STATUS[status];
   return (
-    <span className={["inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider", style.text, style.border, style.background].join(" ")}>
+    <span className={["inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider", style.text, style.border, style.background].join(" ")}>
       <span className={["size-1.5 rounded-full", style.dot].join(" ")} />{style.label}
     </span>
   );
@@ -108,53 +109,54 @@ function PipelineCard({ index, stage, selectedNode, onNodeChange, pending }: {
   const NodeIcon = nodeStyle.icon;
   const style = stage ? STATUS[stage.status] : null;
   return (
-    <article data-testid={"stage-" + (index + 1)} className={["relative flex h-full min-w-0 flex-col rounded-2xl border bg-slate-900/70 p-5 sm:p-6", style?.border ?? "border-slate-800"].join(" ")}>
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-        <span className="font-mono text-xs tracking-wider text-slate-500">STAGE 0{index + 1}</span>
-        {stage ? <StatusBadge status={stage.status} /> : <span className="text-xs text-slate-500">Awaiting telemetry</span>}
+    <article data-testid={"stage-" + (index + 1)} className={["relative flex h-full min-w-0 flex-col overflow-hidden rounded-xl border bg-slate-900/70 p-2.5", style?.border ?? "border-slate-800"].join(" ")}>
+      <div className="console-header -mx-2.5 -mt-2.5 mb-[3px] flex flex-wrap items-center justify-between gap-2 border-b border-slate-700/80 px-2.5 pt-2.5">
+        <span className="inline-flex items-center gap-2 font-mono text-[10px] font-bold tracking-wider text-cyan-100"><span aria-hidden="true" className="h-3 w-0.5 rounded-full bg-cyan-300/80" />STAGE 0{index + 1}</span>
+        {stage ? <StatusBadge status={stage.status} /> : <span className="text-[10px] text-slate-500">Awaiting telemetry</span>}
       </div>
-      <div className="mb-5 flex items-center gap-3">
-        <span className={["grid size-11 shrink-0 place-items-center rounded-xl border", nodeStyle.frame].join(" ")}>
-          <NodeIcon size={22} />
+      <div className="mb-1 flex items-center gap-2">
+        <span className={["grid size-6 shrink-0 place-items-center rounded-md border", nodeStyle.frame].join(" ")}>
+          <NodeIcon size={14} />
         </span>
-        <div>
-          <p data-testid={"stage-node-" + (index + 1)} className={["text-sm font-semibold", nodeStyle.text].join(" ")}>{node}</p>
-          <p className="mt-0.5 text-xs text-slate-400">{config.label}</p>
+        <div className="flex flex-wrap items-baseline gap-x-2">
+          <p data-testid={"stage-node-" + (index + 1)} className={["text-xs font-semibold", nodeStyle.text].join(" ")}>{node}</p>
+          <p className="text-[10px] text-slate-400">{config.label}</p>
         </div>
       </div>
-      <fieldset aria-label={`Stage ${index + 1} node assignment`} className="mb-5 min-w-0">
-        <legend className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Run on</legend>
-        <div className="grid grid-cols-3 gap-1 rounded-lg border border-slate-800 bg-slate-950 p-1">
-          {NODES.map((target) => <button key={target} type="button" aria-pressed={selectedNode === target} onClick={() => onNodeChange(target)} className={["min-h-10 rounded-md px-2 py-2 text-xs font-semibold transition-colors", selectedNode === target ? "bg-cyan-400/15 text-cyan-200 ring-1 ring-inset ring-cyan-400/30" : "text-slate-400 hover:bg-slate-800 hover:text-slate-100"].join(" ")}>{target}</button>)}
-        </div>
-        <p className="mt-2 min-h-8 text-[10px] leading-4 text-slate-500">{stage && stage.node !== selectedNode ? `Selected ${selectedNode} · showing previous ${stage.node} result` : pending ? "Simulation in progress for the submitted route…" : "Selection applies when you click Run simulation"}</p>
+      <fieldset aria-label={`Stage ${index + 1} node assignment`} className="mb-1 min-w-0">
+        <legend className="sr-only">Run on</legend>
+        <div className="flex items-center gap-2"><span aria-hidden="true" className="shrink-0 text-[9px] font-semibold uppercase text-slate-500">Run on</span><div className="grid flex-1 grid-cols-3 gap-1 rounded-lg border border-slate-800 bg-slate-950 p-0.5">
+          {NODES.map((target) => <button key={target} type="button" aria-pressed={selectedNode === target} onClick={() => onNodeChange(target)} className={["min-h-7 rounded px-2 py-1 text-[11px] font-semibold transition-colors", selectedNode === target ? "bg-cyan-400/15 text-cyan-200 ring-1 ring-inset ring-cyan-400/30" : "text-slate-400 hover:bg-slate-800 hover:text-slate-100"].join(" ")}>{target}</button>)}
+        </div></div>
+        <p className={pending || (stage && stage.node !== selectedNode) ? "mt-1 text-[9px] leading-3 text-slate-500" : "sr-only"}>{stage && stage.node !== selectedNode ? `Selected ${selectedNode} · showing previous ${stage.node} result` : pending ? "Simulation in progress for the submitted route…" : "Selection applies when you click Run simulation"}</p>
       </fieldset>
-      <h3 title={stage?.name ?? config.label} className="min-h-12 line-clamp-2 text-base font-semibold leading-6 text-slate-100 [overflow-wrap:anywhere]">{stage?.name ?? config.label}</h3>
-      <div className="my-5 border-y border-slate-800/80 py-4">
-        <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Stage latency</span>
-        <p data-testid={"stage-latency-" + (index + 1)} className="mt-1 font-mono text-2xl tracking-tight text-slate-100 [overflow-wrap:anywhere] sm:text-3xl">
-          {stage ? formatValue(stage.latency_ms) : "—"}<span className="ml-2 text-sm text-slate-500">ms</span>
+      <h3 title={stage?.name ?? config.label} className="line-clamp-1 text-[11px] font-semibold leading-4 text-slate-100 [overflow-wrap:anywhere]">{stage?.name ?? config.label}</h3>
+      <div className="console-header -mx-2.5 my-1.5 flex items-center justify-between gap-2 border-y border-slate-700/80 px-2.5 py-1">
+        <span className="text-[9px] font-bold uppercase tracking-wider text-slate-200">Stage latency</span>
+        <p data-testid={"stage-latency-" + (index + 1)} className="font-mono text-base tracking-tight text-slate-100 [overflow-wrap:anywhere]">
+          {stage ? formatValue(stage.latency_ms) : "—"}<span className="ml-1 text-[10px] text-slate-500">ms</span>
         </p>
       </div>
       {stage?.node === "QPU" && typeof stage.metrics.available_qubits === "number" && (
-        <div data-testid={`qpu-capacity-${index + 1}`} className="mb-4 rounded-lg border border-cyan-400/20 bg-cyan-400/5 p-3">
-          <p className="text-[10px] text-slate-400">Qubits Allocated / Available</p>
-          <p className="mt-1 font-mono text-lg text-cyan-200">{formatValue(stage.metrics.qubits_allocated)} / {formatValue(stage.metrics.available_qubits)}</p>
-          <p className="mt-2 text-xs font-medium text-cyan-300 [overflow-wrap:anywhere]">{formatValue(stage.metrics.parallelization_tier)}</p>
-          <p className="mt-1 text-[10px] leading-5 text-slate-400">{formatValue(stage.metrics.idle_qubits)} idle · {formatValue(stage.metrics.depth_complexity)}{stage.metrics.parallel_speedup_ceiling_reached === true ? " · Speedup ceiling reached" : ""}</p>
+        <div data-testid={`qpu-capacity-${index + 1}`} className="mb-1.5 overflow-hidden rounded-md border border-cyan-400/20 bg-cyan-400/5">
+          <p className="console-header border-b border-cyan-400/20 px-2 py-1 text-[9px] font-semibold leading-3 text-cyan-100">Qubits Allocated / Available</p>
+          <div className="px-2 py-1.5">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1"><p className="font-mono text-sm leading-5 text-cyan-200">{formatValue(stage.metrics.qubits_allocated)} / {formatValue(stage.metrics.available_qubits)}</p><p className="max-w-full rounded border border-cyan-400/20 bg-cyan-400/10 px-1.5 py-0.5 text-[10px] font-medium leading-3 text-cyan-300 [overflow-wrap:anywhere]">{formatValue(stage.metrics.parallelization_tier)}</p></div>
+            <p className="mt-0.5 text-[9px] leading-4 text-slate-400">{formatValue(stage.metrics.idle_qubits)} idle · {formatValue(stage.metrics.depth_complexity)}{stage.metrics.parallel_speedup_ceiling_reached === true ? " · Speedup ceiling reached" : ""}</p>
+          </div>
         </div>
       )}
-      <dl className="mb-6 grid grid-cols-2 gap-2">
+      <dl className="mb-2 grid grid-cols-2 gap-1 xl:grid-cols-3">
         {stage ? Object.entries(stage.metrics).filter(([key]) => !CAPACITY_PANEL_METRICS.has(key) && key !== "classical_cpu_baseline").map(([key, value]) => (
-          <div key={key} className="min-w-0 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2.5">
-            <dt className="text-[10px] leading-4 text-slate-400 [overflow-wrap:anywhere]">{metricLabels[key] ?? key.replaceAll("_", " ")}</dt>
-            <dd className={["mt-1 font-mono text-xs leading-5 [overflow-wrap:anywhere]", key === "coherence_survival_pct" ? style?.text : "text-slate-200"].join(" ")}>{key === "routing_model" ? "Illustrative estimate" : typeof value === "boolean" ? value ? "Yes" : "No" : formatValue(value)}</dd>
+          <div key={key} className="min-w-0 rounded-md border border-slate-800 bg-slate-950/60 px-2 py-1">
+            <dt className="text-[9px] leading-3 text-slate-400 [overflow-wrap:anywhere]">{metricLabels[key] ?? key.replaceAll("_", " ")}</dt>
+            <dd title={formatValue(value)} className={["mt-0.5 font-mono text-[10px] leading-4 [overflow-wrap:anywhere]", key === "coherence_survival_pct" ? style?.text : "text-slate-200"].join(" ")}>{key === "routing_model" ? "Modeled" : key === "depth_model" ? String(value).startsWith("Compiled") ? "Aer reference" : "Analytical" : typeof value === "boolean" ? value ? "Yes" : "No" : formatValue(value)}</dd>
           </div>
-        )) : <div className={["col-span-2 h-24 rounded-lg bg-slate-800/40", pending ? "animate-pulse" : ""].join(" ")} aria-hidden="true" />}
+        )) : <div className={["col-span-full h-12 rounded-lg bg-slate-800/40", pending ? "animate-pulse" : ""].join(" ")} aria-hidden="true" />}
       </dl>
-      <div className="mt-auto rounded-lg bg-slate-950/70 p-3.5">
-        <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Stage output</p>
-        <p className="text-xs leading-6 text-slate-400 [overflow-wrap:anywhere]">
+      <div className="mt-auto rounded-lg bg-slate-950/70 p-1.5">
+        <p className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-500">Stage output</p>
+        <p className="text-[11px] leading-4 text-slate-400 [overflow-wrap:anywhere]">
           {stage?.output_summary ?? "Run a simulation to inspect this stage’s output and hardware metrics."}
         </p>
       </div>
@@ -235,10 +237,10 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="border-b border-slate-800/80 bg-slate-950/90">
-        <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-4 px-5 py-5 sm:px-8 lg:px-12">
+        <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-2 px-4 py-1.5 sm:px-6">
           <Link href="/" className="flex items-center gap-3" aria-label="Q-Split home">
-            <span className="grid size-10 place-items-center rounded-xl border border-cyan-400/25 bg-cyan-400/10 text-cyan-400"><Workflow size={23} /></span>
-            <span className="text-xl font-semibold tracking-tight">Q<span className="text-cyan-400">-</span>Split
+            <span className="grid size-8 place-items-center rounded-lg border border-cyan-400/25 bg-cyan-400/10 text-cyan-400"><Workflow size={19} /></span>
+            <span className="text-lg font-semibold tracking-tight">Q<span className="text-cyan-400">-</span>Split
               <span className="ml-3 hidden border-l border-slate-800 pl-3 text-xs font-normal tracking-normal text-slate-500 sm:inline">Hybrid workload profiler</span>
             </span>
           </Link>
@@ -249,62 +251,68 @@ export default function Home() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-[1440px] px-5 py-9 sm:px-8 lg:px-12">
-        <div className="mb-8 flex flex-wrap items-end justify-between gap-5">
-          <div>
-            <p className="mb-3 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-cyan-400"><FlaskConical size={13} /> Quantum / classical observatory</p>
-            <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Workload simulator</h1>
-            <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-400">Trace the handoff. Find the bottleneck. Explore where quantum hardware meets its limits.</p>
+      <main className="mx-auto max-w-[1440px] px-4 py-1.5 sm:px-6">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+            <h1 className="text-lg font-semibold tracking-tight">Workload simulator</h1>
+            <p className="text-xs text-slate-500">Trace the handoff. Find the bottleneck. Explore hardware limits.</p>
           </div>
           <span className="rounded-md border border-slate-800 px-2.5 py-1 font-mono text-[10px] text-slate-500">ENGINE v2.0</span>
         </div>
 
-        <section aria-label="Simulation controls" className="mb-6 rounded-2xl border border-slate-800 bg-slate-900/50 p-5 sm:p-6">
-          <div className="flex flex-col gap-6 xl:flex-row xl:items-end">
-            <div className="min-w-0 xl:w-64">
-              <label htmlFor="workload" className="mb-3 block text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">01 / Workload preset</label>
+        <section aria-label="Simulation controls" className="mb-2 rounded-xl border border-slate-800 bg-slate-900/50 p-2.5">
+          <div className="grid items-end gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(150px,1fr)_minmax(0,1.6fr)_auto_auto]">
+            <div className="min-w-0">
+              <label htmlFor="workload" className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-slate-500">01 / Workload preset</label>
               <div className="relative">
-                <select id="workload" value={workload} onChange={(e) => setWorkload(e.target.value as WorkloadId)} className="w-full appearance-none rounded-lg border border-slate-700 bg-slate-950 py-3 pl-3 pr-9 text-sm text-slate-200">
+                <select id="workload" value={workload} onChange={(e) => setWorkload(e.target.value as WorkloadId)} className="min-h-9 w-full appearance-none rounded-lg border border-slate-700 bg-slate-950 py-2 pl-3 pr-8 text-xs text-slate-200">
                   <option value="shors_crypto">Shor’s cryptography</option>
                   <option value="quantum_mips">Quantum-MIPS AI · Preview</option>
                 </select>
-                <ChevronDown className="pointer-events-none absolute right-3 top-3.5 text-slate-500" size={16} />
+                <ChevronDown className="pointer-events-none absolute right-3 top-2.5 text-slate-500" size={14} />
               </div>
             </div>
             <fieldset className="min-w-0 flex-1">
-              <legend className="mb-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">02 / Target scale</legend>
+              <legend className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">02 / Target scale</legend>
               <div className="flex flex-wrap gap-1.5">{SCALES.map((value) => (
-                <button key={value} type="button" aria-pressed={scale === value} onClick={() => setScale(value)} className={["rounded-lg border px-3 py-3 font-mono text-xs transition-colors", scale === value ? "border-cyan-400/50 bg-cyan-400/10 text-cyan-300" : "border-slate-800 bg-slate-950/70 text-slate-400 hover:border-slate-600 hover:text-slate-200"].join(" ")}>{scaleLabel(value)}</button>
+                <button key={value} type="button" aria-pressed={scale === value} onClick={() => setScale(value)} className={["min-h-9 rounded-lg border px-2 py-2 font-mono text-[11px] transition-colors", scale === value ? "border-cyan-400/50 bg-cyan-400/10 text-cyan-300" : "border-slate-800 bg-slate-950/70 text-slate-400 hover:border-slate-600 hover:text-slate-200"].join(" ")}>{scaleLabel(value)}</button>
               ))}</div>
             </fieldset>
             <fieldset className="min-w-0">
-              <legend className="mb-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">03 / Hardware profile</legend>
+              <legend className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">03 / Hardware profile</legend>
               <div className="flex flex-wrap gap-1 rounded-lg border border-slate-800 bg-slate-950 p-1">
                 {(["ibm_heron_nisq", "ideal_sim"] as const).map((value) => (
-                  <button key={value} type="button" aria-pressed={hardware === value} onClick={() => setHardware(value)} className={["rounded-md px-3 py-2 text-xs transition-colors", hardware === value ? "bg-slate-800 text-slate-100 shadow-sm" : "text-slate-500 hover:text-slate-200"].join(" ")}>{hardwareLabel(value)}</button>
+                  <button key={value} type="button" aria-pressed={hardware === value} onClick={() => setHardware(value)} className={["min-h-7 rounded-md px-2 py-1.5 text-[11px] transition-colors", hardware === value ? "bg-slate-800 text-slate-100 shadow-sm" : "text-slate-500 hover:text-slate-200"].join(" ")}>{hardwareLabel(value)}</button>
                 ))}
               </div>
             </fieldset>
-            <button type="button" disabled={loading || !validCapacity} onClick={runSimulation} className="flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg bg-cyan-400 px-5 text-sm font-semibold text-slate-950 transition-colors hover:bg-cyan-300 disabled:cursor-wait disabled:opacity-60">
+            <button type="button" disabled={loading || !validCapacity} onClick={runSimulation} className="flex min-h-9 shrink-0 items-center justify-center gap-2 rounded-lg bg-cyan-400 px-4 text-xs font-semibold text-slate-950 transition-colors hover:bg-cyan-300 disabled:cursor-wait disabled:opacity-60">
               {loading ? <LoaderCircle size={15} className="animate-spin" /> : <Play size={15} fill="currentColor" />}
               {loading ? "Simulating…" : "Run simulation"}
             </button>
           </div>
-          <div className="mt-6 border-t border-slate-800 pt-5">
-            <label htmlFor="available-qubits" className="mb-3 block text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">04 / Available QPU Qubits</label>
-            <div className="flex flex-wrap items-center gap-3">
-              <input id="available-qubits" type="number" min={1} max={2147483647} step={1} value={availableQubits} onChange={(event) => setAvailableQubits(event.target.value)} aria-invalid={!validCapacity} aria-describedby="capacity-help" className="w-36 rounded-lg border border-slate-700 bg-slate-950 px-3 py-3 font-mono text-sm text-cyan-200" />
-              <div role="group" aria-label="QPU capacity presets" className="flex flex-wrap gap-1.5">{QUBIT_PRESETS.map((value) => (
-                <button key={value} type="button" aria-pressed={capacity === value} onClick={() => setAvailableQubits(String(value))} className={["rounded-lg border px-3 py-2 font-mono text-xs", capacity === value ? "border-cyan-400/50 bg-cyan-400/10 text-cyan-200" : "border-slate-800 text-slate-400 hover:border-slate-600"].join(" ")}>{formatValue(value)}</button>
-              ))}</div>
+          <div className="mt-2 border-t border-slate-800 pt-1">
+            <div className="mb-1 flex items-center gap-1"><label htmlFor="available-qubits" className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">04 / Available QPU Qubits</label>
+              <InfoPopover label="About QPU capacity">
+                <p className="font-semibold text-cyan-200">Available QPU capacity</p>
+                <p className="mt-2">Per QPU stage. Select a tier threshold to explore the trade-off; changes apply on Run simulation.</p>
+                <p className="mt-2">133 and 1,121 reflect Heron r1 and Condor milestones; larger presets are exploratory capacities. These are modeled usable qubits; physical error-correction overhead is excluded. Extra capacity above the carry-lookahead threshold stays idle.</p>
+                <p className="mt-2">N = 15 in sequential mode runs a Qiskit Aer circuit. Parallel tiers and larger scales use an analytical hardware model. QPU capacity does not limit CPU/GPU emulation.</p>
+              </InfoPopover>
             </div>
-            <p id="capacity-help" className="mt-3 text-xs leading-6 text-slate-400">{validCapacity ? "Per QPU stage. Select a tier threshold below to explore the trade-off; changes apply on Run simulation." : "Enter a whole qubit count from 1 to 2,147,483,647."}</p>
-            <ParallelizationTiers scale={scale} onSelect={(value) => setAvailableQubits(String(value))} />
-            <p className="mt-3 text-[10px] leading-5 text-slate-500">133 and 1,121 reflect Heron r1 and Condor milestones; larger presets are exploratory capacities. These are modeled usable qubits; physical error-correction overhead is excluded. Extra capacity above the carry-lookahead threshold stays idle.</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <input id="available-qubits" type="number" min={1} max={2147483647} step={1} value={availableQubits} onChange={(event) => setAvailableQubits(event.target.value)} aria-invalid={!validCapacity} aria-describedby="capacity-help" className="min-h-8 w-24 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 font-mono text-xs text-cyan-200" />
+              <div role="group" aria-label="QPU capacity presets" className="flex flex-wrap gap-1.5">{QUBIT_PRESETS.map((value) => (
+                <button key={value} type="button" aria-pressed={capacity === value} onClick={() => setAvailableQubits(String(value))} className={["min-h-8 rounded-md border px-2 py-1.5 font-mono text-[11px]", capacity === value ? "border-cyan-400/50 bg-cyan-400/10 text-cyan-200" : "border-slate-800 text-slate-400 hover:border-slate-600"].join(" ")}>{formatValue(value)}</button>
+              ))}</div>
+              <div className="ml-2 flex min-w-0 flex-wrap items-center gap-2 border-l border-slate-600/80 pl-4">
+                <span className="text-[9px] font-semibold uppercase tracking-wider text-slate-500">Tiers</span>
+                <ParallelizationTiers compact scale={scale} onSelect={(value) => setAvailableQubits(String(value))} />
+              </div>
+            </div>
+            <p id="capacity-help" className={validCapacity ? "sr-only" : "mt-1 text-[10px] text-rose-300"}>{validCapacity ? "Usable qubits per QPU stage. Changes apply on Run simulation." : "Enter a whole qubit count from 1 to 2,147,483,647."}</p>
           </div>
-          <p className="mt-4 text-xs leading-5 text-slate-500">
-            {workload === "quantum_mips" ? "Quantum-MIPS is a preview preset. Click Run simulation to request its availability from the engine." : "N = 15 in sequential mode runs a Qiskit Aer circuit. Parallel tiers and larger scales use an analytical hardware model. QPU capacity does not limit CPU/GPU emulation."}
-          </p>
+          {workload === "quantum_mips" && <p className="mt-2 text-[10px] text-slate-500">Quantum-MIPS is a preview preset. Click Run simulation to request its availability from the engine.</p>}
         </section>
 
         {loading && (
@@ -330,69 +338,85 @@ export default function Home() {
           </div>
         )}
 
-        <section aria-label="Simulation results" aria-busy={loading} className="space-y-6">
-          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+        <section aria-label="Simulation results" aria-busy={loading} className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-1 text-[10px]">
             <p className="text-slate-400">{data && snapshot ? <><span className="font-medium text-slate-200">{data.scale_label}</span><span className="mx-2 text-slate-700">/</span>{hardwareLabel(snapshot.request.hardware_profile)}</> : "Choose a configuration, then click Run simulation"}</p>
             <p className="flex items-center gap-1.5 text-slate-500">{loading
               ? <><LoaderCircle size={12} className="animate-spin" />{data ? "Updating · previous result shown" : "Waiting for engine telemetry"}</>
               : configurationChanged ? "Configuration changed · previous result shown" : data ? <><Check size={13} className="text-emerald-400" />Simulation {state.completed} complete</> : "No simulation results yet"}</p>
           </div>
-          <div aria-label="Primary bottleneck" className={["flex items-start gap-4 rounded-xl border p-5", data ? [style.border, style.background].join(" ") : "border-slate-800 bg-slate-900/50"].join(" ")}>
-            <span className={["mt-0.5", data ? style.text : "text-slate-500"].join(" ")}>{limited ? <CircleAlert size={22} /> : <Activity size={22} />}</span>
-            <div className="min-w-0">
-              <p className={["mb-1.5 text-[10px] font-semibold uppercase tracking-[0.18em]", data ? style.text : "text-slate-500"].join(" ")}>{data ? limited ? "Hardware limitation detected" : "Pipeline operating within limits" : "Primary bottleneck"}</p>
-              <h2 className="text-sm font-medium leading-6 text-slate-200 [overflow-wrap:anywhere]" data-testid="bottleneck">{data?.primary_bottleneck ?? "Run a simulation to evaluate this pipeline."}</h2>
-              {data && <p className="mt-1 text-xs leading-5 text-slate-400">{data.execution_mode === "LIVE_QISKIT_AER" ? "Circuit executed on a classical Qiskit Aer simulator. Reported stage timings and coherence are model estimates." : "Analytical projections of hardware requirements and coherence; no large-scale quantum circuit is executed."}</p>}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div data-testid="telemetry-summary-band" className="grid gap-3 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.6fr)]">
+          <div aria-label="Key performance indicators" className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-2">
             {[
               { label: "Pipeline latency", value: timing?.totalMs, unit: "ms", icon: Activity },
               { label: quantum?.node === "QPU" ? "Qubits allocated / available" : "Logical qubits", value: quantum?.node === "QPU" ? `${formatValue(quantum.metrics.qubits_allocated)} / ${formatValue(quantum.metrics.available_qubits)}` : quantum?.metrics.qubits_required, unit: "qubits", icon: Layers3 },
               { label: "Circuit depth", value: quantum?.metrics.circuit_depth, unit: "gates", icon: Workflow },
               { label: "Coherence survival", value: coherence?.survival, unit: "%", icon: Zap },
             ].map(({ label, value, unit, icon: Icon }) => (
-              <div key={label} className="min-w-0 rounded-xl border border-slate-800 bg-slate-900/35 p-4 sm:p-5">
-                <p className="flex items-center justify-between gap-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">{label}<Icon size={14} className="shrink-0 text-slate-600" /></p>
-                <p title={formatValue(value) + " " + unit} className="mt-3 break-words font-mono text-xl tracking-tight sm:text-2xl">{summaryValue(value)}<span className="ml-2 text-xs text-slate-500">{unit}</span></p>
-                {label === "Pipeline latency" && <dl aria-label="Pipeline latency breakdown" title="Includes separately reported QPU I/O; GPU launch/transfer overhead is counted once. Blocked stages contribute no time." className="mt-3 flex flex-wrap gap-x-4 gap-y-2 border-t border-slate-800/70 pt-2 text-[10px] leading-4">
-                  <div className="min-w-0 flex-1 basis-20"><dt className="text-slate-500">Pure Compute Time</dt><dd className="mt-1 font-mono text-slate-300">{formatValue(timing?.computeMs)} ms</dd></div>
-                  <div className="min-w-0 flex-1 basis-28"><dt className="text-slate-500">Interconnect &amp; State-Prep Overhead</dt><dd className="mt-1 font-mono text-slate-300">{formatValue(timing?.overheadMs)} ms</dd></div>
+              <div key={label} className="min-w-0 overflow-hidden rounded-lg border border-slate-800 bg-slate-900/35">
+                <div className="console-header flex items-center justify-between gap-2 border-b border-slate-700/80 px-2.5 py-1">
+                  <p className="text-[9px] font-bold uppercase leading-3 tracking-wider text-slate-100">{label}</p><Icon size={12} className="shrink-0 text-cyan-300/70" />
+                </div>
+                <div className="px-2.5 py-1.5">
+                <p title={formatValue(value) + " " + unit} className="break-words font-mono text-base leading-5 tracking-tight">{summaryValue(value)}<span className="ml-1 text-[10px] text-slate-500">{unit}</span></p>
+                {label === "Pipeline latency" && <dl aria-label="Pipeline latency breakdown" title="Includes separately reported QPU I/O; GPU launch/transfer overhead is counted once. Blocked stages contribute no time." className="mt-1 space-y-0.5 text-[9px] leading-3">
+                  <div className="flex flex-wrap justify-between gap-x-2"><dt className="text-slate-500">Pure Compute Time</dt><dd className="font-mono text-slate-300">{formatValue(timing?.computeMs)} ms</dd></div>
+                  <div className="flex flex-wrap justify-between gap-x-2"><dt className="text-slate-500">Interconnect &amp; State-Prep Overhead</dt><dd className="font-mono text-slate-300">{formatValue(timing?.overheadMs)} ms</dd></div>
                 </dl>}
-                {label === "Coherence survival" && <div className="mt-2 space-y-2">
-                  <p className="text-[10px] leading-4 text-slate-500">{coherence?.classical ? "Deterministic Classical Emulation" : "vs. 100% deterministic classical baseline"}</p>
-                  {coherence?.status && <span aria-label={`Coherence Budget Status: ${coherence.status}`} className={["inline-flex rounded-md border px-2 py-1 text-[9px] font-semibold tracking-wider", COHERENCE_BUDGET_STYLE[coherence.status]].join(" ")}>{coherence.status}</span>}
+                {label === "Coherence survival" && <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <p className="text-[9px] leading-3 text-slate-500">{coherence?.classical ? "Deterministic Classical Emulation" : "vs. 100% deterministic classical baseline"}</p>
+                  {coherence?.status && <span aria-label={`Coherence Budget Status: ${coherence.status}`} className={["inline-flex rounded border px-1.5 py-0.5 text-[8px] font-semibold tracking-wider", COHERENCE_BUDGET_STYLE[coherence.status]].join(" ")}>{coherence.status}</span>}
                 </div>}
+                </div>
               </div>
             ))}
           </div>
-
-          <LatencyProportion data={data} />
-          <OffloadVerdictStrip snapshot={snapshot} />
-
-          <div>
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-sm font-semibold">Execution pipeline</h2>
-              <p aria-label="Selected stage routing" className="flex items-center gap-2 font-mono text-[10px] text-slate-500">{PIPELINE.map(({ routingKey }, index) => <span key={routingKey} className="inline-flex items-center gap-2">{index > 0 && <ArrowRight size={12} />}<span className={NODE_STYLE[routing[routingKey]].text}>{routing[routingKey]}</span></span>)}</p>
+          <section aria-label="Telemetry & Co-Design Summary" className="min-w-0 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/35">
+            <h2 className="console-header border-b border-slate-700/80 px-3 py-1 text-[9px] font-bold uppercase tracking-wider text-cyan-100">Telemetry &amp; Co-Design Summary</h2>
+            <div className="grid divide-y divide-slate-800 sm:grid-cols-[minmax(0,0.85fr)_minmax(0,1.2fr)_minmax(0,1fr)] sm:divide-x sm:divide-y-0">
+              <div aria-label="Primary bottleneck" className={`min-w-0 p-3 ${data ? style.background : ""}`}>
+                <div className={`console-header -mx-3 -mt-3 -mb-px flex items-center gap-1.5 border-b border-slate-700/80 px-3 pt-3 ${data ? style.text : "text-cyan-300"}`}>{limited ? <CircleAlert size={14} className="shrink-0" /> : <Activity size={14} className="shrink-0" />}<p className="text-[9px] font-bold uppercase tracking-wider text-slate-100">{data ? limited ? "Hardware limitation detected" : "Pipeline operating within limits" : "Primary bottleneck"}</p></div>
+                <h3 className="mt-2 text-[10px] font-medium leading-4 text-slate-200 [overflow-wrap:anywhere]" data-testid="bottleneck">{data?.primary_bottleneck ?? "Run a simulation to evaluate this pipeline."}</h3>
+                <div className="mt-1 flex items-center gap-1 text-[9px] text-slate-500">Modeled telemetry<InfoPopover label="About telemetry estimates"><p>{data?.execution_mode === "LIVE_QISKIT_AER" ? "Circuit executed on a classical Qiskit Aer simulator. Reported stage timings and coherence are model estimates." : "Analytical projections of hardware requirements and coherence; no large-scale quantum circuit is executed."}</p></InfoPopover></div>
+              </div>
+              <OffloadVerdictStrip compact snapshot={snapshot} />
+              <LatencyProportion compact data={data} />
             </div>
-            <div className="grid gap-4 lg:grid-cols-3">{PIPELINE.map(({ key, routingKey }, index) => (
+          </section>
+          </div>
+
+          <section aria-label="Execution pipeline">
+            <div className="mb-[7px] flex flex-wrap items-center justify-between gap-2 border-b border-slate-700/80">
+              <div className="flex flex-wrap items-center gap-3"><h2 className="text-sm font-semibold text-cyan-100">Execution pipeline</h2>
+                <p aria-label="Selected stage routing" className="flex items-center gap-1.5 font-mono text-[10px] text-slate-500">{PIPELINE.map(({ routingKey }, index) => <span key={routingKey} className="inline-flex items-center gap-1.5">{index > 0 && <ArrowRight size={10} />}<span className={NODE_STYLE[routing[routingKey]].text}>{routing[routingKey]}</span></span>)}</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <p role="status" aria-label="Pipeline configuration status" className={`text-[10px] ${configurationChanged ? "text-amber-300" : "text-slate-500"}`}>{loading ? "Running submitted configuration…" : configurationChanged ? "Uncommitted changes" : data ? "Up to date" : "Ready to run"}</p>
+                <button type="button" aria-label={loading ? "Simulating from pipeline" : "Run simulation from pipeline"} disabled={loading || !validCapacity} onClick={runSimulation} className="inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-3 py-1.5 text-[11px] font-semibold text-cyan-200 hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-50">{loading ? <LoaderCircle size={12} className="animate-spin" /> : <Play size={12} />}{loading ? "Simulating…" : "Run simulation"}</button>
+              </div>
+            </div>
+            <div className="grid gap-3 lg:grid-cols-3">{PIPELINE.map(({ key, routingKey }, index) => (
               <div key={key} className="relative min-w-0">
                 <PipelineCard index={index} stage={data?.stages[key]} selectedNode={routing[routingKey]} onNodeChange={(node) => updateNode(routingKey, node)} pending={loading} />
                 {index < 2 && <span aria-hidden="true" className="pointer-events-none absolute -bottom-3 left-1/2 z-10 grid size-6 -translate-x-1/2 place-items-center rounded-full border border-slate-700 bg-slate-950 text-slate-500 lg:-right-5 lg:bottom-auto lg:left-auto lg:top-1/2 lg:-translate-y-1/2 lg:translate-x-0"><ArrowRight size={12} className="hidden lg:block" /><ArrowDown size={12} className="lg:hidden" /></span>}
               </div>
             ))}</div>
-          </div>
+          </section>
         </section>
 
-        <section aria-label="State delta tracker" className="mt-8 overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/35">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-5 py-5 sm:px-6">
-            <div className="flex items-center gap-3"><GitCompareArrows size={18} className="text-slate-400" /><div><h2 className="text-sm font-semibold">State delta tracker</h2><p className="mt-1 text-xs text-slate-500">Compare consecutive successful runs. Last six transitions, this session.</p></div></div>
+        <div data-testid="analytics-row" className="mt-4 grid items-start gap-4 lg:grid-cols-2">
+        <TelemetryAdvisor key={snapshot?.id ?? "idle"} snapshot={snapshot} previous={latest?.before}
+          onInsight={saveRun} onPersisted={() => { void persistentHistory.refresh(); }} simulationLoading={loading} saving={persistentHistory.savingCount > 0}
+          savedInsight={persistentHistory.runs.find((run) => run.id === snapshot?.id)?.advisorInsight}
+          persistenceMessage={persistentHistory.message} />
+        <section aria-label="State delta tracker" className="min-w-0 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/35">
+          <div className="console-header flex flex-wrap items-center justify-between gap-2 border-b border-slate-700/80 p-3">
+            <div className="flex items-center gap-2"><GitCompareArrows size={16} className="text-cyan-300" /><div><h2 className="text-sm font-semibold text-cyan-100">State delta tracker</h2><p className="mt-0.5 text-[10px] text-slate-500">Consecutive successful runs · last six transitions</p></div></div>
             <span className="rounded-md bg-slate-800 px-2 py-1 font-mono text-[10px] text-slate-400">{state.history.length} TRANSITIONS</span>
           </div>
           {latest ? (
-            <div className="px-5 py-5 sm:px-6">
-              <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
+            <div className="max-h-[520px] overflow-y-auto p-3">
+              <div className="mb-3 flex flex-wrap items-center gap-2 text-[10px]">
                 <span className="text-slate-500">Latest change</span>
                 <span className="rounded-md border border-slate-700 px-2 py-1 font-mono text-slate-300">{scaleLabel(latest.before.request.scale_param)}</span>
                 <ArrowRight size={12} className="text-slate-500" />
@@ -400,27 +424,24 @@ export default function Home() {
                 <span className="text-slate-500">{hardwareLabel(latest.after.request.hardware_profile)}</span>
               </div>
               <DeltaTable changes={latest.changes} />
-              {state.history.length > 1 && <div className="mt-5 space-y-2">{state.history.slice(1).map((transition) => (
-                <details key={transition.id} className="rounded-lg border border-slate-800 px-4 py-3">
+              {state.history.length > 1 && <div className="mt-3 space-y-2">{state.history.slice(1).map((transition) => (
+                <details key={transition.id} className="rounded-lg border border-slate-800 px-3 py-2">
                   <summary className="cursor-pointer text-xs text-slate-400">Run {transition.id - 1} → {transition.id} · {scaleLabel(transition.before.request.scale_param)} → {scaleLabel(transition.after.request.scale_param)} · {transition.changes.length} changes</summary>
                   <div className="mt-4"><DeltaTable changes={transition.changes} /></div>
                 </details>
               ))}</div>}
             </div>
           ) : (
-            <div className="flex flex-col items-center gap-2 px-6 py-10 text-center">
-              <GitCompareArrows size={24} className="mb-1 text-slate-600" />
-              <p className="text-sm text-slate-400">{data ? "Baseline captured. Adjust your configuration and run again to compare results." : "Your first successful run establishes a baseline."}</p>
-              <p className="text-xs text-slate-600">Scale, hardware, status, latency, and stage metrics are tracked automatically.</p>
+            <div className="flex flex-col items-center gap-2 p-5 text-center">
+              <GitCompareArrows size={20} className="text-slate-600" />
+              <p className="text-xs text-slate-400">{data ? "Baseline captured. Adjust your configuration and run again to compare results." : "Your first successful run establishes a baseline."}</p>
+              <p className="text-[10px] text-slate-600">Scale, hardware, status, latency, and stage metrics are tracked automatically.</p>
             </div>
           )}
         </section>
-        <TelemetryAdvisor key={snapshot?.id ?? "idle"} snapshot={snapshot} previous={latest?.before}
-          onInsight={saveRun} onPersisted={() => { void persistentHistory.refresh(); }} simulationLoading={loading} saving={persistentHistory.savingCount > 0}
-          savedInsight={persistentHistory.runs.find((run) => run.id === snapshot?.id)?.advisorInsight}
-          persistenceMessage={persistentHistory.message} />
+        </div>
         <PersistentRunHistory history={persistentHistory} />
-        <footer className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-slate-800/70 pt-5 text-[10px] leading-5 text-slate-500">
+        <footer className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-800/70 pt-3 text-[10px] leading-5 text-slate-500">
           <p className="flex items-center gap-2"><Radio size={12} />{data?.execution_mode.replaceAll("_", " ") ?? "AWAITING TELEMETRY"}</p>
           <p>Simulated workloads. Estimated hardware limits. No physical QPU connection.</p>
         </footer>
@@ -433,13 +454,13 @@ function DeltaTable({ changes }: { changes: Transition["changes"] }) {
   if (!changes.length) return <p className="text-xs text-slate-400">No metric changes from the previous successful run.</p>;
   return (
     <div role="region" aria-label="Metric changes" tabIndex={0} className="overflow-x-auto rounded-sm">
-      <table className="w-full min-w-[480px] table-fixed text-left text-xs">
-        <thead><tr className="border-b border-slate-800 text-[10px] uppercase tracking-wider text-slate-500"><th className="pb-3 pr-4 font-medium">Parameter / metric</th><th className="pb-3 pr-4 font-medium">Previous</th><th className="pb-3 font-medium">Current</th></tr></thead>
+      <table className="w-full min-w-[420px] table-fixed text-left text-[11px]">
+        <thead><tr className="border-b border-slate-800 text-[10px] uppercase tracking-wider text-slate-500"><th className="pb-2 pr-3 font-medium">Parameter / metric</th><th className="pb-2 pr-3 font-medium">Previous</th><th className="pb-2 font-medium">Current</th></tr></thead>
         <tbody>{changes.map((change) => (
           <tr key={change.label} className="border-b border-slate-800/60 last:border-0">
-            <th scope="row" className="py-3 pr-4 font-normal capitalize text-slate-400 [overflow-wrap:anywhere]">{change.label}</th>
-            <td className="py-3 pr-4 font-mono text-slate-400 [overflow-wrap:anywhere]">{change.before}</td>
-            <td className="py-3 font-mono text-slate-200 [overflow-wrap:anywhere]">{change.after}</td>
+            <th scope="row" className="py-1.5 pr-3 font-normal capitalize text-slate-400 [overflow-wrap:anywhere]">{change.label}</th>
+            <td className="py-1.5 pr-3 font-mono text-slate-400 [overflow-wrap:anywhere]">{change.before}</td>
+            <td className="py-1.5 font-mono text-slate-200 [overflow-wrap:anywhere]">{change.after}</td>
           </tr>
         ))}</tbody>
       </table>
