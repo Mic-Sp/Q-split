@@ -90,6 +90,16 @@ test("advisor route handles Gemini success, missing keys, limits, timeouts, and 
       const result = await response.json();
       assert.equal(result.insight.fallbackReason, expected);
       assert.equal(result.insight.source, mode === "success" ? "gemini" : "fallback");
+      const { telemetry, usage } = result.insight;
+      assert.ok(Number.isFinite(telemetry.latencyMs) && telemetry.latencyMs >= 0);
+      if (mode === "success") {
+        assert.equal(usage.tokenSource, "estimated");
+        assert.ok(telemetry.inputTokens > 0 && telemetry.outputTokens > 0);
+        assert.equal(telemetry.totalTokens, telemetry.inputTokens + telemetry.outputTokens);
+        assert.ok(telemetry.estimatedCostUsd > 0);
+      } else {
+        assert.deepEqual([telemetry.inputTokens, telemetry.outputTokens, telemetry.totalTokens, telemetry.estimatedCostUsd], [0, 0, 0, 0]);
+      }
       assert.ok(!JSON.stringify(result).includes("test-server-secret"));
     }
     assert.equal((await POST(request({}))).status, 400);

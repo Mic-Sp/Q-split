@@ -8,6 +8,20 @@ export interface AdvisorSections {
 
 export type FallbackReason = "missing_key" | "rate_limited" | "timeout" | "provider_error" | "invalid_response" | "network_error";
 
+export interface AdvisorUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  tokenSource: "provider" | "estimated" | "none";
+  estimatedCostUsd: number;
+}
+
+export interface AdvisorTelemetry extends AdvisorUsage {
+  latencyMs: number | null;
+  costSavedUsd: number;
+  shared: boolean;
+}
+
 export interface AdvisorInsight {
   runId: string;
   previousRunId: string | null;
@@ -18,6 +32,10 @@ export interface AdvisorInsight {
   notice: string | null;
   sections: AdvisorSections;
   cacheKey?: string;
+  // Original generation metrics survive cache hits and history round trips.
+  usage?: AdvisorUsage;
+  // Current lookup metrics; cache/fallback/shared responses consume no new tokens.
+  telemetry?: AdvisorTelemetry;
 }
 
 export interface AdvisorResponse {

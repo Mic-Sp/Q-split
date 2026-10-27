@@ -252,7 +252,7 @@ sections. Gemini calls time out after 18 seconds; the browser also handles an
 unreachable advisor endpoint. Fallbacks remain usable and can be saved. Analysis
 never blocks the simulator. Raw provider errors and secrets are not exposed.
 Response metadata distinguishes `source: "gemini"`, `source: "cached"`, and
-`source: "fallback"`, displayed as **Live AI**, **Cached**, and **Local Fallback**;
+`source: "fallback"`, displayed as **Live AI**, **Cached DB Hit**, and **Deterministic Fallback**;
 fallbacks use `model: null`, a specific `fallbackReason` (including
 `invalid_response` for failed output validation), and a human-readable `notice`.
 
@@ -263,7 +263,7 @@ generation constraints. Display text and timestamps do not affect cache hits.
 A hit must pass metadata and current output validation, match the comparison,
 and originate from Gemini; local fallbacks and legacy entries without a matching
 fingerprint never block a new AI request. A validated hit returns immediately
-as **Cached**, even when the Gemini key is unavailable. Only the latest analysis
+as **Cached DB Hit**, even when the Gemini key is unavailable. Only the latest analysis
 is stored for each run; changing comparison state replaces it after generation.
 
 Fresh validated Gemini diagnostics are saved on the server to the existing run
@@ -278,7 +278,8 @@ save POST. Delayed run-save responses cannot erase newer insights in the UI.
 
 The frontend uses a synchronous in-flight guard as well as a disabled loading
 button. Concurrent identical endpoint requests share one generation within a
-server process and return the reused result as Cached. Completed results live
+server process. The shared response keeps its actual source, is marked
+`telemetry.shared: true`, and reports no additional API tokens or cost. Completed results live
 in Neon; no unbounded in-memory result cache is kept. This coalescing is process
 local, not a distributed lock: simultaneous cold misses on separate server
 instances can still generate independently. Persistent cache hits work across
@@ -287,10 +288,31 @@ instances once saved.
 The existing nullable JSONB column was added by migration
 `20261026010000_advisor_insights` and applied to the configured Neon database.
 This cache adds no schema migration. Saved diagnostics appear automatically
-inside expanded history rows after a reload, with Cached or Local Fallback
+inside expanded history rows after a reload, with Cached DB Hit or Deterministic Fallback
 badges and no generation request. If the database is unavailable,
 the insight stays visible in this tab and **Retry saving** retries without
 another Gemini call. Unsaved insights are lost on reload, like unsaved runs.
+
+The compact **AI Inference Telemetry & Unit Economics** strip shows execution
+source, current API input/output/total tokens, estimated USD cost to six decimal
+places, and lookup latency. `insight.usage` holds the original generation counts
+and cost; `insight.telemetry` holds the current lookup's counts, cost, savings,
+latency in milliseconds, and shared-response flag. Both survive JSONB persistence
+and history serialization without a schema migration. Cache hits preserve
+`usage` while reporting zero new API tokens, `$0.000000 (Cache Saved)`, and the
+original estimated cost saved. Historical views also show original token counts;
+their lookup latency is unavailable rather than reusing an old inference duration.
+
+Live counts come from Gemini `usageMetadata` (`promptTokenCount`,
+`candidatesTokenCount`, and `totalTokenCount`); generated thinking tokens are
+included in output usage when present. Missing counts use a labeled estimate of
+one token per four characters, including system and user text for input.
+Estimated cost uses the configured accounting rates of **$0.15 per million input
+tokens** and **$0.60 per million output tokens**; these fixed rates also apply to
+model overrides. Fallback responses report zero API tokens and zero cost.
+Lookup latency covers request validation, database read, and generation up to the
+available diagnostic, excluding the following database write. Older saved
+diagnostics remain readable with unavailable original token metrics.
 
 Checks that do **not** apply database migrations:
 

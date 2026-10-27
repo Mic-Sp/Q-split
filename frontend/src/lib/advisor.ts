@@ -1,6 +1,7 @@
 import { formatValue, PIPELINE, qubitThresholds, totalLatency } from "@/lib/telemetry";
 import type { CompletedRun } from "@/types/run-history";
 import type { AdvisorInsight, AdvisorSections, FallbackReason } from "@/types/advisor";
+import { parseAdvisorTelemetry, parseAdvisorUsage, zeroUsage } from "@/lib/advisor-telemetry";
 
 export function parseAdvisorSections(value: unknown): AdvisorSections {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid advisor diagnostic.");
@@ -22,9 +23,13 @@ export function parseAdvisorInsight(value: unknown, runId: string): AdvisorInsig
       (["gemini", "cached"].includes(insight.source) && (!insight.model || insight.fallbackReason !== null)) ||
       (insight.cacheKey !== undefined && (typeof insight.cacheKey !== "string" || !/^[a-f0-9]{64}$/.test(insight.cacheKey))) ||
       (insight.source === "fallback" && !insight.fallbackReason)) throw new Error("Invalid advisor metadata.");
+  const usage = insight.usage === undefined ? undefined : parseAdvisorUsage(insight.usage);
+  if (insight.source === "fallback" && usage && usage.totalTokens !== 0) throw new Error("Invalid fallback usage.");
+  const telemetry = insight.telemetry === undefined ? undefined : parseAdvisorTelemetry(insight.telemetry, insight.source, usage);
   return { runId, previousRunId: insight.previousRunId, source: insight.source, model: insight.model,
     generatedAt: insight.generatedAt, fallbackReason: insight.fallbackReason, notice: insight.notice,
-    sections: parseAdvisorSections(insight.sections), ...(insight.cacheKey === undefined ? {} : { cacheKey: insight.cacheKey }) };
+    sections: parseAdvisorSections(insight.sections), ...(insight.cacheKey === undefined ? {} : { cacheKey: insight.cacheKey }),
+    ...(usage ? { usage } : {}), ...(telemetry ? { telemetry } : {}) };
 }
 
 const notices: Record<FallbackReason, string> = {
@@ -62,6 +67,7 @@ export function deterministicInsight(current: CompletedRun, previous: CompletedR
     ? `Minimum ${formatValue(thresholds.minimum)} qubits (2n + 3; N = 15 uses 8). Allocated / available: ${formatValue(m.qubits_allocated)} / ${formatValue(available)}. Tier: ${formatValue(m.parallelization_tier)}; depth ${formatValue(m.circuit_depth)} (${formatValue(m.depth_complexity)}), QPU latency ${formatValue(quantum.latency_ms)} ms, coherence ${formatValue(m.coherence_survival_pct)}%. Sequential / Windowed / Carry-Lookahead use minimum / 3n / ceil(5.5n) qubits. Capacity above ${formatValue(thresholds.ceiling)} stays idle.`
     : `The quantum kernel is emulated on ${quantum.node}; QPU capacity and ancilla tiers do not change this classical statevector path. Baseline width ${formatValue(m.qubits_required)} qubits; depth ${formatValue(m.circuit_depth)}; kernel latency ${formatValue(quantum.latency_ms)} ms. Its relevant limit is CPU/GPU statevector memory, not physical QPU coherence.`;
   return { runId: current.id, previousRunId: previous?.id ?? null, source: "fallback", model: null,
+    usage: zeroUsage(),
     generatedAt: new Date().toISOString(), fallbackReason: reason, notice: notices[reason], sections: {
       routingDiagnosis: `${telemetry.scale_label}, ${request.hardware_profile}: ${route}. Primary bottleneck: ${telemetry.primary_bottleneck}. ${unsupported ? "Classical host routines cannot execute on QPU. " : ""}${memoryBlocked ? "Statevector memory grows as 16 × 2^q bytes. " : ""}${stages.some((stage) => stage.node === "GPU") ? "GPU timings include illustrative launch/transfer overhead, not measured PCIe throughput. " : ""}${problems || "All stages report optimal status."}${delta}`,
       spaceTimeTradeOff: spaceTime,

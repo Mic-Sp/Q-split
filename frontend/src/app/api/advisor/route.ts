@@ -3,6 +3,7 @@ import { advisorDigest, AdvisorPayloadTooLarge, readAdvisorRequest } from "@/lib
 import { ADVISOR_OUTPUT_TOKENS, ADVISOR_RESPONSE_SCHEMA, ADVISOR_TEMPERATURE, ADVISOR_TIMEOUT_MS, parseGeneratedOutput } from "@/lib/advisor-output";
 import type { AdvisorInsight, AdvisorRequest } from "@/types/advisor";
 import { adviseWithCache } from "@/lib/advisor-cache";
+import { geminiUsage, withLookupTelemetry } from "@/lib/advisor-telemetry";
 
 const headers = { "Cache-Control": "no-store" };
 const SYSTEM_INSTRUCTION = `You are a Principal Quantum-Classical Systems Architect diagnosing Q-Split simulations.
@@ -13,6 +14,7 @@ Model facts: CPU/GPU/QPU stage targets are independent. Classical pre/post routi
 For n-bit Shor: minimum 2n+3 logical qubits (8 for N=15). Less capacity blocks a QPU stage; zero execution time does not mean it is fast. Sequential allocates the minimum with O(n^3) depth. At 3n qubits, Windowed Parallel allocates 3n with O(n^2 log n) depth. At ceil(5.5n), Carry-Lookahead allocates ceil(5.5n) with O(n log^2 n) depth. Extra qubits past that ceiling are idle. These are modeled usable qubits, excluding physical error-correction overhead/connectivity. 98% reduction is scale-dependent, not universal. Analytical depth coefficient 4.5, log base2; N15 sequential uses a compiled Aer reference. QPU time is an estimate. NISQ coherence=100*exp(-depth/1200); Ideal Noise-Free=100%, not a physical error-corrected device. More qubits can reduce depth but do not guarantee NISQ success at RSA scale.`;
 
 export async function POST(request: Request) {
+  const started = performance.now();
   let input: AdvisorRequest;
   try {
     input = await readAdvisorRequest(request);
@@ -21,11 +23,14 @@ export async function POST(request: Request) {
     return Response.json({ message: "Provide a valid current completed run and, optionally, a valid previous run." }, { status: 400, headers });
   }
   const model = process.env.GEMINI_MODEL?.trim() || "gemini-3.5-flash-lite";
-  if (!/^[a-zA-Z0-9._-]{1,100}$/.test(model)) return Response.json({ insight: deterministicInsight(input.current, input.previous, "provider_error") }, { headers });
+  if (!/^[a-zA-Z0-9._-]{1,100}$/.test(model)) return Response.json({ insight: withLookupTelemetry(deterministicInsight(input.current, input.previous, "provider_error"), Math.round(performance.now() - started)) }, { headers });
   const generate = async (): Promise<AdvisorInsight> => {
     const fallback = (reason: Parameters<typeof deterministicInsight>[2]) => deterministicInsight(input.current, input.previous, reason);
     const key = process.env.GEMINI_API_KEY?.trim();
     if (!key || /REPLACE_ME|YOUR_API_KEY/.test(key)) return fallback("missing_key");
+    const prompt = JSON.stringify({ current: advisorDigest(input.current), previous: input.previous ? advisorDigest(input.previous) : null,
+      suggestedNextExperiment: deterministicInsight(input.current, input.previous, "missing_key").sections.optimizationRecommendation,
+    });
     try {
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
         // Shared generation outlives any single caller; the provider deadline
@@ -34,9 +39,7 @@ export async function POST(request: Request) {
         headers: { "Content-Type": "application/json", "x-goog-api-key": key },
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
-          contents: [{ role: "user", parts: [{ text: JSON.stringify({ current: advisorDigest(input.current), previous: input.previous ? advisorDigest(input.previous) : null,
-            suggestedNextExperiment: deterministicInsight(input.current, input.previous, "missing_key").sections.optimizationRecommendation,
-          }) }] }],
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
           generationConfig: { temperature: ADVISOR_TEMPERATURE, candidateCount: 1, maxOutputTokens: ADVISOR_OUTPUT_TOKENS,
             responseMimeType: "application/json", responseJsonSchema: ADVISOR_RESPONSE_SCHEMA },
         }),
@@ -50,7 +53,9 @@ export async function POST(request: Request) {
         const text = candidate.content?.parts?.filter((part: { text?: string; thought?: boolean }) => !part.thought && typeof part.text === "string").map((part: { text: string }) => part.text).join("");
         const sections = parseGeneratedOutput(text);
         const insight: AdvisorInsight = { runId: input.current.id, previousRunId: input.previous?.id ?? null,
-          source: "gemini", model, generatedAt: new Date().toISOString(), fallbackReason: null, notice: null, sections };
+          source: "gemini", model, generatedAt: new Date().toISOString(), fallbackReason: null, notice: null, sections,
+          usage: geminiUsage(result.usageMetadata, SYSTEM_INSTRUCTION + prompt, text),
+        };
         return insight;
       } catch (error) {
         return fallback(error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name) ? "timeout" : "invalid_response");
@@ -61,5 +66,5 @@ export async function POST(request: Request) {
   };
   const policy = JSON.stringify({ system: SYSTEM_INSTRUCTION, temperature: ADVISOR_TEMPERATURE,
     outputTokens: ADVISOR_OUTPUT_TOKENS, schema: ADVISOR_RESPONSE_SCHEMA });
-  return Response.json(await adviseWithCache(input, model, policy, generate), { headers });
+  return Response.json(await adviseWithCache(input, model, policy, generate, started), { headers });
 }

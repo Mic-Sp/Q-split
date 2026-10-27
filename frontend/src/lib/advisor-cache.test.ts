@@ -5,6 +5,8 @@ import { advisorCacheKey, adviseWithCache } from "@/lib/advisor-cache";
 import { deterministicInsight, parseAdvisorInsight } from "@/lib/advisor";
 import { validateAdvisorRequest } from "@/lib/advisor-input";
 import { DATABASE_CLIENT_SCHEMA } from "@/lib/db";
+import { createRunRecord, serializeRun } from "@/lib/run-record";
+import type { SimulationRun } from "@/generated/prisma/client";
 import type { PrismaClient } from "@/generated/prisma/client";
 import type { AdvisorInsight } from "@/types/advisor";
 
@@ -19,7 +21,8 @@ const fixture = () => ({ current: {
 } });
 const sections = { routingDiagnosis: "CPU → QPU → CPU routing completes without a critical bottleneck.", spaceTimeTradeOff: "28 qubits reach the carry-lookahead ceiling for N = 21.", optimizationRecommendation: "Compare the NISQ hardware profile at the same capacity and scale." };
 const request = (value: unknown) => new Request("http://localhost/api/advisor", { method: "POST", body: JSON.stringify(value) });
-const response = () => Response.json({ candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify(sections) }] } }] });
+const response = () => Response.json({ candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify(sections) }] } }],
+  usageMetadata: { promptTokenCount: 1000, candidatesTokenCount: 90, totalTokenCount: 1090 } });
 
 function repository(t: TestContext) {
   const global = globalThis as unknown as { qSplitDatabase?: { url: string; client: PrismaClient; schemaVersion?: string } };
@@ -58,9 +61,21 @@ test("validated Neon cache hits bypass Gemini, including when its API key is abs
   assert.equal(first.persistence.status, "saved");
   assert.match(first.insight.cacheKey, /^[a-f0-9]{64}$/);
   assert.deepEqual(rows.get(fixture().current.id)!.advisorInsight, first.insight, "Server persists before returning");
+  assert.deepEqual(first.insight.usage, { inputTokens: 1000, outputTokens: 90, totalTokens: 1090, tokenSource: "provider", estimatedCostUsd: 0.000204 });
+  assert.equal(first.insight.telemetry.estimatedCostUsd, 0.000204);
+  assert.equal(first.insight.telemetry.totalTokens, 1090);
+  assert.ok(Number.isFinite(first.insight.telemetry.latencyMs) && first.insight.telemetry.latencyMs >= 0);
   process.env.GEMINI_API_KEY = "";
   const second = await (await POST(request(fixture()))).json();
   assert.equal(second.insight.source, "cached");
+  assert.deepEqual(second.insight.usage, first.insight.usage);
+  assert.deepEqual([second.insight.telemetry.inputTokens, second.insight.telemetry.outputTokens, second.insight.telemetry.totalTokens], [0, 0, 0]);
+  assert.equal(second.insight.telemetry.estimatedCostUsd, 0);
+  assert.equal(second.insight.telemetry.costSavedUsd, first.insight.usage.estimatedCostUsd);
+  assert.ok(Number.isFinite(second.insight.telemetry.latencyMs) && second.insight.telemetry.latencyMs >= 0);
+  const record = createRunRecord({ ...validateAdvisorRequest(fixture()).current, advisorInsight: second.insight });
+  const historical = serializeRun({ ...record, createdAt: new Date() } as SimulationRun);
+  assert.deepEqual(historical.advisorInsight, second.insight, "History validation and serialization retain original usage and free lookup metrics");
   assert.equal(parseAdvisorInsight(second.insight, fixture().current.id).cacheKey, first.insight.cacheKey);
   assert.equal(second.insight.generatedAt, first.insight.generatedAt);
   assert.deepEqual(second.insight.sections, first.insight.sections);
@@ -119,7 +134,12 @@ test("concurrent requests coalesce into one database lookup, generation, and wri
   await new Promise((resolve) => setTimeout(resolve, 0)); release();
   const responses = await Promise.all([first, second]);
   const results = await Promise.all(responses.map((result) => result.json()));
-  assert.deepEqual(results.map((result) => result.insight.source), ["gemini", "cached"]);
+  assert.deepEqual(results.map((result) => result.insight.source), ["gemini", "gemini"]);
+  assert.equal(results[0].insight.telemetry.shared, false);
+  assert.equal(results[1].insight.telemetry.shared, true);
+  assert.equal(results[1].insight.telemetry.estimatedCostUsd, 0);
+  assert.equal(results[1].insight.telemetry.totalTokens, 0);
+  assert.deepEqual(results[0].insight.usage, results[1].insight.usage);
   assert.equal(results[0].insight.generatedAt, results[1].insight.generatedAt);
   assert.equal(calls, 1); assert.equal(stats.reads, 1); assert.equal(stats.writes, 1);
 });

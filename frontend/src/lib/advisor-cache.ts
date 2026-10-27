@@ -6,6 +6,7 @@ import { validateGeneratedSections } from "@/lib/advisor-output";
 import { getDatabase, withDatabaseTimeout } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import type { AdvisorInsight, AdvisorRequest, AdvisorResponse } from "@/types/advisor";
+import { cachedInsight, withLookupTelemetry } from "@/lib/advisor-telemetry";
 
 const CACHE_VERSION = "validated-advisor-v1";
 const CACHE_TIMEOUT_MS = 1500;
@@ -22,12 +23,15 @@ export function advisorCacheKey(input: AdvisorRequest, model: string, policy: st
 }
 
 export async function adviseWithCache(input: AdvisorRequest, model: string, policy: string,
-  generate: () => Promise<AdvisorInsight>): Promise<AdvisorResponse> {
+  generate: () => Promise<AdvisorInsight>, started = performance.now()): Promise<AdvisorResponse> {
+  const elapsed = () => Math.round(performance.now() - started);
   const cacheKey = advisorCacheKey(input, model, policy);
   const active = inFlight.get(cacheKey);
   if (active) {
     const result = await active;
-    return { ...result, insight: result.insight.source === "gemini" ? { ...result.insight, source: "cached" } : result.insight };
+    // Sharing an in-flight generation incurs no additional API charge, but is
+    // not a Neon read-through cache hit.
+    return { ...result, insight: withLookupTelemetry(result.insight, elapsed(), result.insight.source === "gemini") };
   }
   const work = (async (): Promise<AdvisorResponse> => {
     let database: ReturnType<typeof getDatabase> = null;
@@ -45,7 +49,7 @@ export async function adviseWithCache(input: AdvisorRequest, model: string, poli
             if (saved.source !== "fallback" && saved.cacheKey === cacheKey && saved.model === model &&
                 saved.previousRunId === (input.previous?.id ?? null)) {
               const sections = validateGeneratedSections(saved.sections);
-              return { insight: { ...saved, source: "cached", notice: null, sections }, persistence: { status: "saved" } };
+              return { insight: cachedInsight({ ...saved, notice: null, sections }, elapsed()), persistence: { status: "saved" } };
             }
           } catch { /* Invalid, outdated, or legacy output is a cache miss. */ }
         }
@@ -54,8 +58,8 @@ export async function adviseWithCache(input: AdvisorRequest, model: string, poli
       persistence = { status: "unavailable", message: "Advisor history is temporarily unavailable. Analysis still works; saving can be retried from Persistent Run History." };
     }
     const generated = await generate();
-    if (generated.source !== "gemini") return { insight: generated, persistence };
-    const insight: AdvisorInsight = { ...generated, cacheKey, sections: validateGeneratedSections(generated.sections) };
+    if (generated.source !== "gemini") return { insight: withLookupTelemetry(generated, elapsed()), persistence };
+    const insight = withLookupTelemetry({ ...generated, cacheKey, sections: validateGeneratedSections(generated.sections) }, elapsed());
     if (database) {
       try {
         // Never create a pruned simulation record here: the dashboard saves the

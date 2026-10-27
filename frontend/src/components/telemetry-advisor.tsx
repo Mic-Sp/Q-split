@@ -3,8 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { BrainCircuit, CircleAlert, LoaderCircle, Sparkles } from "lucide-react";
 import { AdvisorDiagnostic } from "@/components/advisor-diagnostic";
-import { AdvisorSourceBadge } from "@/components/advisor-source-badge";
+import { AdvisorTelemetryBar } from "@/components/advisor-telemetry";
 import { deterministicInsight, parseAdvisorInsight } from "@/lib/advisor";
+import { cachedInsight, withLookupTelemetry } from "@/lib/advisor-telemetry";
 import type { Snapshot } from "@/lib/telemetry";
 import type { AdvisorInsight, AdvisorResponse } from "@/types/advisor";
 import type { CompletedRun } from "@/types/run-history";
@@ -33,7 +34,7 @@ export function TelemetryAdvisor({ snapshot, previous, onInsight, onPersisted, s
   useEffect(() => () => controller.current?.abort(), []);
   const comparisonId = compare && previous ? previous.id : null;
   const available = generated?.previousRunId === comparisonId ? generated : savedInsight?.previousRunId === comparisonId ? savedInsight : null;
-  const insight = available === savedInsight && available && available.source !== "fallback" ? { ...available, source: "cached" as const } : available;
+  const insight = available === savedInsight && available ? cachedInsight(available) : available;
 
   const generate = async () => {
     // A synchronous guard protects rapid clicks before React commits loading.
@@ -44,6 +45,7 @@ export function TelemetryAdvisor({ snapshot, previous, onInsight, onPersisted, s
     const current = completedRun(snapshot);
     const prior = compare && previous ? completedRun(previous) : undefined;
     setLoading(true);
+    const started = performance.now();
     let result: AdvisorInsight;
     let persisted = false;
     let message: string | null = null;
@@ -61,7 +63,7 @@ export function TelemetryAdvisor({ snapshot, previous, onInsight, onPersisted, s
         message = body.persistence?.message ?? null;
       } catch (error) {
         if (active.signal.aborted) return;
-        result = deterministicInsight(current, prior, error instanceof Error && error.name === "TimeoutError" ? "timeout" : "network_error");
+        result = withLookupTelemetry(deterministicInsight(current, prior, error instanceof Error && error.name === "TimeoutError" ? "timeout" : "network_error"), Math.round(performance.now() - started));
       }
       if (active.signal.aborted) return;
       setGenerated(result); setServerSaved(persisted); setCacheMessage(message);
@@ -77,7 +79,7 @@ export function TelemetryAdvisor({ snapshot, previous, onInsight, onPersisted, s
   return <section aria-label="AI Telemetry Advisor" className="mt-8 rounded-2xl border border-cyan-400/20 bg-slate-900/40">
     <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 p-5 sm:px-6">
       <div className="flex items-center gap-3"><BrainCircuit size={20} className="shrink-0 text-cyan-400" /><div>
-        <div className="flex flex-wrap items-center gap-2"><h2 className="text-sm font-semibold">AI Telemetry Advisor</h2>{insight && <AdvisorSourceBadge source={insight.source} />}</div>
+        <h2 className="text-sm font-semibold">AI Telemetry Advisor</h2>
         <p className="mt-1 text-xs leading-5 text-slate-400">Architecture diagnostics for the completed simulation. Generated on demand.</p>
       </div></div>
       <button type="button" disabled={!snapshot || loading || simulationLoading} onClick={() => { void generate(); }} className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-4 py-2 text-xs font-semibold text-cyan-200 hover:bg-cyan-400/15 disabled:cursor-not-allowed disabled:opacity-50">
@@ -90,6 +92,7 @@ export function TelemetryAdvisor({ snapshot, previous, onInsight, onPersisted, s
       {loading && <p role="status" className="flex items-center gap-2 text-xs text-cyan-200"><LoaderCircle size={14} className="animate-spin" />Analyzing routing, qubit budget, and telemetry. Simulations remain available.</p>}
       {!insight && !loading && <p className="py-3 text-sm leading-6 text-slate-400">{snapshot ? "Generate a diagnostic to explain this run’s bottlenecks and choose the next configuration to try." : "Run a simulation to enable the advisor."}</p>}
       {insight && <>
+        <AdvisorTelemetryBar insight={insight} />
         <p className="text-[10px] font-semibold uppercase tracking-wider text-cyan-300">{insight.source !== "fallback" ? `Gemini · ${insight.model}` : "Local deterministic diagnostic"}{insight.previousRunId ? " · includes previous-run comparison" : ""}</p>
         {insight.notice && <div role="status" className="flex gap-2 rounded-lg border border-amber-400/20 bg-amber-400/5 p-3 text-xs leading-6 text-amber-200"><CircleAlert size={15} className="mt-1 shrink-0" /><p>{insight.notice}</p></div>}
         <AdvisorDiagnostic insight={insight} />
