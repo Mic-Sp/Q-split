@@ -18,6 +18,7 @@ from backend.main import (
     SimulationRequest,
     STAGE_KEYS,
     qpu_capacity_plan,
+    classical_cpu_baseline,
     app,
     run_shors_pipeline,
 )
@@ -245,6 +246,24 @@ class RoutingTests(unittest.TestCase):
             self.assertGreater(stages[1].latency_ms, stages[2].latency_ms)
             self.assertLess(stages[0].metrics["coherence_survival_pct"], stages[1].metrics["coherence_survival_pct"])
             self.assertLess(stages[1].metrics["coherence_survival_pct"], stages[2].metrics["coherence_survival_pct"])
+
+    def test_cpu_counterfactual_matches_actual_all_cpu_routes_without_extra_aer_work(self):
+        for scale in [15, 21, 35, 512, 2048]:
+            with self.subTest(scale=scale):
+                baseline = classical_cpu_baseline(scale)
+                reference = run_shors_pipeline(scale, "ideal_sim", RoutingConfig(stage_2_node="CPU"))
+                self.assertEqual(baseline, reference.stages[STAGE_KEYS[1]].metrics["classical_cpu_baseline"])
+                self.assertEqual(baseline["feasible"], reference.stages[STAGE_KEYS[1]].metrics["execution_feasible"])
+                if baseline["feasible"]:
+                    self.assertEqual(baseline["kernel_ms"], reference.stages[STAGE_KEYS[1]].latency_ms)
+                    self.assertAlmostEqual(baseline["total_ms"], sum(stage.latency_ms for stage in reference.stages.values()))
+                else:
+                    self.assertIsNone(baseline["kernel_ms"])
+                    self.assertIsNone(baseline["total_ms"])
+        with patch("backend.main.execute_live_shors_15", side_effect=AssertionError("Baseline must not execute Aer")):
+            self.assertEqual(classical_cpu_baseline(15)["kernel_ms"], 92.5)
+            parallel = run_shors_pipeline(15, "ideal_sim", available_qubits=22)
+            self.assertEqual(parallel.stages[STAGE_KEYS[1]].metrics["classical_cpu_baseline"]["total_ms"], 92.85)
 
 
 if __name__ == "__main__":

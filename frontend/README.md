@@ -125,6 +125,42 @@ Run history preserves capacity in request JSON and all allocation/tier metrics
 in telemetry JSON, including blocked runs. Existing history remains readable;
 this addition requires no database schema migration.
 
+The top-level coherence KPI compares QPU survival with the 100% deterministic
+classical baseline; CPU/GPU kernel emulation displays that baseline explicitly.
+Its budget badge is NOMINAL at 70% or above, DEGRADED from 35% to below 70%, and
+EXCEEDED below 35% or when a QPU route is blocked. The latency KPI separates
+active compute from interconnect/state-preparation overhead. GPU timings already
+include launch/transfer costs, so those are separated once; QPU I/O is reported
+separately and added to the KPI total. Blocked stages contribute neither compute
+nor overhead. Original stage telemetry and saved stage-sum latencies are unchanged.
+Directly beneath the KPI cards, the latency proportion bar splits the same total
+into classical CPU/GPU compute, QPU gate execution, and interconnect/control
+overhead. Its legend reports milliseconds and actual percentage shares; nonzero
+segments have an 8px minimum width for visibility. Empty or fully blocked runs
+show an unfilled track, and routing edits retain the last completed result until
+the next simulation succeeds. All durations remain illustrative model estimates.
+
+The **Co-Design Offload Verdict** strip derives a short status locally from that
+same completed snapshot, with no AI call, timer, or extra network request.
+Capacity and unsupported-route blockers take priority, followed by classical
+statevector RAM limits, other execution blockers, QPU coherence below 35%, and
+interconnect overhead above 40% of the modeled wall-clock total. Capacity verdicts
+report the exact usable-register deficit. CPU/GPU deterministic coherence never
+triggers a QPU decoherence verdict.
+
+The backend includes a `classical_cpu_baseline` object in the kernel metrics,
+using the existing all-CPU sequential statevector timing and RAM model. It adds no
+Aer execution and does not change stage timings. A **Quantum Advantage Window**
+requires QPU survival of at least 70%, plus at least 2× modeled kernel and full
+pipeline speedup over that feasible CPU reference, including offload I/O.
+Ideal-profile verdicts identify the noise-free projection explicitly. A RAM-blocked
+CPU reference has null timings; the strip never treats those as a speedup. Older
+backends/history without reference metrics display a comparison-needed verdict.
+High overhead alone does not prove a CPU speed advantage: the strip says CPU is
+faster only when the reference timing supports that conclusion. Changing controls
+retains the completed-run verdict until the next successful simulation, alongside
+the existing latency bar and KPI cards.
+
 ### Persistent Run History (Neon + Prisma)
 
 Successful simulations are saved by a separate background request to the Next.js

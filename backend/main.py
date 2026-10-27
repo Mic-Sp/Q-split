@@ -169,6 +169,9 @@ def qpu_capacity_plan(scale_param: int, available_qubits: int) -> Dict[str, Any]
     }
 
 
+N15_REFERENCE_KERNEL_MS = 1.85
+
+
 def _run_default_shors_pipeline(
     scale_param: int, hardware_profile: str, qpu_plan: Optional[Dict[str, Any]] = None,
 ) -> HybridTelemetryResponse:
@@ -208,7 +211,7 @@ def _run_default_shors_pipeline(
                 "stage_2_quantum_kernel": StageTelemetry(
                     name="Quantum Period Finding (ModExp + IQFT)",
                     node="QPU",
-                    latency_ms=1.85,
+                    latency_ms=N15_REFERENCE_KERNEL_MS,
                     status="OPTIMAL",
                     output_summary=f"Peaks at {qpu_res['top_measurements']} -> Extracted period r = {r}.",
                     metrics={
@@ -322,6 +325,28 @@ STAGE_KEYS = (
     "stage_2_quantum_kernel",
     "stage_3_classical_post",
 )
+
+
+def classical_cpu_baseline(scale_param: int) -> Dict[str, Any]:
+    """All-CPU counterfactual using the same statevector model, without Aer work.
+
+    Baseline emulation uses the sequential circuit and minimum register width;
+    QPU ancilla capacity must not artificially inflate its CPU memory footprint.
+    """
+    n_bits = scale_param if scale_param in [512, 2048] else math.ceil(math.log2(scale_param))
+    qubits = 8 if scale_param == 15 else 2 * n_bits + 3
+    profile = STATEVECTOR_PROFILES["CPU"]
+    feasible = qubits <= profile["max_qubits"]
+    kernel_ms = None
+    total_ms = None
+    if feasible:
+        gate_ms = N15_REFERENCE_KERNEL_MS if scale_param == 15 else round(int(4.5 * n_bits ** 3) * 0.00025, 2)
+        kernel_ms = round(gate_ms * 2 ** (qubits - 8) * profile["latency_factor"], 2)
+        pre_ms = 0.14 if scale_param == 15 else round(0.12 * math.log2(n_bits), 2)
+        post_ms = 0.21 if scale_param == 15 else round(0.25 * n_bits / 4, 2)
+        total_ms = round(pre_ms + kernel_ms + post_ms, 2)
+    return {"feasible": feasible, "kernel_ms": kernel_ms, "total_ms": total_ms,
+            "logical_qubits": qubits, "memory_budget_gib": profile["memory_gib"]}
 
 
 def run_shors_pipeline(
@@ -470,6 +495,7 @@ def run_shors_pipeline(
                 rank[response.stages[key].status], response.stages[key].latency_ms
             ))
             response.primary_bottleneck = reasons.get(key, response.primary_bottleneck)
+    response.stages["stage_2_quantum_kernel"].metrics["classical_cpu_baseline"] = classical_cpu_baseline(scale_param)
     return response
 
 

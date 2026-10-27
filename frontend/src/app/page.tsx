@@ -5,13 +5,16 @@ import Link from "next/link";
 import { PersistentRunHistory } from "@/components/persistent-run-history";
 import { ParallelizationTiers } from "@/components/parallelization-tiers";
 import { TelemetryAdvisor } from "@/components/telemetry-advisor";
+import { LatencyProportion } from "@/components/latency-proportion";
+import { OffloadVerdictStrip } from "@/components/offload-verdict";
 import { usePersistentRuns } from "@/hooks/use-persistent-runs";
+import { coherenceBudget, pipelineTiming, type CoherenceBudgetStatus } from "@/lib/kpi-metrics";
 import {
   Activity, ArrowDown, ArrowRight, Check, ChevronDown, CircleAlert, CircuitBoard, Cpu,
   FlaskConical, GitCompareArrows, Layers3, LoaderCircle, Play, Radio, Workflow, Zap,
 } from "lucide-react";
 import {
-  DEFAULT_AVAILABLE_QUBITS, DEFAULT_ROUTING, describeChanges, formatValue, PIPELINE, simulate, totalLatency,
+  DEFAULT_AVAILABLE_QUBITS, DEFAULT_ROUTING, describeChanges, formatValue, PIPELINE, simulate,
   type Snapshot, type Transition,
 } from "@/lib/telemetry";
 import type { HardwareProfile, RoutingConfig, SimulationRequest, StageNode, StageStatus, StageTelemetry, WorkloadId } from "@/types/telemetry";
@@ -35,6 +38,11 @@ const NODE_STYLE = {
   QPU: { icon: Layers3, text: "text-violet-300", frame: "border-violet-400/20 bg-violet-400/10 text-violet-300" },
 };
 const NODES: StageNode[] = ["CPU", "GPU", "QPU"];
+const COHERENCE_BUDGET_STYLE: Record<CoherenceBudgetStatus, string> = {
+  NOMINAL: "border-emerald-400/25 bg-emerald-400/10 text-emerald-300",
+  DEGRADED: "border-amber-400/30 bg-amber-400/10 text-amber-300",
+  EXCEEDED: "border-rose-400/30 bg-rose-400/10 text-rose-300",
+};
 const CAPACITY_PANEL_METRICS = new Set([
   "available_qubits", "qubits_allocated", "idle_qubits", "parallelization_tier",
   "depth_complexity", "parallel_speedup_ceiling_reached",
@@ -137,7 +145,7 @@ function PipelineCard({ index, stage, selectedNode, onNodeChange, pending }: {
         </div>
       )}
       <dl className="mb-6 grid grid-cols-2 gap-2">
-        {stage ? Object.entries(stage.metrics).filter(([key]) => !CAPACITY_PANEL_METRICS.has(key)).map(([key, value]) => (
+        {stage ? Object.entries(stage.metrics).filter(([key]) => !CAPACITY_PANEL_METRICS.has(key) && key !== "classical_cpu_baseline").map(([key, value]) => (
           <div key={key} className="min-w-0 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2.5">
             <dt className="text-[10px] leading-4 text-slate-400 [overflow-wrap:anywhere]">{metricLabels[key] ?? key.replaceAll("_", " ")}</dt>
             <dd className={["mt-1 font-mono text-xs leading-5 [overflow-wrap:anywhere]", key === "coherence_survival_pct" ? style?.text : "text-slate-200"].join(" ")}>{key === "routing_model" ? "Illustrative estimate" : typeof value === "boolean" ? value ? "Yes" : "No" : formatValue(value)}</dd>
@@ -197,6 +205,8 @@ export default function Home() {
   const { snapshot, loading, error } = state;
   const data = snapshot?.data;
   const quantum = data?.stages.stage_2_quantum_kernel;
+  const timing = data ? pipelineTiming(data) : null;
+  const coherence = data ? coherenceBudget(data) : null;
   const severity: StageStatus = data
     ? Object.values(data.stages).some((s) => s.status === "CRITICAL_BOTTLENECK") ? "CRITICAL_BOTTLENECK"
       : Object.values(data.stages).some((s) => s.status === "WARNING") || !data.primary_bottleneck.startsWith("NONE") ? "WARNING" : "OPTIMAL"
@@ -338,17 +348,28 @@ export default function Home() {
 
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             {[
-              { label: "Pipeline latency", value: data ? totalLatency(data) : undefined, unit: "ms", icon: Activity },
+              { label: "Pipeline latency", value: timing?.totalMs, unit: "ms", icon: Activity },
               { label: quantum?.node === "QPU" ? "Qubits allocated / available" : "Logical qubits", value: quantum?.node === "QPU" ? `${formatValue(quantum.metrics.qubits_allocated)} / ${formatValue(quantum.metrics.available_qubits)}` : quantum?.metrics.qubits_required, unit: "qubits", icon: Layers3 },
               { label: "Circuit depth", value: quantum?.metrics.circuit_depth, unit: "gates", icon: Workflow },
-              { label: "Coherence survival", value: quantum?.metrics.coherence_survival_pct, unit: "%", icon: Zap },
+              { label: "Coherence survival", value: coherence?.survival, unit: "%", icon: Zap },
             ].map(({ label, value, unit, icon: Icon }) => (
               <div key={label} className="min-w-0 rounded-xl border border-slate-800 bg-slate-900/35 p-4 sm:p-5">
                 <p className="flex items-center justify-between gap-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">{label}<Icon size={14} className="shrink-0 text-slate-600" /></p>
                 <p title={formatValue(value) + " " + unit} className="mt-3 break-words font-mono text-xl tracking-tight sm:text-2xl">{summaryValue(value)}<span className="ml-2 text-xs text-slate-500">{unit}</span></p>
+                {label === "Pipeline latency" && <dl aria-label="Pipeline latency breakdown" title="Includes separately reported QPU I/O; GPU launch/transfer overhead is counted once. Blocked stages contribute no time." className="mt-3 flex flex-wrap gap-x-4 gap-y-2 border-t border-slate-800/70 pt-2 text-[10px] leading-4">
+                  <div className="min-w-0 flex-1 basis-20"><dt className="text-slate-500">Pure Compute Time</dt><dd className="mt-1 font-mono text-slate-300">{formatValue(timing?.computeMs)} ms</dd></div>
+                  <div className="min-w-0 flex-1 basis-28"><dt className="text-slate-500">Interconnect &amp; State-Prep Overhead</dt><dd className="mt-1 font-mono text-slate-300">{formatValue(timing?.overheadMs)} ms</dd></div>
+                </dl>}
+                {label === "Coherence survival" && <div className="mt-2 space-y-2">
+                  <p className="text-[10px] leading-4 text-slate-500">{coherence?.classical ? "Deterministic Classical Emulation" : "vs. 100% deterministic classical baseline"}</p>
+                  {coherence?.status && <span aria-label={`Coherence Budget Status: ${coherence.status}`} className={["inline-flex rounded-md border px-2 py-1 text-[9px] font-semibold tracking-wider", COHERENCE_BUDGET_STYLE[coherence.status]].join(" ")}>{coherence.status}</span>}
+                </div>}
               </div>
             ))}
           </div>
+
+          <LatencyProportion data={data} />
+          <OffloadVerdictStrip snapshot={snapshot} />
 
           <div>
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
