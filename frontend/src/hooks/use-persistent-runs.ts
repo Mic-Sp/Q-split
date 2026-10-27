@@ -2,12 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CompletedRun, HistoryAvailability, HistoryResult, SavedSimulationRun, SaveRunResult } from "@/types/run-history";
-
-function mergeRuns(current: SavedSimulationRun[], incoming: SavedSimulationRun[]) {
-  const unique = new Map(current.map((run) => [run.id, run]));
-  incoming.forEach((run) => unique.set(run.id, run));
-  return [...unique.values()].sort((a, b) => b.completedAt.localeCompare(a.completedAt) || b.id.localeCompare(a.id)).slice(0, 20);
-}
+import { mergeRuns } from "@/lib/run-history";
 
 export function usePersistentRuns() {
   const [runs, setRuns] = useState<SavedSimulationRun[]>([]);

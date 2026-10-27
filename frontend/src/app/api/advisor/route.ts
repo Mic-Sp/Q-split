@@ -2,6 +2,7 @@ import { deterministicInsight } from "@/lib/advisor";
 import { advisorDigest, AdvisorPayloadTooLarge, readAdvisorRequest } from "@/lib/advisor-input";
 import { ADVISOR_OUTPUT_TOKENS, ADVISOR_RESPONSE_SCHEMA, ADVISOR_TEMPERATURE, ADVISOR_TIMEOUT_MS, parseGeneratedOutput } from "@/lib/advisor-output";
 import type { AdvisorInsight, AdvisorRequest } from "@/types/advisor";
+import { adviseWithCache } from "@/lib/advisor-cache";
 
 const headers = { "Cache-Control": "no-store" };
 const SYSTEM_INSTRUCTION = `You are a Principal Quantum-Classical Systems Architect diagnosing Q-Split simulations.
@@ -19,39 +20,46 @@ export async function POST(request: Request) {
     if (error instanceof AdvisorPayloadTooLarge) return Response.json({ message: "Advisor payload exceeds 64 KiB." }, { status: 413, headers });
     return Response.json({ message: "Provide a valid current completed run and, optionally, a valid previous run." }, { status: 400, headers });
   }
-  const fallback = (reason: Parameters<typeof deterministicInsight>[2]) => Response.json({ insight: deterministicInsight(input.current, input.previous, reason) }, { headers });
-  const key = process.env.GEMINI_API_KEY?.trim();
-  if (!key || /REPLACE_ME|YOUR_API_KEY/.test(key)) return fallback("missing_key");
   const model = process.env.GEMINI_MODEL?.trim() || "gemini-3.5-flash-lite";
-  if (!/^[a-zA-Z0-9._-]{1,100}$/.test(model)) return fallback("provider_error");
-  try {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-      method: "POST", cache: "no-store", signal: AbortSignal.any([request.signal, AbortSignal.timeout(ADVISOR_TIMEOUT_MS)]),
-      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
-        contents: [{ role: "user", parts: [{ text: JSON.stringify({ current: advisorDigest(input.current), previous: input.previous ? advisorDigest(input.previous) : null,
-          suggestedNextExperiment: deterministicInsight(input.current, input.previous, "missing_key").sections.optimizationRecommendation,
-        }) }] }],
-        generationConfig: { temperature: ADVISOR_TEMPERATURE, candidateCount: 1, maxOutputTokens: ADVISOR_OUTPUT_TOKENS,
-          responseMimeType: "application/json", responseJsonSchema: ADVISOR_RESPONSE_SCHEMA },
-      }),
-    });
-    if (response.status === 429) return fallback("rate_limited");
-    if (!response.ok) return fallback("provider_error");
+  if (!/^[a-zA-Z0-9._-]{1,100}$/.test(model)) return Response.json({ insight: deterministicInsight(input.current, input.previous, "provider_error") }, { headers });
+  const generate = async (): Promise<AdvisorInsight> => {
+    const fallback = (reason: Parameters<typeof deterministicInsight>[2]) => deterministicInsight(input.current, input.previous, reason);
+    const key = process.env.GEMINI_API_KEY?.trim();
+    if (!key || /REPLACE_ME|YOUR_API_KEY/.test(key)) return fallback("missing_key");
     try {
-      const result = await response.json();
-      const candidate = result.candidates?.[0];
-      if (candidate?.finishReason !== "STOP") return fallback("invalid_response");
-      const text = candidate.content?.parts?.filter((part: { text?: string; thought?: boolean }) => !part.thought && typeof part.text === "string").map((part: { text: string }) => part.text).join("");
-      const sections = parseGeneratedOutput(text);
-      const insight: AdvisorInsight = { runId: input.current.id, previousRunId: input.previous?.id ?? null,
-        source: "gemini", model, generatedAt: new Date().toISOString(), fallbackReason: null, notice: null, sections };
-      return Response.json({ insight }, { headers });
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        // Shared generation outlives any single caller; the provider deadline
+        // still bounds it when a tab navigates away or cancels its request.
+        method: "POST", cache: "no-store", signal: AbortSignal.timeout(ADVISOR_TIMEOUT_MS),
+        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
+          contents: [{ role: "user", parts: [{ text: JSON.stringify({ current: advisorDigest(input.current), previous: input.previous ? advisorDigest(input.previous) : null,
+            suggestedNextExperiment: deterministicInsight(input.current, input.previous, "missing_key").sections.optimizationRecommendation,
+          }) }] }],
+          generationConfig: { temperature: ADVISOR_TEMPERATURE, candidateCount: 1, maxOutputTokens: ADVISOR_OUTPUT_TOKENS,
+            responseMimeType: "application/json", responseJsonSchema: ADVISOR_RESPONSE_SCHEMA },
+        }),
+      });
+      if (response.status === 429) return fallback("rate_limited");
+      if (!response.ok) return fallback("provider_error");
+      try {
+        const result = await response.json();
+        const candidate = result.candidates?.[0];
+        if (candidate?.finishReason !== "STOP") return fallback("invalid_response");
+        const text = candidate.content?.parts?.filter((part: { text?: string; thought?: boolean }) => !part.thought && typeof part.text === "string").map((part: { text: string }) => part.text).join("");
+        const sections = parseGeneratedOutput(text);
+        const insight: AdvisorInsight = { runId: input.current.id, previousRunId: input.previous?.id ?? null,
+          source: "gemini", model, generatedAt: new Date().toISOString(), fallbackReason: null, notice: null, sections };
+        return insight;
+      } catch (error) {
+        return fallback(error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name) ? "timeout" : "invalid_response");
+      }
     } catch (error) {
-      return fallback(error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name) ? "timeout" : "invalid_response");
+      return fallback(error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name) ? "timeout" : "network_error");
     }
-  } catch (error) {
-    return fallback(error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name) ? "timeout" : "network_error");
-  }
+  };
+  const policy = JSON.stringify({ system: SYSTEM_INSTRUCTION, temperature: ADVISOR_TEMPERATURE,
+    outputTokens: ADVISOR_OUTPUT_TOKENS, schema: ADVISOR_RESPONSE_SCHEMA });
+  return Response.json(await adviseWithCache(input, model, policy, generate), { headers });
 }

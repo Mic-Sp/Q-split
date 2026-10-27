@@ -5,6 +5,7 @@ import { formatValue } from "@/lib/telemetry";
 import type { usePersistentRuns } from "@/hooks/use-persistent-runs";
 import type { StageStatus } from "@/types/telemetry";
 import { AdvisorDiagnostic } from "@/components/advisor-diagnostic";
+import { AdvisorSourceBadge } from "@/components/advisor-source-badge";
 
 const statusColors: Record<StageStatus, string> = {
   OPTIMAL: "border-emerald-400/25 bg-emerald-400/10 text-emerald-300",
@@ -41,7 +42,7 @@ export function PersistentRunHistory({ history }: { history: ReturnType<typeof u
         <div className="space-y-4 border-t border-slate-800 p-4 sm:p-5">
           <p className="text-xs leading-6 text-slate-300 [overflow-wrap:anywhere]">{run.primaryBottleneck}</p>
           {run.advisorInsight && <div className="space-y-3" aria-label="Saved advisor insight">
-            <p className="text-xs font-semibold text-cyan-300">AI Telemetry Advisor · {run.advisorInsight.source === "gemini" ? run.advisorInsight.model : "Local deterministic diagnostic"}</p>
+            <div className="flex flex-wrap items-center gap-2"><p className="text-xs font-semibold text-cyan-300">AI Telemetry Advisor · {run.advisorInsight.source !== "fallback" ? run.advisorInsight.model : "Local deterministic diagnostic"}</p><AdvisorSourceBadge source={run.advisorInsight.source === "fallback" ? "fallback" : "cached"} /></div>
             {run.advisorInsight.notice && <p className="text-xs leading-5 text-amber-200">{run.advisorInsight.notice}</p>}
             <AdvisorDiagnostic insight={run.advisorInsight} />
           </div>}

@@ -395,7 +395,7 @@ export default function Home() {
           )}
         </section>
         <TelemetryAdvisor key={snapshot?.id ?? "idle"} snapshot={snapshot} previous={latest?.before}
-          onInsight={saveRun} simulationLoading={loading} saving={persistentHistory.savingCount > 0}
+          onInsight={saveRun} onPersisted={() => { void persistentHistory.refresh(); }} simulationLoading={loading} saving={persistentHistory.savingCount > 0}
           savedInsight={persistentHistory.runs.find((run) => run.id === snapshot?.id)?.advisorInsight}
           persistenceMessage={persistentHistory.message} />
         <PersistentRunHistory history={persistentHistory} />

@@ -42,12 +42,12 @@ export function databaseNotice(error: unknown): string {
   return "Persistent history is temporarily unavailable. Your simulation still completed; retry saving when the database is reachable.";
 }
 
-export async function withDatabaseTimeout<T>(operation: Promise<T>): Promise<T> {
+export async function withDatabaseTimeout<T>(operation: Promise<T>, timeoutMs = 6_000): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       operation,
-      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("History database timeout")), 6_000); }),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("History database timeout")), timeoutMs); }),
     ]);
   } finally {
     clearTimeout(timer);

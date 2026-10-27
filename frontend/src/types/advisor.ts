@@ -11,12 +11,18 @@ export type FallbackReason = "missing_key" | "rate_limited" | "timeout" | "provi
 export interface AdvisorInsight {
   runId: string;
   previousRunId: string | null;
-  source: "gemini" | "fallback";
+  source: "gemini" | "cached" | "fallback";
   model: string | null;
   generatedAt: string;
   fallbackReason: FallbackReason | null;
   notice: string | null;
   sections: AdvisorSections;
+  cacheKey?: string;
+}
+
+export interface AdvisorResponse {
+  insight: AdvisorInsight;
+  persistence?: { status: "saved" | "pending" | "unavailable" | "unconfigured"; message?: string };
 }
 
 export interface AdvisorRequest {

@@ -3,6 +3,8 @@ import { test } from "node:test";
 import { createRunRecord, serializeRun } from "./run-record";
 import { formatValue, qubitThresholds } from "./telemetry";
 import type { SimulationRun } from "@/generated/prisma/client";
+import { mergeRuns } from "@/lib/run-history";
+import { deterministicInsight } from "@/lib/advisor";
 
 function completed() {
   return {
@@ -116,4 +118,14 @@ test("UI threshold shortcuts match N15 special case and RSA capacities", () => {
   assert.deepEqual(qubitThresholds(35), { minimum: 15, windowed: 18, ceiling: 33 });
   assert.deepEqual(qubitThresholds(512), { minimum: 1027, windowed: 1536, ceiling: 2816 });
   assert.deepEqual(qubitThresholds(2048), { minimum: 4099, windowed: 6144, ceiling: 11264 });
+});
+
+test("late simulation saves and history responses cannot erase newer saved analysis", () => {
+  const initial = serializeRun({ ...createRunRecord(completed()), createdAt: new Date() } as SimulationRun);
+  const insight = deterministicInsight({ id: initial.id, completedAt: initial.completedAt, request: initial.request, telemetry: initial.telemetry }, undefined, "missing_key");
+  const analyzed = { ...initial, advisorInsight: insight };
+  assert.deepEqual(mergeRuns([analyzed], [initial])[0].advisorInsight, insight);
+  const older = { ...analyzed, advisorInsight: { ...insight, generatedAt: "2020-01-01T00:00:00.000Z" } };
+  assert.deepEqual(mergeRuns([analyzed], [older])[0].advisorInsight, insight);
+  assert.equal(mergeRuns([analyzed], [initial, analyzed]).length, 1);
 });

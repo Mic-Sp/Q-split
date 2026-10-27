@@ -194,12 +194,14 @@ The advisor is on demand: run a simulation, then click **Generate analysis**.
 Editing controls, loading history, and running simulations never call Gemini.
 Analysis uses the completed run's captured settings. With two completed runs,
 the optional comparison includes the previous run, even when several settings
-changed. A new successful simulation resets the panel and cancels stale analysis.
+changed. A new successful simulation resets the panel and stops displaying stale
+analysis. An already-started shared server generation can finish within its
+deadline and save its result even if one browser caller navigates away.
 
 `POST /api/advisor` accepts `{ current: CompletedRun, previous?: CompletedRun }`;
 a completed run contains `{ id, completedAt, request, telemetry }`. A dedicated
-pre-flight validator checks both runs before any AI call; the advisor route has
-no database dependency. Invalid payloads return HTTP 400. Supported scales are
+pre-flight validator checks both runs before any database lookup or AI call.
+Invalid payloads return HTTP 400. Supported scales are
 15, 21, 35, 512, and 2048. Routing/profile/workload/status/tier values must match
 known enums; capacity is an integer from 1 to 2,147,483,647, matching FastAPI.
 Latencies must be finite and nonnegative, qubit/depth metrics must be bounded
@@ -249,15 +251,44 @@ output return a clearly labeled deterministic local diagnostic with the same
 sections. Gemini calls time out after 18 seconds; the browser also handles an
 unreachable advisor endpoint. Fallbacks remain usable and can be saved. Analysis
 never blocks the simulator. Raw provider errors and secrets are not exposed.
-Response metadata distinguishes `source: "gemini"` from `source: "fallback"`;
+Response metadata distinguishes `source: "gemini"`, `source: "cached"`, and
+`source: "fallback"`, displayed as **Live AI**, **Cached**, and **Local Fallback**;
 fallbacks use `model: null`, a specific `fallbackReason` (including
 `invalid_response` for failed output validation), and a human-readable `notice`.
 
-After generation, the existing background save queue updates the same run UUID
-with `advisorInsight`. A nullable JSONB column was added by migration
+Before generation, the endpoint checks the current run's `advisorInsight` in
+Neon via Prisma. Its SHA-256 `cacheKey` covers the run ID, compact numeric digest,
+previous run ID/digest or no comparison, model, system prompt, output schema and
+generation constraints. Display text and timestamps do not affect cache hits.
+A hit must pass metadata and current output validation, match the comparison,
+and originate from Gemini; local fallbacks and legacy entries without a matching
+fingerprint never block a new AI request. A validated hit returns immediately
+as **Cached**, even when the Gemini key is unavailable. Only the latest analysis
+is stored for each run; changing comparison state replaces it after generation.
+
+Fresh validated Gemini diagnostics are saved on the server to the existing run
+before the response returns. Cache reads/writes each have a 1.5-second deadline;
+the browser allows 26 seconds for lookup, generation and save. A database outage
+does not prevent analysis. Response `persistence.status` reports `saved`,
+`pending`, `unconfigured`, or `unavailable`, with sanitized notices. If the
+original simulation record is still being saved or a server write fails, the
+existing background queue attaches the diagnostic to the original full telemetry
+under the same UUID. Successful server writes refresh history without a duplicate
+save POST. Delayed run-save responses cannot erase newer insights in the UI.
+
+The frontend uses a synchronous in-flight guard as well as a disabled loading
+button. Concurrent identical endpoint requests share one generation within a
+server process and return the reused result as Cached. Completed results live
+in Neon; no unbounded in-memory result cache is kept. This coalescing is process
+local, not a distributed lock: simultaneous cold misses on separate server
+instances can still generate independently. Persistent cache hits work across
+instances once saved.
+
+The existing nullable JSONB column was added by migration
 `20261026010000_advisor_insights` and applied to the configured Neon database.
-Existing runs have no insight until one is generated. Saved diagnostics appear
-inside expanded history rows after a reload. If the database is unavailable,
+This cache adds no schema migration. Saved diagnostics appear automatically
+inside expanded history rows after a reload, with Cached or Local Fallback
+badges and no generation request. If the database is unavailable,
 the insight stays visible in this tab and **Retry saving** retries without
 another Gemini call. Unsaved insights are lost on reload, like unsaved runs.
 

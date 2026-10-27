@@ -13,17 +13,18 @@ export function parseAdvisorSections(value: unknown): AdvisorSections {
 export function parseAdvisorInsight(value: unknown, runId: string): AdvisorInsight {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid advisor insight.");
   const insight = value as AdvisorInsight;
-  if (insight.runId !== runId || !["gemini", "fallback"].includes(insight.source) ||
+  if (insight.runId !== runId || !["gemini", "cached", "fallback"].includes(insight.source) ||
       typeof insight.generatedAt !== "string" || !Number.isFinite(Date.parse(insight.generatedAt)) ||
       (insight.previousRunId !== null && (typeof insight.previousRunId !== "string" || !/^[0-9a-f-]{36}$/i.test(insight.previousRunId))) ||
       (insight.model !== null && (typeof insight.model !== "string" || !/^[a-zA-Z0-9._-]{1,100}$/.test(insight.model))) ||
       (insight.notice !== null && (typeof insight.notice !== "string" || insight.notice.length > 500)) ||
       (insight.fallbackReason !== null && !["missing_key", "rate_limited", "timeout", "provider_error", "invalid_response", "network_error"].includes(insight.fallbackReason)) ||
-      (insight.source === "gemini" && (!insight.model || insight.fallbackReason !== null)) ||
+      (["gemini", "cached"].includes(insight.source) && (!insight.model || insight.fallbackReason !== null)) ||
+      (insight.cacheKey !== undefined && (typeof insight.cacheKey !== "string" || !/^[a-f0-9]{64}$/.test(insight.cacheKey))) ||
       (insight.source === "fallback" && !insight.fallbackReason)) throw new Error("Invalid advisor metadata.");
   return { runId, previousRunId: insight.previousRunId, source: insight.source, model: insight.model,
     generatedAt: insight.generatedAt, fallbackReason: insight.fallbackReason, notice: insight.notice,
-    sections: parseAdvisorSections(insight.sections) };
+    sections: parseAdvisorSections(insight.sections), ...(insight.cacheKey === undefined ? {} : { cacheKey: insight.cacheKey }) };
 }
 
 const notices: Record<FallbackReason, string> = {
