@@ -8,6 +8,9 @@ import { TelemetryAdvisor } from "@/components/telemetry-advisor";
 import { LatencyProportion } from "@/components/latency-proportion";
 import { OffloadVerdictStrip } from "@/components/offload-verdict";
 import { InfoPopover } from "@/components/info-popover";
+import { CaptureBenchmark } from "@/components/capture-benchmark";
+import { restoredConfiguration } from "@/lib/benchmark-snapshot";
+import type { SavedSimulationRun } from "@/types/run-history";
 import { usePersistentRuns } from "@/hooks/use-persistent-runs";
 import { coherenceBudget, pipelineTiming, type CoherenceBudgetStatus } from "@/lib/kpi-metrics";
 import {
@@ -173,6 +176,7 @@ export default function Home() {
   const [availableQubits, setAvailableQubits] = useState(String(DEFAULT_AVAILABLE_QUBITS));
   const [routing, setRouting] = useState<RoutingConfig>(DEFAULT_ROUTING);
   const [submittedRequest, setSubmittedRequest] = useState<SimulationRequest | null>(null);
+  const [restoreMessage, setRestoreMessage] = useState<string | null>(null);
   const [state, dispatch] = useReducer(reducer, {
     loading: false, slow: false, error: null, snapshot: null, history: [], completed: 0,
   });
@@ -225,6 +229,7 @@ export default function Home() {
   );
   const runSimulation = () => {
     if (!validCapacity) return;
+    setRestoreMessage(null);
     dispatch({ type: "start" });
     setSubmittedRequest({
       workload_id: workload, scale_param: scale, hardware_profile: hardware, available_qubits: capacity, routing: { ...routing },
@@ -232,6 +237,14 @@ export default function Home() {
   };
   const updateNode = (key: keyof RoutingConfig, node: StageNode) => {
     setRouting((current) => current[key] === node ? current : { ...current, [key]: node });
+  };
+  const restoreRun = (run: SavedSimulationRun) => {
+    const restored = restoredConfiguration(run);
+    setWorkload(restored.workload_id); setScale(restored.scale_param); setHardware(restored.hardware_profile);
+    setAvailableQubits(String(restored.available_qubits));
+    setRouting({ ...DEFAULT_ROUTING, ...restored.routing });
+    setRestoreMessage(`Restored ${run.snapshotName ?? run.scaleLabel} into the controls. Run simulation to execute this configuration.`);
+    document.querySelector('[aria-label="Simulation controls"]')?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   return (
@@ -315,6 +328,7 @@ export default function Home() {
           {workload === "quantum_mips" && <p className="mt-2 text-[10px] text-slate-500">Quantum-MIPS is a preview preset. Click Run simulation to request its availability from the engine.</p>}
         </section>
 
+        {restoreMessage && <p role="status" className="mb-2 text-[11px] text-cyan-200">{restoreMessage}</p>}
         {loading && (
           <div role="status" aria-label="Simulation loading" className="mb-6 flex items-start gap-3 rounded-xl border border-cyan-400/20 bg-cyan-400/5 p-4">
             <LoaderCircle size={18} className="mt-0.5 shrink-0 animate-spin text-cyan-400 motion-reduce:animate-none" />
@@ -391,6 +405,7 @@ export default function Home() {
                 <p aria-label="Selected stage routing" className="flex items-center gap-1.5 font-mono text-[10px] text-slate-500">{PIPELINE.map(({ routingKey }, index) => <span key={routingKey} className="inline-flex items-center gap-1.5">{index > 0 && <ArrowRight size={10} />}<span className={NODE_STYLE[routing[routingKey]].text}>{routing[routingKey]}</span></span>)}</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                <CaptureBenchmark key={snapshot?.id ?? "idle"} snapshot={snapshot} disabled={loading || !!(snapshot && persistentHistory.isDeleted(snapshot.id))} busy={!!(snapshot && persistentHistory.busyIds.includes(snapshot.id))} onCapture={persistentHistory.nameSnapshot} />
                 <p role="status" aria-label="Pipeline configuration status" className={`text-[10px] ${configurationChanged ? "text-amber-300" : "text-slate-500"}`}>{loading ? "Running submitted configuration…" : configurationChanged ? "Uncommitted changes" : data ? "Up to date" : "Ready to run"}</p>
                 <button type="button" aria-label={loading ? "Simulating from pipeline" : "Run simulation from pipeline"} disabled={loading || !validCapacity} onClick={runSimulation} className="inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-3 py-1.5 text-[11px] font-semibold text-cyan-200 hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-50">{loading ? <LoaderCircle size={12} className="animate-spin" /> : <Play size={12} />}{loading ? "Simulating…" : "Run simulation"}</button>
               </div>
@@ -440,7 +455,7 @@ export default function Home() {
           )}
         </section>
         </div>
-        <PersistentRunHistory history={persistentHistory} />
+        <PersistentRunHistory history={persistentHistory} onRestore={restoreRun} />
         <footer className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-800/70 pt-3 text-[10px] leading-5 text-slate-500">
           <p className="flex items-center gap-2"><Radio size={12} />{data?.execution_mode.replaceAll("_", " ") ?? "AWAITING TELEMETRY"}</p>
           <p>Simulated workloads. Estimated hardware limits. No physical QPU connection.</p>

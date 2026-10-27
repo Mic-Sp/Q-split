@@ -172,10 +172,42 @@ available in keyboard-, pointer-, and touch-accessible info tooltips. The adviso
 and state delta tracker share a desktop row and stack on mobile; long delta tables
 scroll within their panel. Stage and advisor telemetry retain their original data.
 
-History shows the latest five saved runs by default. **Show all 20 runs** expands
-the existing fetched list, and **Show latest 5** collapses it without another
-database request. Each compact history row still expands to its complete payload,
-saved advisor diagnostic, original token usage, and zero-cost cached view.
+The Benchmark Comparison Table shows the latest five saved runs by default.
+**Show all 20 runs** expands the fetched recent list; **Named Snapshots Only**
+includes pinned benchmarks even after they age out of the twenty recent runs.
+The table compares captured routes, hardware, qubits/tier, compute versus I/O,
+wall-clock latency, coherence budget, and primary bottleneck using the same
+metrics as the live KPI cards. **Details** opens the complete payload, saved
+advisor diagnostic, original token usage, and zero-cost cached view.
+
+Check up to three rows to open a side-by-side comparison matrix above the table.
+The first selected run is the reference; subsequent columns show absolute timing,
+qubit, gate-count, and coherence percentage-point deltas. Selection order is
+preserved across filters and Show latest 5/Show all; remove a column or use
+**Clear selection** to release slots. Deleted runs leave the comparison, and
+the next selected run becomes the reference if needed.
+
+**Export CSV** and **Export JSON** download selected runs, including selections
+hidden by a filter or collapsed list. Without selections they download exactly
+the currently displayed rows. Exports run locally from loaded history, so they
+remain available offline. CSV includes flattened system metrics, coherence
+budget, bottleneck, run UUID, and all saved AI diagnostic sections, with UTC
+timestamps, quoted multiline fields, and a UTF-8 BOM. Formula-like text fields
+receive a leading apostrophe for spreadsheet safety. JSON preserves the complete
+saved records, structured requests/telemetry, snapshot metadata, and advisor
+usage; circuit depths retain their serialized decimal strings. No schema change
+or new database request is required for comparison or export.
+
+After a simulation completes, enter a label beside the pipeline Run button and
+choose **Capture Benchmark Snapshot**. This names and pins that completed run;
+unsaved edits to the controls do not alter its captured configuration. Existing
+rows also offer **Name snapshot** or **Rename**. Names are trimmed, limited to
+120 characters, and stored as plain text. **Restore to Simulator** restores the
+exact workload, scale, hardware profile, QPU capacity, and three stage routes;
+press Run simulation to execute them. The currently completed telemetry remains
+visible until then. **Delete** permanently removes the selected database row.
+Failed naming or deletion requests retain the label or row for retry; restores
+remain usable from already loaded history while offline.
 
 Successful simulations are saved by a separate background request to the Next.js
 server. A failed save never changes the simulation result or disables Run
@@ -196,9 +228,11 @@ Prisma CLI uses `prisma.config.ts` to load the same `.env.local` file as Next.js
 Client generation and builds work without connection strings. The app lazily
 creates a server-only Prisma client with bounded connection/query timeouts.
 
-The schema is in `prisma/schema.prisma`. The initial migration is in
-`prisma/migrations/20261026000000_simulation_runs/migration.sql` and has been
-applied to the configured Neon database. For a new environment, confirm the
+The schema is in `prisma/schema.prisma`. The initial migration and the additive
+`20261027000000_benchmark_snapshots` migration have been applied to the configured
+Neon database. The snapshot migration adds a nullable name, a default-false pin
+flag, a metadata update timestamp, and a pin/date index, preserving existing
+records and advisor insights. For a new environment, confirm the
 target connection strings, then apply the reviewed migrations from `frontend/`
 with:
 
@@ -217,11 +251,19 @@ Large circuit depths use PostgreSQL BIGINT and serialize as decimal strings.
 Each execution gets a unique UUID; retrying its save uses the same UUID to avoid
 duplicates. Re-running a simulation creates a separate history record.
 
-- `GET /api/runs?limit=20` returns the newest runs (limit 1–50, no caching).
+- `GET /api/runs?limit=20` returns the newest runs (limit 1–50, no caching) plus
+  a separate `snapshots` list of all pinned benchmarks.
 - `POST /api/runs` accepts `{ id, completedAt, request, telemetry }`, validates it,
   derives summary metrics on the server, and performs an idempotent save.
   An optional `advisorInsight` updates only that run's saved diagnostic; ordinary
-  save retries do not erase an existing insight.
+  save retries do not erase an existing insight or snapshot label.
+- `PATCH /api/runs/[id]` accepts `{ snapshotName: "My benchmark" }` to name and
+  pin a run. `{ snapshotName: null }` or `{ isSnapshot: false }` clears its name
+  and pin. Only snapshot metadata is mutable; captured inputs and telemetry are
+  immutable. `snapshotUpdatedAt` prevents stale save responses from erasing names.
+- `DELETE /api/runs/[id]` removes one run; repeating the deletion is safe.
+  The client waits for outstanding saves and ignores late advisor saves for a
+  locally deleted run so background work cannot recreate it in that tab.
 - Missing configuration returns an `unconfigured` notice. An unavailable database
   or missing table returns a sanitized `unavailable` response; no driver error or
   credentials are exposed to the browser.

@@ -79,5 +79,7 @@ export function serializeRun(run: SimulationRun): SavedSimulationRun {
     request: run.requestPayload as unknown as SimulationRequest,
     telemetry: run.telemetry as unknown as SavedSimulationRun["telemetry"],
     advisorInsight: run.advisorInsight ? parseAdvisorInsight(run.advisorInsight, run.id) : null,
+    snapshotName: run.snapshotName ?? null, isSnapshot: run.isSnapshot ?? false,
+    snapshotUpdatedAt: run.snapshotUpdatedAt?.toISOString() ?? null,
   };
 }

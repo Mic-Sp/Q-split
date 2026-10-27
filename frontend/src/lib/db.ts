@@ -7,7 +7,7 @@ const globalDatabase = globalThis as unknown as {
 };
 
 // Invalidate the development singleton after regenerating a changed Prisma schema.
-export const DATABASE_CLIENT_SCHEMA = "simulation-run-advisor-v1";
+export const DATABASE_CLIENT_SCHEMA = "simulation-run-snapshots-v2";
 
 export const DATABASE_NOT_CONFIGURED = "Persistent history is not configured. Add your Neon DATABASE_URL to frontend/.env.local and restart the app. Simulations still work normally.";
 

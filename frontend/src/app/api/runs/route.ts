@@ -12,10 +12,12 @@ export async function GET(request: Request) {
   try {
     const db = getDatabase();
     if (!db) return Response.json({ status: "unconfigured", message: DATABASE_NOT_CONFIGURED, runs: [] }, { headers });
-    const runs = await withDatabaseTimeout(db.simulationRun.findMany({
+    const [runs, snapshots] = await Promise.all([withDatabaseTimeout(db.simulationRun.findMany({
       take: Number(rawLimit), orderBy: [{ completedAt: "desc" }, { id: "desc" }],
-    }));
-    return Response.json({ status: "ready", runs: runs.map(serializeRun) }, { headers });
+    })), withDatabaseTimeout(db.simulationRun.findMany({
+      where: { isSnapshot: true }, orderBy: [{ completedAt: "desc" }, { id: "desc" }],
+    }))]);
+    return Response.json({ status: "ready", runs: runs.map(serializeRun), snapshots: snapshots.map(serializeRun) }, { headers });
   } catch (error) {
     return Response.json({ status: "unavailable", message: databaseNotice(error), runs: [] }, { status: 503, headers });
   }
