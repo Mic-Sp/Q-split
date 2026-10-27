@@ -17,6 +17,7 @@ from backend.main import (
     RoutingConfig,
     SimulationRequest,
     STAGE_KEYS,
+    HARDWARE_PROFILES,
     qpu_capacity_plan,
     classical_cpu_baseline,
     app,
@@ -94,7 +95,7 @@ class RoutingTests(unittest.TestCase):
     def test_every_route_across_scales_and_hardware_profiles(self):
         for nodes, scale, profile in itertools.product(
             itertools.product(["CPU", "GPU", "QPU"], repeat=3),
-            [15, 21, 35, 512, 2048], ["ibm_heron_nisq", "ideal_sim"],
+            [15, 21, 35, 512, 2048], list(HARDWARE_PROFILES),
         ):
             routing = RoutingConfig(**dict(zip(["stage_1_node", "stage_2_node", "stage_3_node"], nodes)))
             with self.subTest(nodes=nodes, scale=scale, profile=profile):
@@ -264,6 +265,69 @@ class RoutingTests(unittest.TestCase):
             self.assertEqual(classical_cpu_baseline(15)["kernel_ms"], 92.5)
             parallel = run_shors_pipeline(15, "ideal_sim", available_qubits=22)
             self.assertEqual(parallel.stages[STAGE_KEYS[1]].metrics["classical_cpu_baseline"]["total_ms"], 92.85)
+
+    def test_hardware_enum_and_routes_accept_four_profiles_and_reject_unknown(self):
+        for profile, scale in itertools.product(HARDWARE_PROFILES, [15, 21, 35, 512, 2048]):
+            with self.subTest(profile=profile, scale=scale):
+                capacity = HARDWARE_PROFILES[profile]["reference_qubits"] or 133
+                status, body = self.post({"scale_param": scale, "hardware_profile": profile, "available_qubits": capacity})
+                self.assertEqual(status, 200)
+                self.assertEqual(body["stages"][STAGE_KEYS[1]]["metrics"]["hardware_architecture"], profile)
+        for value in ["unknown", "Google", None, True, 42]:
+            status, body = self.post({"hardware_profile": value})
+            self.assertEqual(status, 422)
+            self.assertIn(["body", "hardware_profile"], [error["loc"] for error in body["detail"]])
+
+    def test_architecture_depth_gate_time_and_decay_apply_once_across_tiers(self):
+        for scale, profile in itertools.product([21, 35, 512, 2048], HARDWARE_PROFILES):
+            architecture = HARDWARE_PROFILES[profile]
+            n = scale if scale >= 512 else math.ceil(math.log2(scale))
+            for capacity in [2 * n + 3, 3 * n, math.ceil(5.5 * n), 16384]:
+                with self.subTest(scale=scale, profile=profile, capacity=capacity):
+                    plan = qpu_capacity_plan(scale, capacity)
+                    result = run_shors_pipeline(scale, profile, available_qubits=capacity)
+                    kernel = result.stages[STAGE_KEYS[1]]
+                    depth = math.ceil(plan["circuit_depth"] * architecture["depth_factor"])
+                    self.assertEqual(kernel.metrics["reference_circuit_depth"], plan["circuit_depth"])
+                    self.assertEqual(kernel.metrics["circuit_depth"], depth)
+                    self.assertEqual(kernel.latency_ms, round(depth * 0.00025 * architecture["gate_factor"], 2 if profile in ["ibm_heron_nisq", "ideal_sim"] else 6))
+                    self.assertEqual(kernel.metrics["io_state_prep_ms"], architecture["prep_ms"])
+                    self.assertEqual(kernel.metrics["connectivity_topology"], architecture["topology"])
+                    self.assertEqual(kernel.metrics["qubits_allocated"], plan["qubits_allocated"])
+                    expected = 100.0 if profile == "ideal_sim" else round(100 * math.exp(-depth / architecture["decay_scale"]), 2)
+                    self.assertEqual(kernel.metrics["coherence_survival_pct"], expected)
+
+    def test_sequential_aer_reference_projects_new_architectures_without_native_transpilation(self):
+        stages = {profile: run_shors_pipeline(15, profile, available_qubits=8).stages[STAGE_KEYS[1]] for profile in HARDWARE_PROFILES}
+        self.assertEqual(stages["ibm_heron_nisq"].latency_ms, 1.85)
+        self.assertEqual(stages["ideal_sim"].metrics["coherence_survival_pct"], 100)
+        self.assertEqual(stages["ibm_heron_nisq"].metrics["io_state_prep_ms"], 0.05)
+        for profile in ["google_weber_grid", "ionq_forte_trapped_ion"]:
+            architecture = HARDWARE_PROFILES[profile]
+            depth = math.ceil(189 * architecture["depth_factor"])
+            self.assertEqual(stages[profile].metrics["circuit_depth"], depth)
+            self.assertEqual(stages[profile].latency_ms, round(1.85 * depth / 189 * architecture["gate_factor"], 6))
+            self.assertIn("projection", stages[profile].metrics["depth_model"])
+        self.assertLess(stages["google_weber_grid"].latency_ms, stages["ibm_heron_nisq"].latency_ms)
+        self.assertGreater(stages["ionq_forte_trapped_ion"].latency_ms, classical_cpu_baseline(15)["kernel_ms"])
+        self.assertGreater(stages["ionq_forte_trapped_ion"].metrics["coherence_survival_pct"], stages["ibm_heron_nisq"].metrics["coherence_survival_pct"])
+
+    def test_new_profiles_do_not_change_classical_compute_memory_or_baseline(self):
+        for scale, node in itertools.product([15, 21, 35, 512, 2048], ["CPU", "GPU"]):
+            reference = run_shors_pipeline(scale, "ideal_sim", RoutingConfig(stage_2_node=node), 133)
+            for profile in HARDWARE_PROFILES:
+                with self.subTest(scale=scale, node=node, profile=profile):
+                    self.assertEqual(run_shors_pipeline(scale, profile, RoutingConfig(stage_2_node=node), 1), reference)
+
+    def test_new_architectures_preserve_capacity_blocking_and_zero_overhead(self):
+        for profile in ["google_weber_grid", "ionq_forte_trapped_ion"]:
+            result = run_shors_pipeline(512, profile, available_qubits=HARDWARE_PROFILES[profile]["reference_qubits"])
+            kernel = result.stages[STAGE_KEYS[1]]
+            self.assertEqual(result.primary_bottleneck, "INSUFFICIENT QPU QUBIT CAPACITY")
+            self.assertEqual(kernel.latency_ms, 0)
+            self.assertEqual(kernel.metrics["io_state_prep_ms"], 0)
+            self.assertEqual(kernel.metrics["qubits_allocated"], 0)
+            self.assertFalse(kernel.metrics["execution_feasible"])
 
 
 if __name__ == "__main__":

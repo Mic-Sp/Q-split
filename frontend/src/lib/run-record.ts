@@ -3,6 +3,7 @@ import { DEFAULT_ROUTING, parseTelemetry, PIPELINE, totalLatency } from "@/lib/t
 import type { CompletedRun, SavedSimulationRun } from "@/types/run-history";
 import type { SimulationRequest, StageStatus } from "@/types/telemetry";
 import { parseAdvisorInsight } from "@/lib/advisor";
+import { isHardwareProfile } from "@/lib/hardware-profiles";
 
 function invalid(message: string): never {
   throw new Error(message);
@@ -21,7 +22,7 @@ export function createRunRecord(value: unknown): Prisma.SimulationRunCreateInput
   if (typeof run.completedAt !== "string" || !Number.isFinite(Date.parse(run.completedAt))) invalid("A valid completion timestamp is required.");
   const request = run.request;
   if (!request || !["shors_crypto", "quantum_mips"].includes(request.workload_id) ||
-      !["ibm_heron_nisq", "ideal_sim"].includes(request.hardware_profile) ||
+      !isHardwareProfile(request.hardware_profile) ||
       !Number.isSafeInteger(request.scale_param) || request.scale_param < 1 || request.scale_param > 2_147_483_647) invalid("Invalid simulation configuration.");
   if (request.routing != null && (typeof request.routing !== "object" || Array.isArray(request.routing) ||
       Object.keys(request.routing).some((key) => !Object.prototype.hasOwnProperty.call(DEFAULT_ROUTING, key)) ||

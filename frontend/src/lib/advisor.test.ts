@@ -26,7 +26,7 @@ test("deterministic diagnostics prioritize real blocking causes and compare the 
   assert.equal(insight.source, "fallback");
   assert.equal(insight.previousRunId, previous.id);
   assert.match(insight.sections.optimizationRecommendation, /4,099/);
-  assert.match(insight.sections.routingDiagnosis, /Δ 0 ms/);
+  assert.match(insight.sections.routingDiagnosis, /Δ 0\.00 ms/);
   assert.deepEqual(insight.sections, deterministicInsight(current, previous, "missing_key").sections);
   current.telemetry.stages.stage_1_classical_pre.node = "QPU";
   assert.match(deterministicInsight(current, undefined, "missing_key").sections.optimizationRecommendation, /Move classical preprocessing/);

@@ -14,20 +14,21 @@ import type { SavedSimulationRun } from "@/types/run-history";
 import { usePersistentRuns } from "@/hooks/use-persistent-runs";
 import { coherenceBudget, pipelineTiming, type CoherenceBudgetStatus } from "@/lib/kpi-metrics";
 import { formatDuration, formatRawMilliseconds } from "@/lib/duration";
+import { HARDWARE_PROFILES, hardwareLabel } from "@/lib/hardware-profiles";
+import { HARDWARE_PROFILE_IDS } from "@/types/telemetry";
 import {
   Activity, ArrowDown, ArrowRight, Check, ChevronDown, CircleAlert, CircuitBoard, Cpu,
   GitCompareArrows, Layers3, LoaderCircle, Play, Radio, Workflow, Zap,
 } from "lucide-react";
 import {
-  DEFAULT_AVAILABLE_QUBITS, DEFAULT_ROUTING, describeChanges, formatValue, PIPELINE, simulate,
+  DEFAULT_AVAILABLE_QUBITS, DEFAULT_ROUTING, describeChanges, formatValue, hardwareDefaultQubits, PIPELINE, simulate,
   type Snapshot, type Transition,
 } from "@/lib/telemetry";
 import type { HardwareProfile, RoutingConfig, SimulationRequest, StageNode, StageStatus, StageTelemetry, WorkloadId } from "@/types/telemetry";
 
 const SCALES = [15, 21, 35, 512, 2048];
-const QUBIT_PRESETS = [16, 133, 1121, 2048, 4096, 16384];
+const QUBIT_PRESETS = [16, 36, 72, 133, 1121, 2048, 4096, 16384];
 const scaleLabel = (scale: number) => scale < 512 ? `N = ${scale}` : `RSA-${scale}`;
-const hardwareLabel = (profile: HardwareProfile) => profile === "ideal_sim" ? "Ideal Noise-Free" : "IBM Heron NISQ";
 const summaryValue = (value: unknown) => typeof value === "number" && Math.abs(value) >= 1_000_000
   ? new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 2 }).format(value)
   : formatValue(value);
@@ -51,6 +52,8 @@ const COHERENCE_BUDGET_STYLE: Record<CoherenceBudgetStatus, string> = {
 const CAPACITY_PANEL_METRICS = new Set([
   "available_qubits", "qubits_allocated", "idle_qubits", "parallelization_tier",
   "depth_complexity", "parallel_speedup_ceiling_reached",
+  "hardware_architecture", "connectivity_topology", "reference_qubits", "reference_circuit_depth",
+  "routing_depth_multiplier", "gate_time_multiplier", "coherence_decay_scale",
 ]);
 
 interface DashboardState {
@@ -239,6 +242,10 @@ export default function Home() {
   const updateNode = (key: keyof RoutingConfig, node: StageNode) => {
     setRouting((current) => current[key] === node ? current : { ...current, [key]: node });
   };
+  const selectHardware = (profile: HardwareProfile) => {
+    setHardware(profile);
+    setAvailableQubits(String(hardwareDefaultQubits(profile, scale)));
+  };
   const restoreRun = (run: SavedSimulationRun) => {
     const restored = restoredConfiguration(run);
     setWorkload(restored.workload_id); setScale(restored.scale_param); setHardware(restored.hardware_profile);
@@ -294,9 +301,12 @@ export default function Home() {
             </fieldset>
             <fieldset className="min-w-0">
               <legend className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">03 / Hardware profile</legend>
-              <div className="flex flex-wrap gap-1 rounded-lg border border-slate-800 bg-slate-950 p-1">
-                {(["ibm_heron_nisq", "ideal_sim"] as const).map((value) => (
-                  <button key={value} type="button" aria-pressed={hardware === value} onClick={() => setHardware(value)} className={["min-h-7 rounded-md px-2 py-1.5 text-[11px] transition-colors", hardware === value ? "bg-slate-800 text-slate-100 shadow-sm" : "text-slate-500 hover:text-slate-200"].join(" ")}>{hardwareLabel(value)}</button>
+              <div className="grid grid-cols-2 gap-1 rounded-lg border border-slate-800 bg-slate-950 p-1">
+                {HARDWARE_PROFILE_IDS.map((value) => (
+                  <div key={value} className={`flex min-w-0 items-center rounded-md ${hardware === value ? "bg-slate-800 text-slate-100 shadow-sm" : "text-slate-400"}`}>
+                    <button type="button" aria-pressed={hardware === value} onClick={() => selectHardware(value)} className="min-h-7 min-w-0 flex-1 px-2 py-1.5 text-left text-[10px] transition-colors hover:text-cyan-200">{hardwareLabel(value)}</button>
+                    <InfoPopover label={`About ${hardwareLabel(value)}`}><p className="font-semibold text-cyan-200">{hardwareLabel(value)}</p><p className="mt-2">{HARDWARE_PROFILES[value].description}</p><p className="mt-2 text-[10px] text-slate-400">Selecting a profile sets its reference capacity; Ideal Noise-Free selects this scale’s Carry-Lookahead ceiling. You can then override capacity manually or with presets and tiers. Restoring a snapshot preserves its saved capacity. Architecture assumptions are not device benchmarks.</p></InfoPopover>
+                  </div>
                 ))}
               </div>
             </fieldset>
@@ -310,7 +320,7 @@ export default function Home() {
               <InfoPopover label="About QPU capacity">
                 <p className="font-semibold text-cyan-200">Available QPU capacity</p>
                 <p className="mt-2">Per QPU stage. Select a tier threshold to explore the trade-off; changes apply on Run simulation.</p>
-                <p className="mt-2">133 and 1,121 reflect Heron r1 and Condor milestones; larger presets are exploratory capacities. These are modeled usable qubits; physical error-correction overhead is excluded. Extra capacity above the carry-lookahead threshold stays idle.</p>
+                <p className="mt-2">36 references Forte; 72 is the exploratory Google grid preset (published Weber: 53 active qubits). 133 and 1,121 reference Heron r1 and Condor milestones; larger presets are exploratory capacities. These are modeled usable qubits; physical error-correction overhead is excluded. Extra capacity above the carry-lookahead threshold stays idle.</p>
                 <p className="mt-2">N = 15 in sequential mode runs a Qiskit Aer circuit. Parallel tiers and larger scales use an analytical hardware model. QPU capacity does not limit CPU/GPU emulation.</p>
               </InfoPopover>
             </div>

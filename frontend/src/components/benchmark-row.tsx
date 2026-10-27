@@ -8,6 +8,7 @@ import { cachedInsight } from "@/lib/advisor-telemetry";
 import { SNAPSHOT_NAME_LIMIT } from "@/lib/benchmark-snapshot";
 import { coherenceBudget, pipelineTiming } from "@/lib/kpi-metrics";
 import { formatDuration, formatRawMilliseconds } from "@/lib/duration";
+import { hardwareLabel } from "@/lib/hardware-profiles";
 import { DEFAULT_AVAILABLE_QUBITS, formatValue } from "@/lib/telemetry";
 import type { SavedSimulationRun } from "@/types/run-history";
 
@@ -42,7 +43,7 @@ export function BenchmarkRow({ run, busy, selected, selectionDisabled, onSelect,
         </form> : <><p className="flex items-start gap-1 font-semibold text-cyan-100 [overflow-wrap:anywhere]">{run.isSnapshot && <Pin size={12} aria-label="Pinned Benchmark Snapshot" className="mt-0.5 shrink-0 text-cyan-400" />}{run.snapshotName ?? "Unnamed run"}</p><p className="mt-0.5 text-[9px] text-slate-500">{run.workloadName}</p></>}
         <time dateTime={run.completedAt} className="mt-1 block text-[9px] text-slate-500">{timeFormatter.format(new Date(run.completedAt))}</time>
       </td>
-      <td className="p-2"><p>{run.scaleLabel}</p><p className="mt-1 text-[9px] text-slate-500">{run.hardwareProfile === "ideal_sim" ? "Ideal Noise-Free" : "IBM Heron NISQ"}</p></td>
+      <td className="p-2"><p>{run.scaleLabel}</p><p className="mt-1 text-[9px] text-slate-500">{hardwareLabel(run.hardwareProfile)}</p></td>
       <td className="whitespace-nowrap p-2 font-mono">{run.stage1Node} → {run.stage2Node} → {run.stage3Node}</td>
       <td className="p-2"><p className="font-mono text-cyan-200">{kernel.node === "QPU" ? `${formatValue(metrics.qubits_allocated)} / ${formatValue(metrics.available_qubits ?? run.request.available_qubits ?? DEFAULT_AVAILABLE_QUBITS)}` : "— (Classical)"}</p><p className="mt-1 text-[9px] text-slate-400">{kernel.node === "QPU" ? formatValue(metrics.parallelization_tier) : `${formatValue(metrics.qubits_required)} logical qubits`}</p></td>
       <td className="p-2 font-mono"><p title={formatRawMilliseconds(timing.computeMs)}>{formatDuration(timing.computeMs)} <span className="font-sans text-slate-500">compute</span></p><p title={formatRawMilliseconds(timing.overheadMs)} className="mt-1 text-amber-200">{formatDuration(timing.overheadMs)} <span className="font-sans text-slate-500">I/O</span></p></td>

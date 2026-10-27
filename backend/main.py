@@ -27,6 +27,21 @@ app.add_middleware(
 # 1. UNIFIED PYDANTIC CONTRACT
 # ==========================================
 StageNode = Literal["CPU", "GPU", "QPU"]
+HardwareProfile = Literal["ibm_heron_nisq", "google_weber_grid", "ionq_forte_trapped_ion", "ideal_sim"]
+
+# Comparative architecture assumptions, not measured processor specifications.
+# The requested 72-qubit Google preset is exploratory: the published Weber
+# datasheet describes 53 active qubits. Capacity overrides remain independent.
+HARDWARE_PROFILES = {
+    "ibm_heron_nisq": {"topology": "Heavy-Hex", "reference_qubits": 133, "depth_factor": 1.0,
+                       "gate_factor": 1.0, "prep_ms": 0.15, "decay_scale": 1200.0},
+    "google_weber_grid": {"topology": "2D Square Grid", "reference_qubits": 72, "depth_factor": 0.78,
+                          "gate_factor": 0.45, "prep_ms": 0.12, "decay_scale": 850.0},
+    "ionq_forte_trapped_ion": {"topology": "All-to-All Ion Trap", "reference_qubits": 36, "depth_factor": 0.55,
+                               "gate_factor": 180.0, "prep_ms": 0.85, "decay_scale": 8500.0},
+    "ideal_sim": {"topology": "Noise-free reference", "reference_qubits": None, "depth_factor": 1.0,
+                  "gate_factor": 1.0, "prep_ms": 0.15, "decay_scale": None},
+}
 
 
 class RoutingConfig(BaseModel):
@@ -40,7 +55,7 @@ class RoutingConfig(BaseModel):
 class SimulationRequest(BaseModel):
     workload_id: str = "shors_crypto"       # "shors_crypto" or "quantum_mips"
     scale_param: int = Field(default=15, strict=True, ge=2, le=2_147_483_647)
-    hardware_profile: str = "ibm_heron_nisq" # "ideal_sim" or "ibm_heron_nisq"
+    hardware_profile: HardwareProfile = "ibm_heron_nisq"
     routing: Optional[RoutingConfig] = None
     available_qubits: int = Field(default=133, strict=True, ge=1, le=2_147_483_647)
 
@@ -175,7 +190,9 @@ N15_REFERENCE_KERNEL_MS = 1.85
 def _run_default_shors_pipeline(
     scale_param: int, hardware_profile: str, qpu_plan: Optional[Dict[str, Any]] = None,
 ) -> HybridTelemetryResponse:
-    noisy = (hardware_profile == "ibm_heron_nisq")
+    architecture = HARDWARE_PROFILES[hardware_profile]
+    noisy = hardware_profile != "ideal_sim"
+    legacy = hardware_profile in ("ibm_heron_nisq", "ideal_sim")
     a = 7 if scale_param != 21 else 2
 
     # Determine bit length n
@@ -189,6 +206,10 @@ def _run_default_shors_pipeline(
     # --- CASE A: LIVE QISKIT EXECUTION (N = 15) ---
     if scale_param == 15 and (qpu_plan is None or qpu_plan["parallelization_tier"] == "Space-Optimized Sequential"):
         qpu_res = execute_live_shors_15(a=7, noisy=noisy)
+        reference_depth = qpu_res["depth"]
+        depth = math.ceil(reference_depth * architecture["depth_factor"])
+        coherence = qpu_res["coherence_pct"] if legacy else round(100.0 * math.exp(-depth / architecture["decay_scale"]), 2)
+        gate_ms = N15_REFERENCE_KERNEL_MS if legacy else round(N15_REFERENCE_KERNEL_MS * depth / reference_depth * architecture["gate_factor"], 6)
         r = qpu_res["period_r"]
         p = math.gcd(a**(r // 2) - 1, 15)
         q = math.gcd(a**(r // 2) + 1, 15)
@@ -211,14 +232,17 @@ def _run_default_shors_pipeline(
                 "stage_2_quantum_kernel": StageTelemetry(
                     name="Quantum Period Finding (ModExp + IQFT)",
                     node="QPU",
-                    latency_ms=N15_REFERENCE_KERNEL_MS,
+                    latency_ms=gate_ms,
                     status="OPTIMAL",
                     output_summary=f"Peaks at {qpu_res['top_measurements']} -> Extracted period r = {r}.",
                     metrics={
                         "qubits_required": qpu_res["qubits"],
-                        "circuit_depth": qpu_res["depth"],
-                        "io_state_prep_ms": 0.05,
-                        "coherence_survival_pct": qpu_res["coherence_pct"]
+                        "circuit_depth": depth,
+                        "reference_circuit_depth": reference_depth,
+                        # Preserve the original Aer-reference setup for legacy profiles.
+                        # Ion prep_ms includes readout; do not add that overhead twice.
+                        "io_state_prep_ms": 0.05 if legacy else architecture["prep_ms"],
+                        "coherence_survival_pct": coherence,
                     }
                 ),
                 "stage_3_classical_post": StageTelemetry(
@@ -234,8 +258,9 @@ def _run_default_shors_pipeline(
 
     # --- CASE B: ANALYTICAL NISQ PROFILER (N = 21, 35, RSA-512, RSA-2048) ---
     qubits_req = 8 if scale_param == 15 else 2 * n_bits + 3
-    circuit_depth = qpu_plan["circuit_depth"] if qpu_plan else int(4.5 * (n_bits ** 3))
-    gate_exec_ms = round(circuit_depth * 0.00025, 2)
+    reference_depth = qpu_plan["circuit_depth"] if qpu_plan else int(4.5 * (n_bits ** 3))
+    circuit_depth = math.ceil(reference_depth * architecture["depth_factor"])
+    gate_exec_ms = round(circuit_depth * 0.00025 * architecture["gate_factor"], 2 if legacy else 6)
 
     if not noisy:
         coherence_pct = 100.0
@@ -243,8 +268,9 @@ def _run_default_shors_pipeline(
         post_status = "OPTIMAL"
         bottleneck = "NONE (Noise-Free QPU Analytical Projection)" if qpu_plan else "CLASSICAL SIMULATION RAM WALL (2^N Statevector Limit)"
     else:
-        # Exponential T1/T2 decay based on circuit depth (~1500 gate coherence budget on NISQ)
-        coherence_pct = round(max(0.0, 100.0 * math.exp(-circuit_depth / 1200.0)), 2)
+        # A depth-based proxy, not a calibrated T1/T2 or gate-error simulation.
+        # Slow trapped-ion gates affect time separately from their longer decay scale.
+        coherence_pct = round(max(0.0, 100.0 * math.exp(-circuit_depth / architecture["decay_scale"])), 2)
         if coherence_pct > 40:
             qpu_status = "WARNING"
             post_status = "OPTIMAL"
@@ -290,7 +316,8 @@ def _run_default_shors_pipeline(
                 metrics={
                     "qubits_required": qubits_req,
                     "circuit_depth": circuit_depth,
-                    "io_state_prep_ms": 0.15,
+                    "reference_circuit_depth": reference_depth,
+                    "io_state_prep_ms": architecture["prep_ms"],
                     "coherence_survival_pct": coherence_pct
                 }
             ),
@@ -361,6 +388,8 @@ def run_shors_pipeline(
     not device measurements. Classical emulation ignores physical QPU capacity.
     """
     targets = routing or RoutingConfig()
+    if hardware_profile not in HARDWARE_PROFILES:
+        raise ValueError("Unsupported hardware profile")
     plan = qpu_capacity_plan(scale_param, available_qubits)
     core_profile = hardware_profile if targets.stage_2_node == "QPU" else "ideal_sim"
     response = _run_default_shors_pipeline(
@@ -378,6 +407,15 @@ def run_shors_pipeline(
         stage.metrics["execution_feasible"] = True
 
         if target == "QPU":
+            architecture = HARDWARE_PROFILES[hardware_profile]
+            stage.metrics.update({"hardware_architecture": hardware_profile,
+                                  "connectivity_topology": architecture["topology"],
+                                  "routing_depth_multiplier": architecture["depth_factor"],
+                                  "gate_time_multiplier": architecture["gate_factor"]})
+            if architecture["reference_qubits"] is not None:
+                stage.metrics["reference_qubits"] = architecture["reference_qubits"]
+            if architecture["decay_scale"] is not None:
+                stage.metrics["coherence_decay_scale"] = architecture["decay_scale"]
             # Only the quantum kernel has an implemented QPU algorithm. Other
             # QPU routes still get capacity validation before route validation.
             capacity = {k: v for k, v in plan.items() if k != "circuit_depth"}
@@ -400,7 +438,8 @@ def run_shors_pipeline(
                     f"{plan['idle_qubits']:,} qubits idle."
                 )
                 stage.metrics["depth_model"] = (
-                    "Compiled 8-qubit Aer reference circuit" if response.execution_mode == "LIVE_QISKIT_AER"
+                    ("Compiled 8-qubit Aer reference circuit" if hardware_profile in ("ibm_heron_nisq", "ideal_sim")
+                     else "Architecture-adjusted Aer reference projection") if response.execution_mode == "LIVE_QISKIT_AER"
                     else "Illustrative analytical projection (4.5 coefficient, log base 2)"
                 )
 

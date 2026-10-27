@@ -82,15 +82,62 @@ validation, and delta comparison are in `src/lib/telemetry.ts`.
 
 Run `npm run lint` and `npm run build` to check the frontend.
 
+### Quantum hardware architectures
+
+The Hardware profile control supports four comparative models. Clicking a profile
+sets capacity to its reference register: IBM 133, Google 72, IonQ 36. Ideal
+Noise-Free selects the current scale's Carry-Lookahead ceiling (22, 28, 33, 2816,
+or 11264). Clicking the active profile again also resets its default. Typing a
+custom value or clicking a capacity preset/tier afterward leaves the selected
+profile unchanged; the matching capacity preset highlights automatically.
+Changing scale alone preserves capacity overrides. Restoring a snapshot loads
+its exact saved capacity and bypasses these profile-click defaults. Architecture
+tooltips describe topology, gate-time assumptions, and reference register size.
+
+| Profile | Topology / reference capacity | Routing depth factor | Gate-time factor | Prep/readout overhead | Decay scale |
+| --- | --- | --- | --- | --- | --- |
+| `ibm_heron_nisq` | Heavy-Hex superconducting / 133 | 1.0× | 1.0× | 0.15 ms | 1200 |
+| `google_weber_grid` | Four-neighbor superconducting square grid / exploratory 72 | 0.78× | 0.45× | 0.12 ms | 850 |
+| `ionq_forte_trapped_ion` | All-to-all trapped ion / 36 | 0.55× | 180× | 0.85 ms combined | 8500 |
+| `ideal_sim` | Noise-free baseline / separately selected capacity | 1.0× | 1.0× | 0.15 ms | 100% coherence |
+
+The requested 72-qubit Google preset is an exploratory model: Google's published
+[Weber datasheet](https://quantumai.google/hardware/datasheet/weber.pdf) describes
+53 active qubits. [Forte](https://www.ionq.com/quantum-systems/forte) provides the
+36-qubit reference. The factors above are simulator assumptions, not native gate
+benchmarks, calibrated device fidelities, or live cloud-device dispatch.
+
+Effective depth is `ceil(tier_reference_depth × routing_depth_multiplier)`.
+Analytical QPU compute is `effective_depth × 0.00025 ms × gate_time_multiplier`;
+coherence is `100 exp(-effective_depth / decay_scale)` (a depth-based proxy).
+Ion all-to-all connectivity removes modeled SWAP routing layers, while slow
+laser-driven shared vibrational-mode gates can outweigh its longer coherence.
+Google reduces routing layers and gate time but uses a shorter decay window.
+Ancilla tiers and minimum register widths remain unchanged across architectures.
+
+N=15 sequential still executes an Aer reference circuit. IBM/ideal retain their
+original 1.85 ms compute and 0.05 ms setup; new profiles project the compiled
+reference depth and scale compute by `effective_depth / reference_depth` and the
+gate-time factor. This is not native Google/IonQ compilation or a calibrated
+noise simulation. CPU/GPU routes ignore all physical QPU architecture factors,
+retain 100% deterministic coherence, and keep their original RAM limits.
+Architecture metadata persists in telemetry JSONB without a database migration.
+The `/api/advisor` endpoint includes trusted architecture constants in its digest
+and cache policy; the live system instruction and deterministic fallback explain
+SWAP savings and ion gate penalties. History, restoration, and state changes
+recognize all four profiles. A trapped-ion latency verdict is shown when a
+feasible CPU baseline is faster despite surviving coherence.
+
 ### QPU capacity and parallelization
 
 Requests accept `available_qubits`, a positive integer defaulting to 133. Presets
-are 16, 133, 1121, 2048, 4096, and 16384; a numeric input and threshold shortcuts
+are 16, 36, 72, 133, 1121, 2048, 4096, and 16384; a numeric input and threshold shortcuts
 allow exact boundary experiments. The 133 and 1121 labels reference the
 [Heron r1 and Condor milestones](https://www.ibm.com/quantum/blog/quantum-roadmap-2033);
 larger values are exploratory capacities. The profiler models usable logical
-qubits, excluding physical error-correction overhead and device connectivity.
-Capacity is independent of the selected noise profile and is reused per stage.
+qubits, excluding physical error-correction overhead. Architecture topology uses
+the depth multipliers above. After profile selection, capacity can be overridden
+independently and is reused per stage.
 
 Here `n` is the modulus bit length; RSA-512/RSA-2048 use 512/2048 bits directly.
 
@@ -102,9 +149,10 @@ Here `n` is the modulus bit length; RSA-512/RSA-2048 use 512/2048 bits directly.
 | `ceil(5.5n)` or more | `ceil(5.5n)` | Carry-Lookahead Parallel | `ceil(4.5 n log₂² n)` |
 
 The N = 15 sequential circuit uses its actual compiled depth rather than the
-cubic analytical formula. NISQ coherence uses `100 exp(-depth / 1200)` across
-tiers; ideal coherence is 100%. Analytical QPU time uses 0.00025 ms per depth
-layer. These coefficients are illustrative assumptions, not hardware benchmarks.
+cubic analytical formula, with architecture projections as described above.
+IBM coherence uses `100 exp(-depth / 1200)` across tiers; ideal coherence is 100%.
+Analytical QPU time uses 0.00025 ms per effective depth layer before the selected
+gate-time multiplier. These coefficients are illustrative assumptions.
 Additional qubits beyond the last threshold remain idle and do not change depth
 or latency. Stage telemetry exposes `available_qubits`, `qubits_allocated`,
 `minimum_qubits_required`, `idle_qubits`, `parallelization_tier`,

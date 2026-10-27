@@ -3,6 +3,9 @@ import { DEFAULT_AVAILABLE_QUBITS, DEFAULT_ROUTING, PIPELINE, totalLatency } fro
 import type { AdvisorRequest } from "@/types/advisor";
 import type { CompletedRun } from "@/types/run-history";
 import type { HybridTelemetryResponse, RoutingConfig, SimulationRequest, StageTelemetry } from "@/types/telemetry";
+import { HARDWARE_PROFILE_IDS } from "@/types/telemetry";
+import { HARDWARE_PROFILES } from "@/lib/hardware-profiles";
+import { pipelineTiming } from "@/lib/kpi-metrics";
 
 export const ADVISOR_BODY_LIMIT = 65_536;
 const MAX_QUBITS = 2_147_483_647; // Matches FastAPI's positive int32 capacity contract.
@@ -50,6 +53,9 @@ function metrics(value: unknown): StageTelemetry["metrics"] {
     ["coherence_survival_pct", 0, 100, false], ["io_state_prep_ms", 0, Number.MAX_SAFE_INTEGER, false],
     ["launch_transfer_overhead_ms", 0, Number.MAX_SAFE_INTEGER, false], ["compute_latency_factor", 0, Number.MAX_SAFE_INTEGER, false],
     ["statevector_memory_budget_gib", 1, Number.MAX_SAFE_INTEGER, false],
+    ["reference_circuit_depth", 0, Number.MAX_SAFE_INTEGER, true], ["reference_qubits", 1, MAX_QUBITS, true],
+    ["routing_depth_multiplier", 0, 1, false], ["gate_time_multiplier", 0, 180, false],
+    ["coherence_decay_scale", 1, Number.MAX_SAFE_INTEGER, false], ["io_readout_ms", 0, Number.MAX_SAFE_INTEGER, false],
   ] as const;
   for (const [key, min, max, integer] of numeric) {
     if (Object.hasOwn(source, key)) result[key] = number(source[key], min, max, integer);
@@ -62,6 +68,8 @@ function metrics(value: unknown): StageTelemetry["metrics"] {
   }
   if (Object.hasOwn(source, "parallelization_tier")) result.parallelization_tier = choice(source.parallelization_tier, TIERS);
   if (Object.hasOwn(source, "depth_complexity")) result.depth_complexity = choice(source.depth_complexity, DEPTHS);
+  if (Object.hasOwn(source, "hardware_architecture")) result.hardware_architecture = choice(source.hardware_architecture, HARDWARE_PROFILE_IDS);
+  if (Object.hasOwn(source, "connectivity_topology")) result.connectivity_topology = choice(source.connectivity_topology, ["Heavy-Hex", "2D Square Grid", "All-to-All Ion Trap", "Noise-free reference"]);
   return result;
 }
 
@@ -85,7 +93,7 @@ function validateRun(value: unknown): CompletedRun {
   const request: SimulationRequest = {
     workload_id: choice(config.workload_id, ["shors_crypto", "quantum_mips"]),
     scale_param: scale,
-    hardware_profile: choice(config.hardware_profile, ["ibm_heron_nisq", "ideal_sim"]),
+    hardware_profile: choice(config.hardware_profile, HARDWARE_PROFILE_IDS),
     available_qubits: config.available_qubits === undefined ? DEFAULT_AVAILABLE_QUBITS : number(config.available_qubits, 1, MAX_QUBITS, true),
     routing,
   };
@@ -100,6 +108,15 @@ function validateRun(value: unknown): CompletedRun {
     if (node !== routing[routingKey]) invalid();
     for (const field of ["name", "output_summary"]) if (stage[field] !== undefined && typeof stage[field] !== "string") invalid();
     const numeric = metrics(stage.metrics);
+    if (node === "QPU" && numeric.hardware_architecture !== undefined && numeric.hardware_architecture !== request.hardware_profile) invalid();
+    if (node === "QPU") {
+      const architecture = HARDWARE_PROFILES[request.hardware_profile];
+      for (const [key, expected] of Object.entries({ connectivity_topology: architecture.topology,
+        reference_qubits: architecture.referenceQubits, routing_depth_multiplier: architecture.depthMultiplier,
+        gate_time_multiplier: architecture.gateTimeMultiplier, coherence_decay_scale: architecture.decayScale })) {
+        if (numeric[key] !== undefined && numeric[key] !== expected) invalid();
+      }
+    }
     if (node === "QPU" && numeric.available_qubits !== undefined && numeric.available_qubits !== request.available_qubits) invalid();
     const available = numeric.available_qubits ?? request.available_qubits;
     for (const field of ["qubits_allocated", "idle_qubits"]) {
@@ -135,10 +152,12 @@ export function validateAdvisorRequest(value: unknown): AdvisorRequest {
 export function advisorDigest(run: CompletedRun) {
   // Safe even when called independently of the route's pre-flight parser.
   run = validateRun(run);
-  return { request: run.request, telemetry: {
+  const { label, topology, referenceQubits, depthMultiplier, gateTimeMultiplier, prepMs, decayScale } = HARDWARE_PROFILES[run.request.hardware_profile];
+  const architecture = { label, topology, referenceQubits, depthMultiplier, gateTimeMultiplier, prepMs, decayScale };
+  return { request: run.request, architecture, telemetry: {
     execution_mode: run.telemetry.execution_mode,
     primary_bottleneck: run.telemetry.primary_bottleneck,
-    total_latency_ms: totalLatency(run.telemetry),
+    total_latency_ms: pipelineTiming(run.telemetry).totalMs,
     stages: Object.fromEntries(PIPELINE.map(({ key }) => {
       const stage = run.telemetry.stages[key];
       return [key, { node: stage.node, status: stage.status, latency_ms: stage.latency_ms, metrics: stage.metrics }];

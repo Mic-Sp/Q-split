@@ -1,6 +1,7 @@
 import { pipelineLatencyBuckets } from "@/lib/kpi-metrics";
 import { DEFAULT_AVAILABLE_QUBITS, formatValue, PIPELINE, qubitThresholds } from "@/lib/telemetry";
 import { formatDuration } from "@/lib/duration";
+import { architectureTradeOff } from "@/lib/hardware-profiles";
 import type { HybridTelemetryResponse, SimulationRequest } from "@/types/telemetry";
 
 export interface OffloadVerdict {
@@ -13,6 +14,12 @@ const finite = (value: unknown): value is number => typeof value === "number" &&
 export const SIGNIFICANT_OFFLOAD_SPEEDUP = 2;
 
 export function offloadVerdict(data: HybridTelemetryResponse, request: SimulationRequest): OffloadVerdict {
+  const verdict = baseOffloadVerdict(data, request);
+  const context = data.stages.stage_2_quantum_kernel.node === "QPU" ? architectureTradeOff(request.hardware_profile) : "";
+  return context ? { ...verdict, message: `${verdict.message} ${context}` } : verdict;
+}
+
+function baseOffloadVerdict(data: HybridTelemetryResponse, request: SimulationRequest): OffloadVerdict {
   const kernel = data.stages.stage_2_quantum_kernel;
   const minimum = qubitThresholds(request.scale_param).minimum;
   for (const stage of Object.values(data.stages)) {
@@ -51,6 +58,10 @@ export function offloadVerdict(data: HybridTelemetryResponse, request: Simulatio
       : "CPU placement for short host routines avoids launch/transfer penalties; compare end-to-end CPU timing before expanding offload.";
     return { title: "Interconnect Dominated", status: "warning",
       message: `Bus, transfer, and state-preparation overhead consumes ${(timing.overheadMs / timing.totalMs * 100).toFixed(1)}% of modeled wall-clock time. ${cpuComparison}` };
+  }
+  if (kernel.node === "QPU" && request.hardware_profile === "ionq_forte_trapped_ion" && cpuTotal !== null && timing.totalMs > cpuTotal) {
+    return { title: "Trapped-Ion Gate Latency", status: "warning",
+      message: `Modeled trapped-ion gate execution makes this offload slower (${formatDuration(timing.totalMs)}) than the CPU baseline (${formatDuration(cpuTotal)}), despite its connectivity and coherence benefits. Compare a superconducting profile with the same scale, capacity, and routes.` };
   }
   if (kernel.node === "QPU" && finite(survival) && survival >= 70 && kernel.latency_ms > 0 && cpuTotal !== null && cpuKernel !== null &&
       cpuTotal / timing.totalMs >= SIGNIFICANT_OFFLOAD_SPEEDUP && cpuKernel / kernel.latency_ms >= SIGNIFICANT_OFFLOAD_SPEEDUP) {
