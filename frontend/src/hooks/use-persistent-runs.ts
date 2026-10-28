@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CompletedRun, HistoryAvailability, HistoryResult, SavedSimulationRun, SaveRunResult } from "@/types/run-history";
-import { mergeRuns } from "@/lib/run-history";
+import { mergeRuns, runsForWorkload } from "@/lib/run-history";
 import { snapshotPatch } from "@/lib/benchmark-snapshot";
+import type { WorkloadId } from "@/types/telemetry";
 
-export function usePersistentRuns() {
+export function usePersistentRuns(workload: WorkloadId) {
   const [runs, setRuns] = useState<SavedSimulationRun[]>([]);
   const [availability, setAvailability] = useState<HistoryAvailability | "loading">("loading");
   const [message, setMessage] = useState<string | null>(null);
@@ -20,26 +21,30 @@ export function usePersistentRuns() {
   const [busyIds, setBusyIds] = useState<string[]>([]);
   const [mutationMessage, setMutationMessage] = useState<string | null>(null);
   const mounted = useRef(false);
+  const refreshVersion = useRef(0);
+  const invalidateRefresh = useCallback(() => { refreshVersion.current++; }, []);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
+    const version = ++refreshVersion.current;
+    setRefreshing(true);
     try {
-      const response = await fetch("/api/runs?limit=20", { cache: "no-store", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(8_000)]) : AbortSignal.timeout(8_000) });
+      const response = await fetch(`/api/runs?limit=20&workload=${workload}`, { cache: "no-store", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(8_000)]) : AbortSignal.timeout(8_000) });
       const result = await response.json() as HistoryResult;
-      if (!mounted.current || signal?.aborted) return;
+      if (!mounted.current || signal?.aborted || version !== refreshVersion.current) return;
       if (result.status === "ready" && response.ok && Array.isArray(result.runs)) {
-        setRuns((current) => mergeRuns(current, [...result.runs, ...(result.snapshots ?? [])]).filter(run => !deleted.current.has(run.id)));
+        setRuns((current) => mergeRuns(current, runsForWorkload([...result.runs, ...(result.snapshots ?? [])], workload)).filter(run => !deleted.current.has(run.id)));
         setAvailability("ready"); setMessage(null);
       } else if (result.status === "unconfigured" || result.status === "unavailable") {
         setAvailability(result.status); setMessage(result.message);
       } else throw new Error("Invalid history response");
     } catch {
-      if (!mounted.current || signal?.aborted) return;
+      if (!mounted.current || signal?.aborted || version !== refreshVersion.current) return;
       setAvailability("unavailable");
       setMessage("Persistent history could not be reached. Simulations still work normally; refresh history to retry.");
     } finally {
-      if (mounted.current && !signal?.aborted) setRefreshing(false);
+      if (mounted.current && !signal?.aborted && version === refreshVersion.current) setRefreshing(false);
     }
-  }, []);
+  }, [workload]);
 
   const refreshHistory = useCallback(() => {
     setRefreshing(true);
@@ -161,9 +166,9 @@ export function usePersistentRuns() {
     void Promise.resolve().then(() => {
       if (!controller.signal.aborted) return refresh(controller.signal);
     });
-    return () => { mounted.current = false; controller.abort(); };
-  }, [refresh]);
+    return () => { mounted.current = false; invalidateRefresh(); controller.abort(); };
+  }, [refresh, invalidateRefresh]);
 
-  return { runs, availability, message: mutationMessage ?? message, refreshing, pendingCount, savingCount, busyIds,
+  return { runs: runsForWorkload(runs, workload), availability, message: mutationMessage ?? message, refreshing, pendingCount, savingCount, busyIds,
     refresh: refreshHistory, retryPending, saveRun, nameSnapshot, deleteRun, isDeleted: (id: string) => deleted.current.has(id) };
 }

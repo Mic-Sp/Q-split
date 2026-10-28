@@ -3,12 +3,14 @@
 import { useEffect, useReducer, useState } from "react";
 import Link from "next/link";
 import { PersistentRunHistory } from "@/components/persistent-run-history";
+import { TargetScales } from "@/components/target-scales";
 import { ParallelizationTiers } from "@/components/parallelization-tiers";
 import { TelemetryAdvisor } from "@/components/telemetry-advisor";
 import { LatencyProportion } from "@/components/latency-proportion";
 import { OffloadVerdictStrip } from "@/components/offload-verdict";
 import { InfoPopover } from "@/components/info-popover";
 import { CaptureBenchmark } from "@/components/capture-benchmark";
+import { recordCompletedRun, sessionForWorkload, type SimulationSession } from "@/lib/simulation-session";
 import { restoredConfiguration } from "@/lib/benchmark-snapshot";
 import type { SavedSimulationRun } from "@/types/run-history";
 import { usePersistentRuns } from "@/hooks/use-persistent-runs";
@@ -22,7 +24,7 @@ import {
   GitCompareArrows, Layers3, LoaderCircle, Play, Radio, Workflow, Zap,
 } from "lucide-react";
 import {
-  DEFAULT_AVAILABLE_QUBITS, DEFAULT_ROUTING, describeChanges, formatValue, hardwareDefaultQubits, PIPELINE, simulate,
+  DEFAULT_AVAILABLE_QUBITS, DEFAULT_ROUTING, formatValue, hardwareDefaultQubits, PIPELINE, simulate,
   type Snapshot, type Transition,
 } from "@/lib/telemetry";
 import type { HardwareProfile, RoutingConfig, SimulationRequest, StageNode, StageStatus, StageTelemetry, WorkloadId } from "@/types/telemetry";
@@ -54,13 +56,10 @@ const CAPACITY_PANEL_METRICS = new Set([
   "routing_depth_multiplier", "gate_time_multiplier", "coherence_decay_scale",
 ]);
 
-interface DashboardState {
+interface DashboardState extends SimulationSession {
   loading: boolean;
   slow: boolean;
   error: string | null;
-  snapshot: Snapshot | null;
-  history: Transition[];
-  completed: number;
 }
 type Action = { type: "start" } | { type: "slow" } | { type: "error"; error: string } | { type: "success"; snapshot: Snapshot };
 
@@ -68,14 +67,7 @@ function reducer(state: DashboardState, action: Action): DashboardState {
   if (action.type === "start") return { ...state, loading: true, slow: false, error: null };
   if (action.type === "slow") return { ...state, slow: true };
   if (action.type === "error") return { ...state, loading: false, slow: false, error: action.error };
-  const transition = state.snapshot ? {
-    id: state.completed + 1, before: state.snapshot, after: action.snapshot,
-    changes: describeChanges(state.snapshot, action.snapshot),
-  } : null;
-  return {
-    loading: false, slow: false, error: null, snapshot: action.snapshot, completed: state.completed + 1,
-    history: transition ? [transition, ...state.history].slice(0, 6) : state.history,
-  };
+  return { ...recordCompletedRun(state, action.snapshot), loading: false, slow: false, error: null };
 }
 
 function StatusBadge({ status }: { status: StageStatus }) {
@@ -171,9 +163,9 @@ function PipelineCard({ index, stage, selectedNode, onNodeChange, pending, workl
 }
 
 export default function Home() {
-  const persistentHistory = usePersistentRuns();
-  const { saveRun } = persistentHistory;
   const [workload, setWorkload] = useState<WorkloadId>("shors_crypto");
+  const persistentHistory = usePersistentRuns(workload);
+  const { saveRun } = persistentHistory;
   const [scale, setScale] = useState(15);
   const [hardware, setHardware] = useState<HardwareProfile>("ibm_heron_nisq");
   const [availableQubits, setAvailableQubits] = useState(String(DEFAULT_AVAILABLE_QUBITS));
@@ -181,7 +173,7 @@ export default function Home() {
   const [submittedRequest, setSubmittedRequest] = useState<SimulationRequest | null>(null);
   const [restoreMessage, setRestoreMessage] = useState<string | null>(null);
   const [state, dispatch] = useReducer(reducer, {
-    loading: false, slow: false, error: null, snapshot: null, history: [], completed: 0,
+    loading: false, slow: false, error: null, snapshots: {}, history: [], completed: 0,
   });
 
   useEffect(() => {
@@ -211,7 +203,8 @@ export default function Home() {
     return () => { active = false; clearTimeout(timeout); clearTimeout(slowNotice); controller.abort(); };
   }, [submittedRequest, saveRun]);
 
-  const { snapshot, loading, error } = state;
+  const { loading, error } = state;
+  const { snapshot, history } = sessionForWorkload(state, workload);
   const data = snapshot?.data;
   const quantum = data?.stages.stage_2_quantum_kernel;
   const timing = data ? pipelineTiming(data) : null;
@@ -222,7 +215,7 @@ export default function Home() {
     : "OPTIMAL";
   const style = STATUS[severity];
   const limited = data && !data.primary_bottleneck.startsWith("NONE");
-  const latest = state.history[0];
+  const latest = history[0];
   const capacity = Number(availableQubits);
   const validCapacity = Number.isSafeInteger(capacity) && capacity >= 1 && capacity <= 2_147_483_647;
   const configurationChanged = snapshot && (
@@ -300,9 +293,7 @@ export default function Home() {
             </div>
             <fieldset className="min-w-0 flex-1">
               <legend className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">02 / Target scale</legend>
-              <div className="flex flex-wrap gap-1.5">{WORKLOADS[workload].scales.map((value) => (
-                <button key={value} type="button" aria-pressed={scale === value} onClick={() => setScale(value)} className={["min-h-9 rounded-lg border px-2 py-2 font-mono text-[11px] transition-colors", scale === value ? "border-cyan-400/50 bg-cyan-400/10 text-cyan-300" : "border-slate-800 bg-slate-950/70 text-slate-400 hover:border-slate-600 hover:text-slate-200"].join(" ")}>{workloadScaleLabel(value, workload)}</button>
-              ))}</div>
+              <TargetScales key={workload} workload={workload} scale={scale} onSelect={setScale} />
             </fieldset>
             <fieldset className="min-w-0">
               <legend className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">03 / Hardware profile</legend>
@@ -336,7 +327,7 @@ export default function Home() {
               ))}</div>
               <div className="ml-2 flex min-w-0 flex-wrap items-center gap-2 border-l border-slate-600/80 pl-4">
                 <span className="text-[9px] font-semibold uppercase tracking-wider text-slate-500">Tiers</span>
-                <ParallelizationTiers key={workload} compact workload={workload} scale={scale} onSelect={(value) => setAvailableQubits(String(value))} />
+                <ParallelizationTiers key={workload} compact workload={workload} scale={scale} availableQubits={capacity} onSelect={(value) => setAvailableQubits(String(value))} />
               </div>
             </div>
             <p id="capacity-help" className={validCapacity ? "sr-only" : "mt-1 text-[10px] text-rose-300"}>{validCapacity ? "Usable qubits per QPU stage. Changes apply on Run simulation." : "Enter a whole qubit count from 1 to 2,147,483,647."}</p>
@@ -372,7 +363,7 @@ export default function Home() {
             <p className="text-slate-400">{data && snapshot ? <><span className="font-medium text-slate-200">{data.scale_label}</span><span className="mx-2 text-slate-700">/</span>{hardwareLabel(snapshot.request.hardware_profile)}</> : "Choose a configuration, then click Run simulation"}</p>
             <p className="flex items-center gap-1.5 text-slate-500">{loading
               ? <><LoaderCircle size={12} className="animate-spin" />{data ? "Updating · previous result shown" : "Waiting for engine telemetry"}</>
-              : configurationChanged ? "Configuration changed · previous result shown" : data ? <><Check size={13} className="text-emerald-400" />Simulation {state.completed} complete</> : "No simulation results yet"}</p>
+              : configurationChanged ? "Configuration changed · previous result shown" : data ? <><Check size={13} className="text-emerald-400" />Simulation complete</> : "No simulation results yet"}</p>
           </div>
           <div data-testid="telemetry-summary-band" className="grid gap-3 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.6fr)]">
           <div aria-label="Key performance indicators" className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-2">
@@ -441,8 +432,8 @@ export default function Home() {
           persistenceMessage={persistentHistory.message} />
         <section aria-label="State delta tracker" className="min-w-0 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/35">
           <div className="console-header flex flex-wrap items-center justify-between gap-2 border-b border-slate-700/80 p-3">
-            <div className="flex items-center gap-2"><GitCompareArrows size={16} className="text-cyan-300" /><div><h2 className="text-sm font-semibold text-cyan-100">State delta tracker</h2><p className="mt-0.5 text-[10px] text-slate-500">Consecutive successful runs · last six transitions</p></div></div>
-            <span className="rounded-md bg-slate-800 px-2 py-1 font-mono text-[10px] text-slate-400">{state.history.length} TRANSITIONS</span>
+            <div className="flex items-center gap-2"><GitCompareArrows size={16} className="text-cyan-300" /><div><h2 className="text-sm font-semibold text-cyan-100">State delta tracker</h2><p className="mt-0.5 text-[10px] text-slate-500">Consecutive successful runs in this workload · last six transitions</p></div></div>
+            <span className="rounded-md bg-slate-800 px-2 py-1 font-mono text-[10px] text-slate-400">{history.length} TRANSITIONS</span>
           </div>
           {latest ? (
             <div className="max-h-[520px] overflow-y-auto p-3">
@@ -454,9 +445,9 @@ export default function Home() {
                 <span className="text-slate-500">{hardwareLabel(latest.after.request.hardware_profile)}</span>
               </div>
               <DeltaTable changes={latest.changes} />
-              {state.history.length > 1 && <div className="mt-3 space-y-2">{state.history.slice(1).map((transition) => (
+              {history.length > 1 && <div className="mt-3 space-y-2">{history.slice(1).map((transition) => (
                 <details key={transition.id} className="rounded-lg border border-slate-800 px-3 py-2">
-                  <summary className="cursor-pointer text-xs text-slate-400">Run {transition.id - 1} → {transition.id} · {workloadScaleLabel(transition.before.request.scale_param, transition.before.request.workload_id)} → {workloadScaleLabel(transition.after.request.scale_param, transition.after.request.workload_id)} · {transition.changes.length} changes</summary>
+                  <summary className="cursor-pointer text-xs text-slate-400">Comparison {transition.id} · {workloadScaleLabel(transition.before.request.scale_param, transition.before.request.workload_id)} → {workloadScaleLabel(transition.after.request.scale_param, transition.after.request.workload_id)} · {transition.changes.length} changes</summary>
                   <div className="mt-4"><DeltaTable changes={transition.changes} /></div>
                 </details>
               ))}</div>}
@@ -470,7 +461,7 @@ export default function Home() {
           )}
         </section>
         </div>
-        <PersistentRunHistory history={persistentHistory} onRestore={restoreRun} />
+        <PersistentRunHistory key={workload} workload={workload} history={persistentHistory} onRestore={restoreRun} />
         <footer className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-800/70 pt-3 text-[10px] leading-5 text-slate-500">
           <p className="flex items-center gap-2"><Radio size={12} />{data?.execution_mode.replaceAll("_", " ") ?? "AWAITING TELEMETRY"}</p>
           <p>Simulated workloads. Estimated hardware limits. No physical QPU connection.</p>

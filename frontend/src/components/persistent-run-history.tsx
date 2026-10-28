@@ -7,20 +7,22 @@ import type { SavedSimulationRun } from "@/types/run-history";
 import { BenchmarkRow } from "@/components/benchmark-row";
 import { BenchmarkComparison } from "@/components/benchmark-comparison";
 import { benchmarkExportRuns, MAX_COMPARISON_RUNS, selectedBenchmarkRuns, toggleBenchmarkSelection } from "@/lib/benchmark-comparison";
+import { benchmarkHistory } from "@/lib/run-history";
+import type { WorkloadId } from "@/types/telemetry";
 import { downloadBenchmark } from "@/lib/benchmark-export";
 
-export function PersistentRunHistory({ history, onRestore }: { history: ReturnType<typeof usePersistentRuns>; onRestore: (run: SavedSimulationRun) => void }) {
+export function PersistentRunHistory({ history, onRestore, workload }: { workload: WorkloadId; history: ReturnType<typeof usePersistentRuns>; onRestore: (run: SavedSimulationRun) => void }) {
   const [showAll, setShowAll] = useState(false);
   const listId = useId();
   const [namedOnly, setNamedOnly] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
-  const candidates = namedOnly ? history.runs.filter(run => run.isSnapshot && run.snapshotName) : history.runs.slice(0, 20);
-  const visibleRuns = candidates.slice(0, showAll ? candidates.length : 5);
-  const selectedRuns = selectedBenchmarkRuns(history.runs, selectedIds);
-  const exportRuns = benchmarkExportRuns(history.runs, visibleRuns, selectedIds);
+  const { runs, candidates, visibleRuns } = benchmarkHistory(history.runs, workload, namedOnly, showAll);
+  const workloadLabel = workload === "shors_crypto" ? "Shor’s Cryptography" : "Quantum-MIPS";
+  const selectedRuns = selectedBenchmarkRuns(runs, selectedIds);
+  const exportRuns = benchmarkExportRuns(runs, visibleRuns, selectedIds);
   const toggleSelection = (id: string) => {
-    setSelectedIds(current => toggleBenchmarkSelection(history.runs, current, id));
+    setSelectedIds(current => toggleBenchmarkSelection(runs, current, id));
     setDownloadMessage(null);
   };
   const exportTelemetry = (format: "csv" | "json") => {
@@ -29,11 +31,11 @@ export function PersistentRunHistory({ history, onRestore }: { history: ReturnTy
       setDownloadMessage(`Downloaded ${exportRuns.length} ${exportRuns.length === 1 ? "run" : "runs"} as ${format.toUpperCase()}.`);
     } catch { setDownloadMessage("Download could not start. Please retry."); }
   };
-  const hasNotice = history.message || history.savingCount > 0 || history.pendingCount > history.savingCount || history.availability === "loading" || (history.availability === "ready" && history.runs.length === 0);
+  const hasNotice = history.message || history.savingCount > 0 || history.pendingCount > history.savingCount || history.availability === "loading" || (history.availability === "ready" && runs.length === 0);
   return (
     <section aria-label="Persistent Run History" className="mt-4 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/35">
       <div className="console-header flex flex-wrap items-center justify-between gap-2 border-b border-slate-700/80 p-3">
-        <div className="flex items-center gap-2"><Database size={16} className="text-cyan-400" /><div><h2 className="text-sm font-semibold text-cyan-100">Persistent Run History</h2><p className="mt-0.5 text-[10px] text-slate-500">Latest {visibleRuns.length} of {candidates.length} {namedOnly ? "named snapshots" : "recent runs"} · Central time</p></div></div>
+        <div className="flex items-center gap-2"><Database size={16} className="text-cyan-400" /><div><h2 className="text-sm font-semibold text-cyan-100">Persistent Run History</h2><p className="mt-0.5 text-[10px] text-slate-500">Showing latest {visibleRuns.length} of {candidates.length} saved {workloadLabel} {namedOnly ? "snapshots" : "runs"} · Central time</p></div></div>
         <div className="flex flex-wrap items-center gap-2">
           {(["csv", "json"] as const).map(format => <button type="button" key={format} disabled={!exportRuns.length} onClick={() => exportTelemetry(format)} className="inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-cyan-400/25 px-2.5 py-1.5 text-[11px] text-cyan-200 hover:bg-cyan-400/10 disabled:opacity-40"><Download size={12} />Export {format.toUpperCase()}</button>)}
           {candidates.length > 5 && <button type="button" aria-expanded={showAll} aria-controls={listId} onClick={() => setShowAll(value => !value)} className="inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-slate-700 px-2.5 py-1.5 text-[11px] text-slate-300 hover:border-cyan-400/50">{showAll ? "Show latest 5" : `Show all ${candidates.length} runs`}<ChevronDown size={12} className={showAll ? "rotate-180" : ""} /></button>}
@@ -55,9 +57,9 @@ export function PersistentRunHistory({ history, onRestore }: { history: ReturnTy
         {history.savingCount > 0 && <p className="flex items-center gap-2 text-xs text-cyan-300"><LoaderCircle size={13} className="animate-spin" />Saving {history.savingCount} {history.savingCount === 1 ? "run" : "runs"} in the background…</p>}
         {history.pendingCount > history.savingCount && <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-800 p-3"><p className="max-w-2xl text-xs leading-6 text-slate-400">{history.pendingCount} {history.pendingCount === 1 ? "run is" : "runs are"} awaiting save in this tab. Unsaved runs are lost if you close or reload the page.</p><button type="button" onClick={history.retryPending} className="shrink-0 rounded-md border border-cyan-400/30 px-3 py-2 text-xs text-cyan-200">Retry saving</button></div>}
         {history.availability === "loading" && <p className="flex items-center gap-2 py-4 text-xs text-slate-400"><LoaderCircle size={14} className="animate-spin" />Loading saved runs…</p>}
-        {history.availability === "ready" && history.runs.length === 0 && <p className="py-6 text-center text-sm text-slate-400">No saved runs yet. Completed simulations will appear here automatically.</p>}
+        {history.availability === "ready" && runs.length === 0 && <p className="py-6 text-center text-sm text-slate-400">No saved {workloadLabel} runs yet. Completed simulations for this workload will appear here automatically.</p>}
       </div>}
-      {namedOnly && candidates.length === 0 && <p className="p-4 text-xs text-slate-400">No named snapshots yet. Capture a completed run or name a recent run.</p>}
+      {namedOnly && candidates.length === 0 && <p className="p-4 text-xs text-slate-400">No named {workloadLabel} snapshots yet. Capture a completed run or name a recent run.</p>}
       <BenchmarkComparison runs={selectedRuns} onRemove={toggleSelection} />
       <div id={listId} role="region" aria-label="Benchmark Comparison Table" tabIndex={0} className="overflow-x-auto">
         <table className="w-full min-w-[1280px] table-fixed text-left">

@@ -1,21 +1,30 @@
 import { DATABASE_NOT_CONFIGURED, databaseNotice, getDatabase, withDatabaseTimeout } from "@/lib/db";
 import { createRunRecord, serializeRun } from "@/lib/run-record";
+import { WORKLOADS } from "@/lib/workloads";
 
 // Next.js uses its default Node.js runtime; Cache Components forbids a runtime override.
 const headers = { "Cache-Control": "no-store" };
 
 export async function GET(request: Request) {
-  const rawLimit = new URL(request.url).searchParams.get("limit") ?? "20";
+  const params = new URL(request.url).searchParams;
+  const rawLimit = params.get("limit") ?? "20";
   if (!/^\d+$/.test(rawLimit) || Number(rawLimit) < 1 || Number(rawLimit) > 50) {
     return Response.json({ message: "Limit must be an integer from 1 to 50." }, { status: 400, headers });
   }
+  const requestedWorkload = params.get("workload");
+  // The stored Shor ID remains backwards compatible with existing snapshots.
+  const workload = requestedWorkload === "shors_factoring" ? "shors_crypto" : requestedWorkload;
+  if (workload !== null && !Object.hasOwn(WORKLOADS, workload)) {
+    return Response.json({ message: "Workload must be shors_crypto or quantum_mips." }, { status: 400, headers });
+  }
+  const where = workload === null ? {} : { workloadId: workload };
   try {
     const db = getDatabase();
     if (!db) return Response.json({ status: "unconfigured", message: DATABASE_NOT_CONFIGURED, runs: [] }, { headers });
     const [runs, snapshots] = await Promise.all([withDatabaseTimeout(db.simulationRun.findMany({
-      take: Number(rawLimit), orderBy: [{ completedAt: "desc" }, { id: "desc" }],
+      ...(workload === null ? {} : { where }), take: Number(rawLimit), orderBy: [{ completedAt: "desc" }, { id: "desc" }],
     })), withDatabaseTimeout(db.simulationRun.findMany({
-      where: { isSnapshot: true }, orderBy: [{ completedAt: "desc" }, { id: "desc" }],
+      where: { ...where, isSnapshot: true }, orderBy: [{ completedAt: "desc" }, { id: "desc" }],
     }))]);
     return Response.json({ status: "ready", runs: runs.map(serializeRun), snapshots: snapshots.map(serializeRun) }, { headers });
   } catch (error) {

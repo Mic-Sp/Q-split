@@ -14,7 +14,7 @@ const completedRun = (snapshot: Snapshot): CompletedRun => ({
   id: snapshot.id, completedAt: snapshot.completedAt, request: snapshot.request, telemetry: snapshot.data,
 });
 
-export function TelemetryAdvisor({ snapshot, previous, onInsight, onPersisted, savedInsight, saving, persistenceMessage, simulationLoading }: {
+export function TelemetryAdvisor({ snapshot, previous: previousCandidate, onInsight, onPersisted, savedInsight, saving, persistenceMessage, simulationLoading }: {
   snapshot: Snapshot | null;
   previous?: Snapshot;
   onInsight: (run: CompletedRun) => void;
@@ -24,6 +24,7 @@ export function TelemetryAdvisor({ snapshot, previous, onInsight, onPersisted, s
   persistenceMessage: string | null;
   simulationLoading: boolean;
 }) {
+  const previous = snapshot && previousCandidate?.request.workload_id === snapshot.request.workload_id ? previousCandidate : undefined;
   const [generated, setGenerated] = useState<AdvisorInsight | null>(null);
   const [serverSaved, setServerSaved] = useState(false);
   const [cacheMessage, setCacheMessage] = useState<string | null>(null);

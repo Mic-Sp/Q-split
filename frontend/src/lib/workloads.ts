@@ -12,6 +12,23 @@ const MIPS_LABELS: Record<number, string> = {
   64: "M = 64", 1024: "M = 1,024", 32768: "M = 32k", 131072: "M = 128k (LLM Vocab)", 1048576: "M = 1M (RAG Index)",
 };
 
+export const SCALE_DESCRIPTIONS: Record<WorkloadId, Record<number, string>> = {
+  shors_crypto: {
+    15: "4-bit semiprime (3 × 5). Smallest demonstration composite in this simulator; the sequential tier executes a live 8-qubit Qiskit Aer statevector circuit.",
+    21: "5-bit semiprime (3 × 7). Requires 13–28 qubits across tiers; demonstrates the transition to analytical NISQ profiling.",
+    35: "6-bit semiprime (5 × 7). Requires 15–33 qubits; tests mid-scale NISQ coherence limits across superconducting and ion-trap topologies.",
+    512: "512-bit legacy cryptographic key (1,027–2,816 logical qubits). Exceeds classical statevector RAM limits (~2^1027 states) and requires fault-tolerant error correction for viable physical quantum execution.",
+    2048: "2,048-bit production cryptographic standard (4,099–11,264 logical qubits). Demonstrates extreme sequential circuit depth (~38.6B gates) and multi-hour modeled QPU execution horizons.",
+  },
+  quantum_mips: {
+    64: "6-bit Toy KV-Cache Block (64 candidate vectors). The sequential tier executes a live 10-qubit Qiskit Aer Grover amplitude amplification circuit; small enough that CPU beats GPU on classical host stages due to 0.30ms PCIe transfer overhead.",
+    1024: "10-bit HNSW Subgraph (1,024 candidate vectors). Analytical crossover scale where GPU tensor cores overtake CPU on Stage 1 LSH pruning and Stage 3 FP16 reranking.",
+    32768: "15-bit Long-Context KV-Cache (32,768 attention tokens). Models sub-linear quantum attention key lookup across a 32k LLM context window (~142 Grover oracle iterations).",
+    131072: "17-bit LLM Vocabulary Unembedding (131,072 tokens). Models final-layer logit search over a modern Llama/GPT-scale vocabulary (~285 Grover iterations).",
+    1048576: "20-bit Enterprise RAG Vector Index (1,048,576 embeddings). Models million-scale document retrieval where O(sqrt(M)) Grover depth hits severe NISQ decoherence without Multi-Oracle parallel registers.",
+  },
+};
+
 export function validWorkloadScale(workload: unknown, scale: unknown): workload is WorkloadId {
   return typeof workload === "string" && Object.hasOwn(WORKLOADS, workload) &&
     typeof scale === "number" && WORKLOADS[workload as WorkloadId].scales.includes(scale);
@@ -29,6 +46,14 @@ export function workloadThresholds(scale: number, workload: WorkloadId = "shors_
   }
   const n = scale === 512 || scale === 2048 ? scale : Math.ceil(Math.log2(scale));
   return { minimum: scale === 15 ? 8 : 2 * n + 3, windowed: 3 * n, ceiling: Math.ceil(5.5 * n) };
+}
+
+export function activeParallelizationTier(scale: number, availableQubits: number, workload: WorkloadId = "shors_crypto"): "minimum" | "windowed" | "ceiling" | null {
+  if (!Number.isSafeInteger(availableQubits) || availableQubits < 1 || availableQubits > 2_147_483_647) return null;
+  const thresholds = workloadThresholds(scale, workload);
+  if (availableQubits >= thresholds.ceiling) return "ceiling";
+  if (availableQubits >= thresholds.windowed) return "windowed";
+  return availableQubits >= thresholds.minimum ? "minimum" : null;
 }
 
 export function preferredMipsHost(scale: number): "CPU" | "GPU" { return scale === 64 ? "CPU" : "GPU"; }

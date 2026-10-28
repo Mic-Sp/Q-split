@@ -4,15 +4,16 @@ import { useEffect, useId, useLayoutEffect, useRef, type ReactNode } from "react
 import { createPortal } from "react-dom";
 import { CircleHelp } from "lucide-react";
 
-export function TierTooltip({ label, displayLabel, children, onSelect, open, onOpenChange, variant = "tier", footer = true }: {
+export function TierTooltip({ label, displayLabel, children, onSelect, open, onOpenChange, variant = "tier", footer = true, selected }: {
   label: string;
   displayLabel?: string;
   children: ReactNode;
   onSelect?: () => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  variant?: "tier" | "info";
+  variant?: "tier" | "info" | "scale";
   footer?: boolean;
+  selected?: boolean;
 }) {
   const id = useId();
   const trigger = useRef<HTMLButtonElement>(null);
@@ -108,7 +109,7 @@ export function TierTooltip({ label, displayLabel, children, onSelect, open, onO
   }, [open, onOpenChange]);
 
   return <>
-    <button ref={trigger} type="button" aria-label={label} aria-describedby={open ? id : undefined}
+    <button ref={trigger} type="button" aria-label={label} aria-pressed={selected} aria-describedby={open ? id : undefined}
       onPointerEnter={(event) => { if (event.pointerType !== "touch") { hovering.current = true; show(); } }}
       onPointerLeave={(event) => { if (event.pointerType !== "touch") { hovering.current = false; closeWhenIdle(); } }}
       onFocus={() => { focused.current = true; show(); }}
@@ -126,8 +127,13 @@ export function TierTooltip({ label, displayLabel, children, onSelect, open, onO
         }
       }}
       onClick={() => { show(); onSelect?.(); }}
-      className={variant === "info" ? "inline-flex size-5 shrink-0 items-center justify-center rounded text-cyan-400/70 hover:bg-cyan-400/10 hover:text-cyan-200" : "inline-flex min-h-8 items-center gap-1.5 rounded-md border border-slate-800 px-2 py-1.5 text-left text-[10px] text-slate-400 hover:border-cyan-400/40 hover:text-cyan-200 focus-visible:border-cyan-400/50 focus-visible:text-cyan-200"}>
-      {variant === "tier" && (displayLabel ?? label)}<CircleHelp size={13} aria-hidden="true" className="shrink-0 text-cyan-400/70" />
+      className={variant === "info" ? "inline-flex size-5 shrink-0 items-center justify-center rounded text-cyan-400/70 hover:bg-cyan-400/10 hover:text-cyan-200" : [
+        variant === "scale" ? "min-h-9 rounded-lg border px-2 py-2 font-mono text-[11px] transition-colors" : "inline-flex min-h-8 items-center gap-1.5 rounded-md border px-2 py-1.5 text-left text-[10px]",
+        "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300",
+        selected ? "border-cyan-400/50 bg-cyan-400/10 text-cyan-200" : "border-slate-800 text-slate-400 hover:border-cyan-400/40 hover:text-cyan-200",
+        variant === "scale" && !selected ? "bg-slate-950/70" : "",
+      ].join(" ")}>
+      {variant !== "info" && (displayLabel ?? label)}{variant !== "scale" && <CircleHelp size={13} aria-hidden="true" className="shrink-0 text-cyan-400/70" />}
     </button>
     {open && createPortal(
       <div ref={panel} id={id} role="tooltip"

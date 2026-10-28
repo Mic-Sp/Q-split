@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { WORKLOADS, workloadScaleLabel, validWorkloadScale, parseSimulationRequest, mipsRoutingContext } from "./workloads";
+import { WORKLOADS, SCALE_DESCRIPTIONS, activeParallelizationTier, workloadScaleLabel, validWorkloadScale, parseSimulationRequest, mipsRoutingContext } from "./workloads";
 import { hardwareDefaultQubits, qubitThresholds } from "./telemetry";
 
 test("Quantum-MIPS controls expose all scales, index-width thresholds, and ideal ceilings independently from Shor", () => {
@@ -34,4 +34,34 @@ test("simulation validation applies workload-specific defaults and rejects cross
     { routing: [] }, { routing: { stage_4_node: "CPU" } }, { routing: { stage_2_node: "TPU" } }]) {
     assert.throws(() => parseSimulationRequest({ ...base, ...mutation }));
   }
+});
+
+test("active tier follows threshold intervals, ceiling saturation, and invalid or insufficient custom capacities for both workloads", () => {
+  for (const workload of ["shors_crypto", "quantum_mips"] as const) {
+    for (const scale of WORKLOADS[workload].scales) {
+      const { minimum, windowed, ceiling } = qubitThresholds(scale, workload);
+      for (const [capacity, active] of [[minimum - 1, null], [minimum, "minimum"], [windowed - 1, "minimum"],
+        [windowed, "windowed"], [ceiling - 1, "windowed"], [ceiling, "ceiling"], [ceiling + 100, "ceiling"],
+        [2_147_483_647, "ceiling"]] as const) {
+        assert.equal(activeParallelizationTier(scale, capacity, workload), active, `${workload}/${scale}/${capacity}`);
+      }
+      for (const invalid of [NaN, Infinity, -Infinity, 0, -1, minimum + 0.5, 2_147_483_648]) {
+        assert.equal(activeParallelizationTier(scale, invalid, workload), null);
+      }
+    }
+  }
+});
+
+test("every supported target scale has workload-specific context without promising live execution in parallel tiers", () => {
+  for (const workload of ["shors_crypto", "quantum_mips"] as const) {
+    assert.deepEqual(Object.keys(SCALE_DESCRIPTIONS[workload]).map(Number), WORKLOADS[workload].scales);
+    for (const scale of WORKLOADS[workload].scales) assert.ok(SCALE_DESCRIPTIONS[workload][scale].length > 100);
+  }
+  assert.match(SCALE_DESCRIPTIONS.shors_crypto[15], /sequential tier.*live 8-qubit Qiskit Aer/);
+  assert.match(SCALE_DESCRIPTIONS.shors_crypto[2048], /4,099–11,264.*38.6B.*multi-hour/);
+  assert.match(SCALE_DESCRIPTIONS.quantum_mips[64], /sequential tier.*live 10-qubit.*0.30ms/);
+  assert.match(SCALE_DESCRIPTIONS.quantum_mips[1024], /Stage 1 LSH.*Stage 3 FP16/);
+  assert.match(SCALE_DESCRIPTIONS.quantum_mips[32768], /32,768.*142 Grover/);
+  assert.match(SCALE_DESCRIPTIONS.quantum_mips[131072], /131,072.*285 Grover/);
+  assert.match(SCALE_DESCRIPTIONS.quantum_mips[1048576], /1,048,576.*Multi-Oracle/);
 });

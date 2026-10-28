@@ -28,7 +28,7 @@ function repository(t: TestContext) {
   const global = globalThis as unknown as { qSplitDatabase?: { url: string; client: PrismaClient; schemaVersion?: string } };
   const prior = global.qSplitDatabase, priorUrl = process.env.DATABASE_URL;
   const rows = new Map([[id, record()]]);
-  const stats = { writes: 0, fail: false };
+  const stats = { writes: 0, reads: 0, fail: false };
   const check = () => { if (stats.fail) throw new Error("secret-password must not be exposed"); };
   const url = "postgresql://test:test@snapshot-test.invalid/test";
   process.env.DATABASE_URL = url;
@@ -40,8 +40,8 @@ function repository(t: TestContext) {
       const result = { ...existing, ...data }; rows.set(where.id, result); return result;
     },
     deleteMany: async ({ where }: { where: { id: string } }) => { check(); stats.writes++; return { count: rows.delete(where.id) ? 1 : 0 }; },
-    findMany: async ({ take, where }: { take?: number; where?: { isSnapshot: boolean } }) => {
-      check(); return [...rows.values()].filter(row => !where || row.isSnapshot === where.isSnapshot).sort((a, b) => +b.completedAt - +a.completedAt).slice(0, take);
+    findMany: async ({ take, where }: { take?: number; where?: { isSnapshot?: boolean; workloadId?: string } }) => {
+      check(); stats.reads++; return [...rows.values()].filter(row => (!where?.workloadId || row.workloadId === where.workloadId) && (where?.isSnapshot === undefined || row.isSnapshot === where.isSnapshot)).sort((a, b) => +b.completedAt - +a.completedAt).slice(0, take);
     },
     upsert: async ({ where, create, update }: { where: { id: string }; create: SimulationRun; update: Partial<SimulationRun> }) => {
       check(); const result = rows.has(where.id) ? { ...rows.get(where.id)!, ...update } : { ...create, createdAt: new Date() }; rows.set(where.id, result); return result;
@@ -131,4 +131,47 @@ test("invalid IDs and patch payloads fail before database writes", async t => {
   assert.equal((await PATCH(new Request(`http://localhost/api/runs/${id}`, { method: "PATCH", body: "{" }), context())).status, 400);
   assert.equal((await PATCH(patch({ snapshotName: "x".repeat(2049) }), context())).status, 413);
   assert.equal(stats.writes, 0);
+});
+
+test("workload queries keep twenty own recent runs and only own pinned snapshots; naming, restore and deletion stay isolated", async t => {
+  const { rows, stats } = repository(t);
+  await PATCH(patch({ snapshotName: "Shor pinned baseline" }), context());
+  for (const workload of ["shors_crypto", "quantum_mips"] as const) {
+    for (let i = 0; i < 26; i++) {
+      const input = fixture();
+      input.id = `c367fe2e-f083-4996-8cbd-${workload === "quantum_mips" ? "1" : "2"}${String(i).padStart(11, "0")}`;
+      input.request.workload_id = workload; input.telemetry.workload_id = workload;
+      input.completedAt = new Date(Date.UTC(2026, 9, workload === "quantum_mips" ? 30 : 29, 12, i)).toISOString();
+      if (workload === "quantum_mips") {
+        input.request.scale_param = 1024; input.request.available_qubits = 23;
+        input.telemetry.workload_name = "Quantum-MIPS"; input.telemetry.scale_label = "M = 1,024";
+        Object.assign(input.telemetry.stages.stage_2_quantum_kernel.metrics, { available_qubits: 23, qubits_allocated: 14, qubits_required: 14, parallelization_tier: "Sequential Minimum" });
+      }
+      rows.set(input.id, { ...createRunRecord(input), createdAt: new Date(input.completedAt), snapshotName: i === 0 ? `${workload} old pin` : null,
+        isSnapshot: i === 0, snapshotUpdatedAt: null } as SimulationRun);
+    }
+  }
+  for (const workload of ["shors_crypto", "quantum_mips", "shors_factoring"]) {
+    const canonical = workload === "shors_factoring" ? "shors_crypto" : workload;
+    const response = await GET(new Request(`http://localhost/api/runs?limit=20&workload=${workload}`));
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.runs.length, 20);
+    assert.ok(result.runs.every((run: { workloadId: string }) => run.workloadId === canonical));
+    assert.equal(result.snapshots.length, canonical === "shors_crypto" ? 2 : 1);
+    assert.ok(result.snapshots.every((run: { workloadId: string }) => run.workloadId === canonical));
+  }
+  const reads = stats.reads;
+  for (const workload of ["unknown", "", "__proto__"]) assert.equal((await GET(new Request(`http://localhost/api/runs?workload=${workload}`))).status, 400);
+  assert.equal(stats.reads, reads, "Invalid filters fail before database access");
+  const recent = await (await GET(new Request("http://localhost/api/runs?workload=quantum_mips"))).json();
+  const chosen = recent.runs[0];
+  const renamed = await PATCH(new Request(`http://localhost/api/runs/${chosen.id}`, { method: "PATCH", body: JSON.stringify({ snapshotName: "MIPS custom register" }) }), context(chosen.id));
+  const saved = (await renamed.json()).run;
+  assert.equal(saved.snapshotName, "MIPS custom register");
+  assert.deepEqual(restoredConfiguration(saved), { ...chosen.request, available_qubits: 23 });
+  assert.equal(saved.request.workload_id, "quantum_mips");
+  assert.equal(rows.get(id)!.snapshotName, "Shor pinned baseline");
+  const removed = await DELETE(new Request(`http://localhost/api/runs/${chosen.id}`, { method: "DELETE" }), context(chosen.id));
+  assert.equal(removed.status, 200); assert.ok(!rows.has(chosen.id)); assert.ok(rows.has(id));
 });

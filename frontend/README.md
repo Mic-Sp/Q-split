@@ -68,8 +68,10 @@ telemetry.
 
 Green indicates optimal,
 amber indicates a warning, and rose indicates a critical bottleneck. The delta
-tracker compares consecutive successful responses, retaining six transitions in
-memory until the page reloads. Node changes are included alongside metrics.
+tracker compares consecutive successful responses within the selected workload,
+retaining six transitions and the latest completed snapshot per workload in memory
+until the page reloads. The advisor only offers a previous-run comparison from
+that same workload; each workload’s first completed run establishes its baseline. Node changes are included alongside metrics.
 Failed and canceled requests do not enter history.
 
 N = 15 in sequential mode executes an eight-qubit circuit using Qiskit Aer on a
@@ -435,8 +437,15 @@ Large circuit depths use PostgreSQL BIGINT and serialize as decimal strings.
 Each execution gets a unique UUID; retrying its save uses the same UUID to avoid
 duplicates. Re-running a simulation creates a separate history record.
 
-- `GET /api/runs?limit=20` returns the newest runs (limit 1–50, no caching) plus
-  a separate `snapshots` list of all pinned benchmarks.
+- `GET /api/runs?limit=20&workload=quantum_mips` returns the newest runs for that
+  workload (limit 1–50, no caching) plus its own pinned `snapshots`. The workload
+  filter accepts `shors_crypto` or `quantum_mips` (`shors_factoring` is an alias
+  for the stored Shor ID); omitting it preserves the all-workload API behavior.
+  The dashboard requests up to 20 recent runs per workload, so newer runs in the
+  other workload cannot crowd them out. Switching presets resets comparison
+  checkboxes and table filters, and restricts exports and restore/name/delete
+  actions to the active workload’s rows. Cached rows and pending saves stay
+  available independently per workload; stale refresh responses are ignored.
 - `POST /api/runs` accepts `{ id, completedAt, request, telemetry }`, validates it,
   derives summary metrics on the server, and performs an idempotent save.
   An optional `advisorInsight` updates only that run's saved diagnostic; ordinary

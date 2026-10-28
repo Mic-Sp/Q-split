@@ -46,6 +46,7 @@ const notices: Record<FallbackReason, string> = {
 };
 
 export function deterministicInsight(current: CompletedRun, previous: CompletedRun | undefined, reason: FallbackReason): AdvisorInsight {
+  previous = previous?.request.workload_id === current.request.workload_id ? previous : undefined;
   const { request, telemetry } = current;
   const stages = PIPELINE.map(({ key }) => telemetry.stages[key]);
   const quantum = stages[1];

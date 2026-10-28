@@ -150,7 +150,10 @@ function validateRun(value: unknown): CompletedRun {
 
 export function validateAdvisorRequest(value: unknown): AdvisorRequest {
   const input = object(value);
-  return { current: validateRun(input.current), ...(input.previous === undefined ? {} : { previous: validateRun(input.previous) }) };
+  const current = validateRun(input.current);
+  const previous = input.previous === undefined ? undefined : validateRun(input.previous);
+  if (previous && previous.request.workload_id !== current.request.workload_id) invalid();
+  return { current, ...(previous ? { previous } : {}) };
 }
 
 export function advisorDigest(run: CompletedRun) {
