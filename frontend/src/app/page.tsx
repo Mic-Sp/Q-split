@@ -13,6 +13,7 @@ import { CaptureBenchmark } from "@/components/capture-benchmark";
 import { recordCompletedRun, sessionForWorkload, type SimulationSession } from "@/lib/simulation-session";
 import { restoredConfiguration } from "@/lib/benchmark-snapshot";
 import type { SavedSimulationRun } from "@/types/run-history";
+import { createClientId } from "@/lib/client-session";
 import { usePersistentRuns } from "@/hooks/use-persistent-runs";
 import { coherenceBudget, pipelineTiming, type CoherenceBudgetStatus } from "@/lib/kpi-metrics";
 import { formatDuration, formatRawMilliseconds } from "@/lib/duration";
@@ -204,7 +205,7 @@ export default function Home() {
     const request = submittedRequest;
     void simulate(request, controller.signal).then((data) => {
       if (active && !controller.signal.aborted) {
-        const id = crypto.randomUUID();
+        const id = createClientId();
         const completedAt = new Date().toISOString();
         dispatch({ type: "success", snapshot: { id, completedAt, request, data } });
         saveRun({ id, completedAt, request, telemetry: data });

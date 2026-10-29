@@ -9,6 +9,7 @@ import { cachedInsight, withLookupTelemetry } from "@/lib/advisor-telemetry";
 import type { Snapshot } from "@/lib/telemetry";
 import type { AdvisorInsight, AdvisorResponse } from "@/types/advisor";
 import type { CompletedRun } from "@/types/run-history";
+import { sessionFetch } from "@/lib/client-session";
 
 /** Adapt an immutable session snapshot to the persistence/advisor wire shape without reading live controls. */
 const completedRun = (snapshot: Snapshot): CompletedRun => ({
@@ -61,7 +62,7 @@ export function TelemetryAdvisor({ snapshot, previous: previousCandidate, onInsi
     let message: string | null = null;
     try {
       try {
-        const response = await fetch("/api/advisor", {
+        const response = await sessionFetch("/api/advisor", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ current, previous: prior }),
           signal: AbortSignal.any([active.signal, AbortSignal.timeout(26_000)]),

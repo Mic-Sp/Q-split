@@ -4,10 +4,15 @@ import { PATCH, DELETE } from "@/app/api/runs/[id]/route";
 import { GET, POST } from "@/app/api/runs/route";
 import { restoredConfiguration, snapshotPatch } from "./benchmark-snapshot";
 import { createRunRecord, serializeRun } from "./run-record";
-import { mergeRuns } from "./run-history";
+import { benchmarkHistory, mergeRuns } from "./run-history";
+import { createSessionClient } from "./client-session";
+import { benchmarkExportRuns, selectedBenchmarkRuns } from "./benchmark-comparison";
+import { benchmarkCsv, benchmarkJson } from "./benchmark-export";
+import type { SavedSimulationRun } from "@/types/run-history";
 import { DATABASE_CLIENT_SCHEMA } from "./db";
 import type { PrismaClient, SimulationRun } from "@/generated/prisma/client";
 import type { CompletedRun } from "@/types/run-history";
+import { deterministicInsight } from "./advisor";
 
 const id = "c367fe2e-f083-4996-8cbd-c895d7a26b8d";
 const fixture = (): CompletedRun => ({ id, completedAt: "2026-10-27T12:00:00.000Z",
@@ -22,7 +27,7 @@ const fixture = (): CompletedRun => ({ id, completedAt: "2026-10-27T12:00:00.000
 const context = (runId = id) => ({ params: Promise.resolve({ id: runId }) });
 const patch = (body: unknown) => new Request(`http://localhost/api/runs/${id}`, { method: "PATCH", body: JSON.stringify(body) });
 const remove = () => new Request(`http://localhost/api/runs/${id}`, { method: "DELETE" });
-const record = () => ({ ...createRunRecord(fixture()), createdAt: new Date(), snapshotName: null, isSnapshot: false, snapshotUpdatedAt: null }) as SimulationRun;
+const record = () => ({ ...createRunRecord(fixture()), sessionId: null, createdAt: new Date(), snapshotName: null, isSnapshot: false, snapshotUpdatedAt: null }) as SimulationRun;
 
 function repository(t: TestContext) {
   const global = globalThis as unknown as { qSplitDatabase?: { url: string; client: PrismaClient; schemaVersion?: string } };
@@ -33,18 +38,20 @@ function repository(t: TestContext) {
   const url = "postgresql://test:test@snapshot-test.invalid/test";
   process.env.DATABASE_URL = url;
   global.qSplitDatabase = { url, schemaVersion: DATABASE_CLIENT_SCHEMA, client: { simulationRun: {
-    update: async ({ where, data }: { where: { id: string }; data: Partial<SimulationRun> }) => {
+    update: async ({ where, data }: { where: { id: string; sessionId: string | null }; data: Partial<SimulationRun> }) => {
       check(); stats.writes++;
       const existing = rows.get(where.id);
-      if (!existing) throw Object.assign(new Error("private missing record details"), { code: "P2025" });
+      if (!existing || existing.sessionId !== where.sessionId) throw Object.assign(new Error("private missing record details"), { code: "P2025" });
       const result = { ...existing, ...data }; rows.set(where.id, result); return result;
     },
-    deleteMany: async ({ where }: { where: { id: string } }) => { check(); stats.writes++; return { count: rows.delete(where.id) ? 1 : 0 }; },
-    findMany: async ({ take, where }: { take?: number; where?: { isSnapshot?: boolean; workloadId?: string } }) => {
-      check(); stats.reads++; return [...rows.values()].filter(row => (!where?.workloadId || row.workloadId === where.workloadId) && (where?.isSnapshot === undefined || row.isSnapshot === where.isSnapshot)).sort((a, b) => +b.completedAt - +a.completedAt).slice(0, take);
+    deleteMany: async ({ where }: { where: { id: string; sessionId: string | null } }) => { check(); stats.writes++; return { count: rows.get(where.id)?.sessionId === where.sessionId && rows.delete(where.id) ? 1 : 0 }; },
+    findMany: async ({ take, where }: { take?: number; where: { sessionId: string | null; isSnapshot?: boolean; workloadId?: string } }) => {
+      check(); stats.reads++; return [...rows.values()].filter(row => row.sessionId === where.sessionId && (!where.workloadId || row.workloadId === where.workloadId) && (where.isSnapshot === undefined || row.isSnapshot === where.isSnapshot)).sort((a, b) => +b.completedAt - +a.completedAt).slice(0, take);
     },
-    upsert: async ({ where, create, update }: { where: { id: string }; create: SimulationRun; update: Partial<SimulationRun> }) => {
-      check(); const result = rows.has(where.id) ? { ...rows.get(where.id)!, ...update } : { ...create, createdAt: new Date() }; rows.set(where.id, result); return result;
+    upsert: async ({ where, create, update }: { where: { id: string; sessionId: string | null }; create: SimulationRun; update: Partial<SimulationRun> }) => {
+      check(); stats.writes++;
+      if (rows.has(where.id) && rows.get(where.id)!.sessionId !== where.sessionId) throw Object.assign(new Error("private duplicate record details"), { code: "P2002" });
+      const result = rows.has(where.id) ? { ...rows.get(where.id)!, ...update } : { ...create, createdAt: new Date() }; rows.set(where.id, result); return result;
     },
   } } as unknown as PrismaClient };
   t.after(() => { global.qSplitDatabase = prior; if (priorUrl === undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL = priorUrl; });
@@ -147,7 +154,7 @@ test("workload queries keep twenty own recent runs and only own pinned snapshots
         input.telemetry.workload_name = "Quantum-MIPS"; input.telemetry.scale_label = "M = 1,024";
         Object.assign(input.telemetry.stages.stage_2_quantum_kernel.metrics, { available_qubits: 23, qubits_allocated: 14, qubits_required: 14, parallelization_tier: "Sequential Minimum" });
       }
-      rows.set(input.id, { ...createRunRecord(input), createdAt: new Date(input.completedAt), snapshotName: i === 0 ? `${workload} old pin` : null,
+      rows.set(input.id, { ...createRunRecord(input), sessionId: null, createdAt: new Date(input.completedAt), snapshotName: i === 0 ? `${workload} old pin` : null,
         isSnapshot: i === 0, snapshotUpdatedAt: null } as SimulationRun);
     }
   }
@@ -174,4 +181,113 @@ test("workload queries keep twenty own recent runs and only own pinned snapshots
   assert.equal(rows.get(id)!.snapshotName, "Shor pinned baseline");
   const removed = await DELETE(new Request(`http://localhost/api/runs/${chosen.id}`, { method: "DELETE" }), context(chosen.id));
   assert.equal(removed.status, 200); assert.ok(!rows.has(chosen.id)); assert.ok(rows.has(id));
+});
+
+function sessionRequest(path: string, method: string, sessionId: string | null, body?: unknown) {
+  return new Request(`http://localhost/api/runs${path}`, { method,
+    headers: sessionId === null ? {} : { "X-Session-Id": sessionId },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+}
+
+test("sessions isolate recent runs, pinned snapshots, retries, renames, and deletes from other sessions and legacy callers", async t => {
+  const { rows } = repository(t);
+  const a = { ...fixture(), id: "c367fe2e-f083-4996-8cbd-c895d7a26b8a" };
+  const b = { ...fixture(), id: "c367fe2e-f083-4996-8cbd-c895d7a26b8b", completedAt: "2026-10-28T12:00:00.000Z" };
+  for (const [input, session] of [[a, "session-a"], [b, "session-b"]] as const) {
+    assert.equal((await POST(sessionRequest("", "POST", session, { ...input, sessionId: "payload-cannot-change-owner" }))).status, 201);
+    assert.equal(rows.get(input.id)!.sessionId, session);
+    assert.equal((await PATCH(sessionRequest(`/${input.id}`, "PATCH", session, { snapshotName: session }), context(input.id))).status, 200);
+    assert.equal((await POST(sessionRequest("", "POST", session, input))).status, 201);
+    assert.equal(rows.get(input.id)!.snapshotName, session, "Retries preserve pins");
+  }
+  for (const [session, expectedId] of [["session-a", a.id], ["session-b", b.id], [null, id]] as const) {
+    for (const query of ["?limit=1", "?limit=1&workload=shors_crypto", "?limit=1&workload=shors_factoring"]) {
+      const response = await GET(sessionRequest(query, "GET", session));
+      assert.equal(response.status, 200);
+      const result = await response.json();
+      assert.deepEqual(result.runs.map((run: { id: string }) => run.id), [expectedId]);
+      assert.deepEqual(result.snapshots.map((run: { id: string }) => run.id), session === null ? [] : [expectedId]);
+      assert.equal(response.headers.get("Cache-Control"), "no-store");
+    }
+    const otherWorkload = await (await GET(sessionRequest("?workload=quantum_mips", "GET", session))).json();
+    assert.deepEqual(otherWorkload.runs, []); assert.deepEqual(otherWorkload.snapshots, []);
+  }
+  const original = structuredClone(rows.get(a.id)!);
+  for (const outsider of ["session-b", null]) {
+    for (const metadata of [{ snapshotName: "Hijacked" }, { isSnapshot: false }]) {
+      assert.equal((await PATCH(sessionRequest(`/${a.id}`, "PATCH", outsider, metadata), context(a.id))).status, 404);
+    }
+    assert.equal((await DELETE(sessionRequest(`/${a.id}`, "DELETE", outsider), context(a.id))).status, 200);
+    const insight = deterministicInsight(a, undefined, "missing_key");
+    const conflict = await POST(sessionRequest("", "POST", outsider, { ...a, advisorInsight: insight }));
+    assert.equal(conflict.status, 409);
+    assert.ok(!(await conflict.text()).includes("private"));
+    assert.deepEqual(rows.get(a.id), original, "Foreign writes and UUID collisions cannot alter or return a run");
+  }
+  assert.equal((await PATCH(sessionRequest(`/${id}`, "PATCH", "session-a", { snapshotName: "Claim legacy" }), context())).status, 404);
+  assert.equal((await DELETE(sessionRequest(`/${id}`, "DELETE", "session-a"), context())).status, 200);
+  assert.ok(rows.has(id));
+  assert.equal((await PATCH(sessionRequest(`/${a.id}`, "PATCH", "session-a", { snapshotName: "Renamed" }), context(a.id))).status, 200);
+  assert.equal(rows.get(a.id)!.snapshotName, "Renamed");
+  assert.equal((await DELETE(sessionRequest(`/${a.id}`, "DELETE", "session-a"), context(a.id))).status, 200);
+  assert.ok(!rows.has(a.id)); assert.ok(rows.has(b.id)); assert.ok(rows.has(id));
+});
+
+test("invalid session headers fail closed before reads or writes", async t => {
+  const { stats } = repository(t);
+  for (const session of ["", "bad token", "a,b", "x".repeat(129)]) {
+    assert.equal((await GET(sessionRequest("", "GET", session))).status, 400);
+    assert.equal((await POST(sessionRequest("", "POST", session, fixture()))).status, 400);
+    assert.equal((await PATCH(sessionRequest(`/${id}`, "PATCH", session, { snapshotName: "Valid" }), context())).status, 400);
+    assert.equal((await DELETE(sessionRequest(`/${id}`, "DELETE", session), context())).status, 400);
+  }
+  assert.equal((await PATCH(sessionRequest(`/${id}`, "PATCH", null, { snapshotName: "Valid", sessionId: "session-a" }), context())).status, 400);
+  assert.equal(stats.reads, 0); assert.equal(stats.writes, 0);
+});
+
+test("automatic browser sessions scope API history, snapshots, comparisons, exports, and deletion across reloads", async t => {
+  const { rows } = repository(t);
+  const stored = new Map<string, string>();
+  const browser = { sessionStorage: { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => { stored.set(key, value); } } };
+  const a = createSessionClient(() => browser);
+  const b = createSessionClient(() => ({ sessionStorage: { getItem: () => null, setItem: () => {} } }));
+  t.mock.method(globalThis, "fetch", async (path: RequestInfo | URL, options?: RequestInit) => {
+    const request = new Request(`http://localhost${path}`, options);
+    const runId = new URL(request.url).pathname.split("/")[3];
+    switch (request.method) {
+      case "POST": return POST(request);
+      case "PATCH": return PATCH(request, context(runId));
+      case "DELETE": return DELETE(request, context(runId));
+      default: return GET(request);
+    }
+  });
+  assert.deepEqual((await (await a.fetch("/api/runs")).json()).runs, [], "First request cannot load the legacy bucket");
+  const runA = { ...fixture(), id: "c367fe2e-f083-4996-8cbd-c895d7a26b8a" };
+  const runB = { ...fixture(), id: "c367fe2e-f083-4996-8cbd-c895d7a26b8b" };
+  for (const [client, run] of [[a, runA], [b, runB]] as const) {
+    assert.equal((await client.fetch("/api/runs", { method: "POST", body: JSON.stringify(run) })).status, 201);
+    assert.equal(rows.get(run.id)!.sessionId, client.getSessionId());
+  }
+  await a.fetch(`/api/runs/${runA.id}`, { method: "PATCH", body: JSON.stringify({ snapshotName: "Only workspace A" }) });
+  const reloaded = createSessionClient(() => browser);
+  const history = await (await reloaded.fetch("/api/runs?workload=shors_crypto")).json();
+  const loaded: SavedSimulationRun[] = mergeRuns([], [...history.runs, ...history.snapshots]);
+  const view = benchmarkHistory(loaded, "shors_crypto", false, false);
+  assert.deepEqual(view.visibleRuns.map(run => run.id), [runA.id]);
+  assert.deepEqual(history.snapshots.map((run: SavedSimulationRun) => run.id), [runA.id]);
+  assert.equal(view.visibleRuns[0].snapshotName, "Only workspace A");
+  const selectedIds = [runB.id, id, runA.id];
+  assert.deepEqual(selectedBenchmarkRuns(view.runs, selectedIds).map(run => run.id), [runA.id]);
+  for (const selection of [[], selectedIds]) {
+    const exported = benchmarkExportRuns(view.runs, view.visibleRuns, selection);
+    assert.deepEqual(JSON.parse(benchmarkJson(exported)).map((run: SavedSimulationRun) => run.id), [runA.id]);
+    assert.ok(!benchmarkCsv(exported).includes(runB.id)); assert.ok(!benchmarkCsv(exported).includes(id));
+  }
+  assert.equal((await b.fetch(`/api/runs/${runA.id}`, { method: "PATCH", body: JSON.stringify({ snapshotName: "Foreign" }) })).status, 404);
+  await b.fetch(`/api/runs/${runA.id}`, { method: "DELETE" });
+  assert.ok(rows.has(runA.id));
+  await reloaded.fetch(`/api/runs/${runA.id}`, { method: "DELETE" });
+  assert.ok(!rows.has(runA.id)); assert.ok(rows.has(runB.id)); assert.ok(rows.has(id));
+  assert.deepEqual((await (await b.fetch("/api/runs")).json()).runs.map((run: SavedSimulationRun) => run.id), [runB.id]);
 });

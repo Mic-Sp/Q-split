@@ -45,15 +45,18 @@ test("history routes handle configuration, validation, saves, ordering, and fail
       schemaVersion: DATABASE_CLIENT_SCHEMA,
       client: {
         simulationRun: {
-          upsert: async ({ where, create, update }: { where: { id: string }; create: SimulationRun; update: Partial<SimulationRun> }) => {
+          upsert: async ({ where, create, update }: { where: { id: string; sessionId: string | null }; create: SimulationRun; update: Partial<SimulationRun> }) => {
+            assert.equal(where.sessionId, null);
+            assert.equal(create.sessionId, null);
             if (fail) throw Object.assign(new Error("secret-password must not be returned"), { code: fail });
             const row = rows.has(where.id) ? { ...rows.get(where.id)!, ...update } : { ...create, createdAt: new Date("2026-10-26T16:00:01.000Z") };
             rows.set(where.id, row); return row;
           },
-          findMany: async ({ take, orderBy }: { take: number; orderBy: unknown }) => {
+          findMany: async ({ take, orderBy, where }: { take?: number; orderBy: unknown; where: { sessionId: string | null; isSnapshot?: boolean } }) => {
+            assert.equal(where.sessionId, null);
             assert.deepEqual(orderBy, [{ completedAt: "desc" }, { id: "desc" }]);
             if (fail) throw Object.assign(new Error("secret-password must not be returned"), { code: fail });
-            return [...rows.values()].sort((a, b) => Number(b.completedAt) - Number(a.completedAt)).slice(0, take);
+            return [...rows.values()].filter(row => where.isSnapshot === undefined || row.isSnapshot === where.isSnapshot).sort((a, b) => Number(b.completedAt) - Number(a.completedAt)).slice(0, take);
           },
         },
       } as unknown as PrismaClient,

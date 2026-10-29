@@ -5,6 +5,7 @@ import type { CompletedRun, HistoryAvailability, HistoryResult, SavedSimulationR
 import { mergeRuns, runsForWorkload } from "@/lib/run-history";
 import { snapshotPatch } from "@/lib/benchmark-snapshot";
 import type { WorkloadId } from "@/types/telemetry";
+import { sessionFetch } from "@/lib/client-session";
 
 /**
  * Manage workload-scoped history with a tab-local, idempotent background save queue.
@@ -38,7 +39,7 @@ export function usePersistentRuns(workload: WorkloadId) {
     const version = ++refreshVersion.current;
     setRefreshing(true);
     try {
-      const response = await fetch(`/api/runs?limit=20&workload=${workload}`, { cache: "no-store", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(8_000)]) : AbortSignal.timeout(8_000) });
+      const response = await sessionFetch(`/api/runs?limit=20&workload=${workload}`, { cache: "no-store", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(8_000)]) : AbortSignal.timeout(8_000) });
       const result = await response.json() as HistoryResult;
       if (!mounted.current || signal?.aborted || version !== refreshVersion.current) return;
       if (result.status === "ready" && response.ok && Array.isArray(result.runs)) {
@@ -67,7 +68,7 @@ export function usePersistentRuns(workload: WorkloadId) {
     const active = inFlight.current.get(run.id);
     if (active) return active;
     const work = (async () => { try {
-      const response = await fetch("/api/runs", {
+      const response = await sessionFetch("/api/runs", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(run), signal: AbortSignal.timeout(8_000),
       });
@@ -135,7 +136,7 @@ export function usePersistentRuns(workload: WorkloadId) {
         pending.current.set(id, candidate); setPendingCount(pending.current.size);
         if (!await persist(candidate)) throw new Error("The completed run has not reached the database. Keep the label and retry capture when history is available.");
       } else if (inFlight.current.has(id)) await inFlight.current.get(id);
-      const response = await fetch(`/api/runs/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(metadata), signal: AbortSignal.timeout(8_000) });
+      const response = await sessionFetch(`/api/runs/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(metadata), signal: AbortSignal.timeout(8_000) });
       const result = await response.json();
       if (!response.ok || result.status !== "saved" || result.run?.id !== id) throw new Error(result.message || "Snapshot naming failed. Keep the label and retry.");
       if (mounted.current) setRuns(current => mergeRuns(current, [result.run]).filter(row => !deleted.current.has(row.id)));
@@ -154,7 +155,7 @@ export function usePersistentRuns(workload: WorkloadId) {
       // Finish an outstanding POST first. Queued/late advisor saves stay paused
       // and cannot recreate an intentionally deleted record in this tab.
       await inFlight.current.get(id);
-      const response = await fetch(`/api/runs/${id}`, { method: "DELETE", signal: AbortSignal.timeout(8_000) });
+      const response = await sessionFetch(`/api/runs/${id}`, { method: "DELETE", signal: AbortSignal.timeout(8_000) });
       const result = await response.json();
       if (!response.ok || result.status !== "deleted" || result.id !== id) throw new Error(result.message || "Run deletion failed. The table entry has been retained.");
       // Install the tombstone only after success; late refreshes or advisor saves must not resurrect this UUID.

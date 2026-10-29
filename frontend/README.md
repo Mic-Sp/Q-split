@@ -60,3 +60,34 @@
 4. Run Test Suites:
    - Backend: pytest
    - Frontend: npm test (includes the 1,620-configuration integration matrix)
+
+## Run persistence and session API
+
+Next.js owns run/snapshot persistence in Prisma's `SimulationRun` table; the Python
+backend only executes simulations. From `frontend`, run `npm run db:generate` and
+`npm run db:migrate` to generate the client and deploy the additive migrations.
+Existing rows retain `sessionId = NULL` with their telemetry and snapshot metadata intact.
+
+Send the same optional `X-Session-Id` header on `GET /api/runs`, `POST /api/runs`,
+`PATCH /api/runs/:id`, `DELETE /api/runs/:id`, and `POST /api/advisor` (or
+`/api/analyze-telemetry`). Tokens are case-sensitive, contain 1–128 ASCII letters,
+digits, underscores, or hyphens, and should be unpredictable client-generated UUIDs.
+This is session isolation, not account authentication. The frontend automatically
+creates the token before its first history request, stores it under
+`q-split:session-id` in browser `sessionStorage`, and attaches it to every history,
+save, snapshot, deletion, and Advisor request. Reloads retain the workspace; a fresh
+tab session gets a new one. If storage is blocked, all requests share an in-memory
+token for that page lifetime. Comparisons and exports use this session's loaded
+history. No sign-in or session controls are required.
+
+- Creates assign the header's session; payload fields cannot override ownership.
+- Lists (including pinned snapshots and workload filters) and mutations use that
+  exact session. Missing headers select only the legacy `NULL` bucket.
+- Malformed headers return `400`. A foreign/missing snapshot update returns `404`;
+  deletes remain idempotent `200` without affecting foreign rows. Reusing another
+  session's run UUID on POST returns `409` without returning its contents.
+- `AdvisorCache` is global and has no session or run foreign key. Only the Advisor
+  server populates it. Matching normalized configuration, telemetry, comparison
+  context, model, and policy reuse diagnostics across run/session IDs, including
+  after source-run deletion. Responses bind IDs and history writes to the caller;
+  cache hits retain original usage but charge zero new tokens/cost.

@@ -22,6 +22,8 @@ enum StageStatus {
 model SimulationRun {
   // A stable client-generated UUID makes background-save retries idempotent.
   id                   String      @id @db.Uuid
+  // NULL retains pre-session runs in the legacy, unassigned history bucket.
+  sessionId            String?     @db.VarChar(128)
   completedAt          DateTime    @db.Timestamptz(3)
   createdAt            DateTime    @default(now()) @db.Timestamptz(3)
   workloadId           String
@@ -50,4 +52,16 @@ model SimulationRun {
   @@index([completedAt(sort: Desc), id(sort: Desc)])
   @@index([workloadId, completedAt(sort: Desc)])
   @@index([isSnapshot, completedAt(sort: Desc)])
+  @@index([sessionId, completedAt(sort: Desc), id(sort: Desc)])
+  @@index([sessionId, workloadId, completedAt(sort: Desc)])
+  @@index([sessionId, isSnapshot, completedAt(sort: Desc)])
+}
+
+// Server-generated diagnostics shared across sessions; no ownership or run FK.
+// Deleting a benchmark must not evict a reusable configuration from the cache.
+model AdvisorCache {
+  cacheKey       String   @id @db.VarChar(64)
+  runId          String   @db.Uuid
+  advisorInsight Json     @db.JsonB
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
 }

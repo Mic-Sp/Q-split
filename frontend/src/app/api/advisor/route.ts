@@ -4,6 +4,7 @@ import { ADVISOR_OUTPUT_TOKENS, ADVISOR_RESPONSE_SCHEMA, ADVISOR_TEMPERATURE, AD
 import type { AdvisorInsight, AdvisorRequest } from "@/types/advisor";
 import { adviseWithCache } from "@/lib/advisor-cache";
 import { geminiUsage, withLookupTelemetry } from "@/lib/advisor-telemetry";
+import { readRunSession } from "@/lib/run-session";
 
 const headers = { "Cache-Control": "no-store" };
 const SYSTEM_INSTRUCTION = `You are a Principal Quantum-Classical Systems Architect diagnosing Q-Split simulations.
@@ -24,7 +25,9 @@ For n-bit Shor: minimum 2n+3 logical qubits (8 for N=15). Less capacity blocks a
 export async function POST(request: Request) {
   const started = performance.now();
   let input: AdvisorRequest;
+  let sessionId: string | null;
   try {
+    sessionId = readRunSession(request);
     input = await readAdvisorRequest(request);
   } catch (error) {
     if (error instanceof AdvisorPayloadTooLarge) return Response.json({ message: "Advisor payload exceeds 64 KiB." }, { status: 413, headers });
@@ -77,5 +80,5 @@ export async function POST(request: Request) {
   // Fingerprint prompt/schema/decoding policy so older cached prose cannot bypass current guardrails.
   const policy = JSON.stringify({ system: SYSTEM_INSTRUCTION, temperature: ADVISOR_TEMPERATURE,
     outputTokens: ADVISOR_OUTPUT_TOKENS, schema: ADVISOR_RESPONSE_SCHEMA });
-  return Response.json(await adviseWithCache(input, model, policy, generate, started), { headers });
+  return Response.json(await adviseWithCache(input, model, policy, generate, started, sessionId), { headers });
 }

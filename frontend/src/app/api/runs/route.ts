@@ -1,6 +1,7 @@
 import { DATABASE_NOT_CONFIGURED, databaseNotice, getDatabase, withDatabaseTimeout } from "@/lib/db";
 import { createRunRecord, serializeRun } from "@/lib/run-record";
 import { WORKLOADS } from "@/lib/workloads";
+import { readRunSession } from "@/lib/run-session";
 
 // Next.js uses its default Node.js runtime; Cache Components forbids a runtime override.
 const headers = { "Cache-Control": "no-store" };
@@ -12,6 +13,10 @@ const headers = { "Cache-Control": "no-store" };
  * cannot crowd out the active family's recent window. Responses are never cached.
  */
 export async function GET(request: Request) {
+  let sessionId: string | null;
+  try { sessionId = readRunSession(request); } catch (error) {
+    return Response.json({ message: (error as Error).message }, { status: 400, headers });
+  }
   const params = new URL(request.url).searchParams;
   const rawLimit = params.get("limit") ?? "20";
   if (!/^\d+$/.test(rawLimit) || Number(rawLimit) < 1 || Number(rawLimit) > 50) {
@@ -23,12 +28,12 @@ export async function GET(request: Request) {
   if (workload !== null && !Object.hasOwn(WORKLOADS, workload)) {
     return Response.json({ message: "Workload must be shors_crypto or quantum_mips." }, { status: 400, headers });
   }
-  const where = workload === null ? {} : { workloadId: workload };
+  const where = { sessionId, ...(workload === null ? {} : { workloadId: workload }) };
   try {
     const db = getDatabase();
     if (!db) return Response.json({ status: "unconfigured", message: DATABASE_NOT_CONFIGURED, runs: [] }, { headers });
     const [runs, snapshots] = await Promise.all([withDatabaseTimeout(db.simulationRun.findMany({
-      ...(workload === null ? {} : { where }), take: Number(rawLimit), orderBy: [{ completedAt: "desc" }, { id: "desc" }],
+      where, take: Number(rawLimit), orderBy: [{ completedAt: "desc" }, { id: "desc" }],
     })), withDatabaseTimeout(db.simulationRun.findMany({
       where: { ...where, isSnapshot: true }, orderBy: [{ completedAt: "desc" }, { id: "desc" }],
     }))]);
@@ -46,7 +51,9 @@ export async function GET(request: Request) {
  */
 export async function POST(request: Request) {
   let data: ReturnType<typeof createRunRecord>;
+  let sessionId: string | null;
   try {
+    sessionId = readRunSession(request);
     if (Number(request.headers.get("content-length")) > 1_048_576) {
       return Response.json({ message: "Telemetry payload exceeds 1 MiB." }, { status: 413, headers });
     }
@@ -54,7 +61,7 @@ export async function POST(request: Request) {
     if (new TextEncoder().encode(body).length > 1_048_576) {
       return Response.json({ message: "Telemetry payload exceeds 1 MiB." }, { status: 413, headers });
     }
-    data = createRunRecord(JSON.parse(body));
+    data = { ...createRunRecord(JSON.parse(body)), sessionId };
   } catch (error) {
     return Response.json({ message: error instanceof Error ? error.message : "Invalid completed simulation payload." }, { status: 400, headers });
   }
@@ -62,10 +69,15 @@ export async function POST(request: Request) {
     const db = getDatabase();
     if (!db) return Response.json({ status: "unconfigured", message: DATABASE_NOT_CONFIGURED }, { headers });
     const run = await withDatabaseTimeout(db.simulationRun.upsert({
-      where: { id: data.id }, create: data, update: data.advisorInsight === undefined ? {} : { advisorInsight: data.advisorInsight },
+      // The ownership predicate is part of the write, including retries. A UUID
+      // belonging to another bucket collides on create instead of being updated.
+      where: { id: data.id, sessionId }, create: data, update: data.advisorInsight === undefined ? {} : { advisorInsight: data.advisorInsight },
     }));
     return Response.json({ status: "saved", run: serializeRun(run) }, { status: 201, headers });
   } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "P2002") {
+      return Response.json({ status: "conflict", message: "This run ID is unavailable. Save with a new run UUID." }, { status: 409, headers });
+    }
     return Response.json({ status: "unavailable", message: databaseNotice(error) }, { status: 503, headers });
   }
 }

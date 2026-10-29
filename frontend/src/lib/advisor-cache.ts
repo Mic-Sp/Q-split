@@ -8,65 +8,59 @@ import type { Prisma } from "@/generated/prisma/client";
 import type { AdvisorInsight, AdvisorRequest, AdvisorResponse } from "@/types/advisor";
 import { cachedInsight, withLookupTelemetry } from "@/lib/advisor-telemetry";
 
-const CACHE_VERSION = "validated-advisor-v1";
+const CACHE_VERSION = "validated-advisor-v2-global";
 const CACHE_TIMEOUT_MS = 1500;
 // Coalesces concurrent requests within this server process, including tabs.
 // Completed results live in Neon, not in an unbounded in-memory cache.
 const inFlight = new Map<string, Promise<AdvisorResponse>>();
 
 /**
- * Hash validated run identity/context and generation policy into a stable fingerprint.
- * The UUIDs, normalized current/previous digests, model, schema, and policy all matter.
- * Identical controls submitted as a new run are not a global configuration-cache hit.
+ * Hash normalized current/previous telemetry, model, schema, and generation policy.
+ * UUIDs, timestamps, and sessions are deliberately absent: identical analysis
+ * context can share generated prose without sharing run ownership or metadata.
  */
 export function advisorCacheKey(input: AdvisorRequest, model: string, policy: string): string {
   return createHash("sha256").update(JSON.stringify({
     version: CACHE_VERSION, policy, model,
-    current: { id: input.current.id, digest: advisorDigest(input.current) },
-    previous: input.previous ? { id: input.previous.id, digest: advisorDigest(input.previous) } : null,
+    current: advisorDigest(input.current),
+    previous: input.previous ? advisorDigest(input.previous) : null,
   })).digest("hex");
 }
 
 /**
  * Resolve one analysis via Neon read-through cache, coalesced generation, or fallback.
  * Revalidate saved output before reuse; database failures never prevent generation.
- * The in-process map shares concurrent work, while completed diagnostics live in
- * SimulationRun.advisorInsight. Update an existing full run only, preserving the
- * dashboard's complete telemetry and its background-save responsibility.
+ * The in-process map shares generation globally. Server-generated diagnostics live
+ * in AdvisorCache, independent of session-owned runs and client-supplied insights.
+ * Each caller binds the result to its own UUIDs and persists with a session guard.
  * @param generate Provider-or-fallback producer with its own bounded deadline.
  * @param started Lookup start time for current telemetry, including cache wait.
  * @returns Insight plus persistence status; cache/shared followers incur no new API cost.
  */
 export async function adviseWithCache(input: AdvisorRequest, model: string, policy: string,
-  generate: () => Promise<AdvisorInsight>, started = performance.now()): Promise<AdvisorResponse> {
+  generate: () => Promise<AdvisorInsight>, started = performance.now(), sessionId: string | null = null): Promise<AdvisorResponse> {
   const elapsed = () => Math.round(performance.now() - started);
   const cacheKey = advisorCacheKey(input, model, policy);
-  // Coalesce identical concurrent analyses, not unrelated runs with coincidentally identical control values.
+  // Session ownership governs writes below, never the shared lookup or generation.
   const active = inFlight.get(cacheKey);
-  if (active) {
-    const result = await active;
-    // Sharing an in-flight generation incurs no additional API charge, but is
-    // not a Neon read-through cache hit.
-    return { ...result, insight: withLookupTelemetry(result.insight, elapsed(), result.insight.source === "gemini") };
-  }
-  const work = (async (): Promise<AdvisorResponse> => {
+  const work = active ?? (async (): Promise<AdvisorResponse> => {
     let database: ReturnType<typeof getDatabase> = null;
     let persistence: AdvisorResponse["persistence"] = { status: "unconfigured", message: "Advisor history is not configured. Analysis is still available in this tab." };
     try {
       database = getDatabase();
       if (database) {
         persistence = { status: "pending" };
-        const row = await withDatabaseTimeout(database.simulationRun.findUnique({
-          where: { id: input.current.id }, select: { advisorInsight: true },
+        const row = await withDatabaseTimeout(database.advisorCache.findUnique({
+          where: { cacheKey }, select: { runId: true, advisorInsight: true },
         }), CACHE_TIMEOUT_MS);
         if (row?.advisorInsight) {
           try {
-            const saved = parseAdvisorInsight(row.advisorInsight, input.current.id);
-            // A fallback or stale policy/context is a cache miss, even when its run UUID still matches.
+            const saved = parseAdvisorInsight(row.advisorInsight, row.runId);
+            // Revalidate provenance and comparison presence; identities are rebound per caller.
             if (saved.source !== "fallback" && saved.cacheKey === cacheKey && saved.model === model &&
-                saved.previousRunId === (input.previous?.id ?? null)) {
+                (saved.previousRunId !== null) === (input.previous !== undefined)) {
               const sections = validateGeneratedSections(saved.sections);
-              return { insight: cachedInsight({ ...saved, notice: null, sections }, elapsed()), persistence: { status: "saved" } };
+              return { insight: cachedInsight({ ...saved, notice: null, sections }, elapsed()), persistence };
             }
           } catch { /* Invalid, outdated, or legacy output is a cache miss. */ }
         }
@@ -79,22 +73,36 @@ export async function adviseWithCache(input: AdvisorRequest, model: string, poli
     const insight = withLookupTelemetry({ ...generated, cacheKey, sections: validateGeneratedSections(generated.sections) }, elapsed());
     if (database) {
       try {
-        // Never create a pruned simulation record here: the dashboard saves the
-        // complete original telemetry. If that save is pending, its retry queue
-        // attaches this insight after the simulation record is created.
-        const result = await withDatabaseTimeout(database.simulationRun.updateMany({
-          where: { id: input.current.id }, data: { advisorInsight: insight as unknown as Prisma.InputJsonValue },
-        }), CACHE_TIMEOUT_MS);
-        persistence = result.count > 0 ? { status: "saved" } : {
-          status: "pending", message: "The simulation record is still awaiting save. Its diagnostic remains available and will use the background save queue.",
-        };
+        const data = { runId: input.current.id, advisorInsight: insight as unknown as Prisma.InputJsonValue };
+        await withDatabaseTimeout(database.advisorCache.upsert({ where: { cacheKey }, create: { cacheKey, ...data }, update: data }), CACHE_TIMEOUT_MS);
+      } catch {
+        // Cache outages must not prevent a live response or the scoped history save.
+      }
+    }
+    return { insight, persistence };
+  })();
+  if (!active) inFlight.set(cacheKey, work);
+  try {
+    const result = await work;
+    const insight = withLookupTelemetry({ ...result.insight, runId: input.current.id,
+      previousRunId: input.previous?.id ?? null }, elapsed(), Boolean(active) && result.insight.source === "gemini");
+    let persistence = result.persistence;
+    if (insight.source !== "fallback") {
+      try {
+        const database = getDatabase();
+        if (database) {
+          // Never create a partial run or mutate another session's diagnostic.
+          const saved = await withDatabaseTimeout(database.simulationRun.updateMany({
+            where: { id: input.current.id, sessionId }, data: { advisorInsight: insight as unknown as Prisma.InputJsonValue },
+          }), CACHE_TIMEOUT_MS);
+          persistence = saved.count > 0 ? { status: "saved" } : {
+            status: "pending", message: "The simulation record is still awaiting save. Its diagnostic remains available and will use the background save queue.",
+          };
+        }
       } catch {
         persistence = { status: "unavailable", message: "The diagnostic could not be saved to history. It is still available; retry saving from Persistent Run History." };
       }
     }
     return { insight, persistence };
-  })();
-  inFlight.set(cacheKey, work);
-  try { return await work; }
-  finally { if (inFlight.get(cacheKey) === work) inFlight.delete(cacheKey); }
+  } finally { if (!active && inFlight.get(cacheKey) === work) inFlight.delete(cacheKey); }
 }
