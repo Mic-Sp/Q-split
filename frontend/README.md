@@ -95,3 +95,44 @@ history. No sign-in or session controls are required.
   context, model, and policy reuse diagnostics across run/session IDs, including
   after source-run deletion. Responses bind IDs and history writes to the caller;
   cache hits retain original usage but charge zero new tokens/cost.
+
+## Database TTL maintenance
+
+The session FIFO cap is complemented by a 48-hour TTL on unpinned, unnamed runs.
+The cleanup uses database time and `createdAt`, across every session ID (including
+legacy `NULL` rows). It expires runs rather than measuring a session's last activity:
+a run older than 48 hours qualifies even if its browser session is still active.
+Runs exactly 48 hours old remain until a later cleanup. A snapshot name or pin
+independently protects a run, and the permanent `AdvisorCache` is untouched.
+
+The Prisma migration adds `SimulationRun_unpinned_createdAt_idx` on
+`(isSnapshot, snapshotName, createdAt)`, matching the two protection filters and
+the time-range lookup. Apply the migration and run maintenance from `frontend`:
+
+```sh
+npm run db:migrate
+npm run db:cleanup
+```
+
+`db:cleanup` executes [purge-expired-runs.sql](prisma/maintenance/purge-expired-runs.sql)
+using `prisma.config.ts`, which loads `.env.local` and prefers
+`DATABASE_URL_UNPOOLED` over `DATABASE_URL`. For manual execution in the Neon SQL
+Editor, select the intended database/branch and run that file's SQL directly.
+
+Cleanup runs only when invoked; installing the index does not enable a scheduler.
+For hourly maintenance, add this entry to your deployment host's crontab, replacing
+the project path and ensuring Node/npm are available in cron's `PATH`:
+
+```cron
+0 * * * * cd /path/to/q-split/frontend && npm run db:cleanup
+```
+
+Provide the database environment on that host or use its local `.env.local`;
+keep credentials out of the crontab. An external scheduled runner can execute the
+same command. Hourly scheduling means eligible rows are removed on the next run.
+
+To verify the SQL against PostgreSQL without changing application data, run
+`npm run db:test:ttl`. It exercises the actual cleanup script with temporary tables
+in a rolled-back transaction, covering expired runs in multiple sessions, the
+48-hour boundary, named/pinned snapshot protection, permanent cache preservation,
+and repeated execution.

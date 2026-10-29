@@ -11,6 +11,8 @@
     "db:generate": "prisma generate",
     "db:validate": "prisma validate",
     "db:migrate": "prisma migrate deploy",
+    "db:cleanup": "prisma db execute --file prisma/maintenance/purge-expired-runs.sql",
+    "db:test:ttl": "node scripts/test-run-ttl.mjs",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "tsx --conditions=react-server --test src/lib/*.test.ts"
   },

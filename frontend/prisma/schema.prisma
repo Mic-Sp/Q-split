@@ -55,6 +55,8 @@ model SimulationRun {
   @@index([sessionId, completedAt(sort: Desc), id(sort: Desc)])
   @@index([sessionId, workloadId, completedAt(sort: Desc)])
   @@index([sessionId, isSnapshot, completedAt(sort: Desc)])
+  // TTL maintenance: two equality filters followed by the creation-time range.
+  @@index([isSnapshot, snapshotName, createdAt], map: "SimulationRun_unpinned_createdAt_idx")
 }
 
 // Server-generated diagnostics shared across sessions; no ownership or run FK.
