@@ -2,6 +2,7 @@ import { DATABASE_NOT_CONFIGURED, databaseNotice, getDatabase, withDatabaseTimeo
 import { createRunRecord, serializeRun } from "@/lib/run-record";
 import { WORKLOADS } from "@/lib/workloads";
 import { readRunSession } from "@/lib/run-session";
+import { saveRunWithRetention } from "@/lib/run-persistence";
 
 // Next.js uses its default Node.js runtime; Cache Components forbids a runtime override.
 const headers = { "Cache-Control": "no-store" };
@@ -48,6 +49,7 @@ export async function GET(request: Request) {
  * Bound payloads to 1 MiB, derive summaries server-side, and preserve immutable
  * configuration/telemetry and existing snapshot metadata on retries. Optional
  * validated advisor output updates only its diagnostic field; DB outages are sanitized.
+ * Save and enforce the session's twenty-unpinned-run FIFO cap in one transaction.
  */
 export async function POST(request: Request) {
   let data: ReturnType<typeof createRunRecord>;
@@ -68,11 +70,7 @@ export async function POST(request: Request) {
   try {
     const db = getDatabase();
     if (!db) return Response.json({ status: "unconfigured", message: DATABASE_NOT_CONFIGURED }, { headers });
-    const run = await withDatabaseTimeout(db.simulationRun.upsert({
-      // The ownership predicate is part of the write, including retries. A UUID
-      // belonging to another bucket collides on create instead of being updated.
-      where: { id: data.id, sessionId }, create: data, update: data.advisorInsight === undefined ? {} : { advisorInsight: data.advisorInsight },
-    }));
+    const run = await withDatabaseTimeout(saveRunWithRetention(db, data, sessionId));
     return Response.json({ status: "saved", run: serializeRun(run) }, { status: 201, headers });
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "P2002") {

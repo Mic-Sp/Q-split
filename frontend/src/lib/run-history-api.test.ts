@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { PrismaClient, SimulationRun } from "@/generated/prisma/client";
+import type { Prisma, PrismaClient, SimulationRun } from "@/generated/prisma/client";
 import { GET, POST } from "@/app/api/runs/route";
 import { deterministicInsight } from "@/lib/advisor";
 import type { CompletedRun } from "@/types/run-history";
@@ -44,19 +44,32 @@ test("history routes handle configuration, validation, saves, ordering, and fail
       url: fakeUrl,
       schemaVersion: DATABASE_CLIENT_SCHEMA,
       client: {
+        async $transaction<T>(operation: (tx: Prisma.TransactionClient) => Promise<T>) {
+          const before = structuredClone(rows);
+          try { return await operation(this as unknown as Prisma.TransactionClient); }
+          catch (error) { rows.clear(); before.forEach((row, id) => rows.set(id, row)); throw error; }
+        },
         simulationRun: {
           upsert: async ({ where, create, update }: { where: { id: string; sessionId: string | null }; create: SimulationRun; update: Partial<SimulationRun> }) => {
             assert.equal(where.sessionId, null);
             assert.equal(create.sessionId, null);
             if (fail) throw Object.assign(new Error("secret-password must not be returned"), { code: fail });
-            const row = rows.has(where.id) ? { ...rows.get(where.id)!, ...update } : { ...create, createdAt: new Date("2026-10-26T16:00:01.000Z") };
+            const row = rows.has(where.id) ? { ...rows.get(where.id)!, ...update } : { ...create, createdAt: new Date("2026-10-26T16:00:01.000Z"), snapshotName: null, isSnapshot: false };
             rows.set(where.id, row); return row;
           },
-          findMany: async ({ take, orderBy, where }: { take?: number; orderBy: unknown; where: { sessionId: string | null; isSnapshot?: boolean } }) => {
+          findMany: async ({ take, orderBy, where, select }: { take?: number; orderBy: unknown; where: { sessionId: string | null; isSnapshot?: boolean; snapshotName?: null }; select?: { id: boolean } }) => {
             assert.equal(where.sessionId, null);
-            assert.deepEqual(orderBy, [{ completedAt: "desc" }, { id: "desc" }]);
+            assert.deepEqual(orderBy, [{ [select ? "createdAt" : "completedAt"]: "desc" }, { id: "desc" }]);
             if (fail) throw Object.assign(new Error("secret-password must not be returned"), { code: fail });
-            return [...rows.values()].filter(row => where.isSnapshot === undefined || row.isSnapshot === where.isSnapshot).sort((a, b) => Number(b.completedAt) - Number(a.completedAt)).slice(0, take);
+            return [...rows.values()].filter(row => (where.isSnapshot === undefined || row.isSnapshot === where.isSnapshot) &&
+              (where.snapshotName === undefined || row.snapshotName === where.snapshotName)).sort((a, b) => Number(b.completedAt) - Number(a.completedAt)).slice(0, take);
+          },
+          deleteMany: async ({ where }: { where: { sessionId: string | null; isSnapshot: boolean; snapshotName: null; id: { notIn: string[] } } }) => {
+            let count = 0;
+            for (const row of rows.values()) if (row.sessionId === where.sessionId && row.isSnapshot === where.isSnapshot && row.snapshotName === where.snapshotName && !where.id.notIn.includes(row.id)) {
+              rows.delete(row.id); count++;
+            }
+            return { count };
           },
         },
       } as unknown as PrismaClient,

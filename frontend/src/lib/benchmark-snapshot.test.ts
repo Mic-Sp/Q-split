@@ -10,7 +10,7 @@ import { benchmarkExportRuns, selectedBenchmarkRuns } from "./benchmark-comparis
 import { benchmarkCsv, benchmarkJson } from "./benchmark-export";
 import type { SavedSimulationRun } from "@/types/run-history";
 import { DATABASE_CLIENT_SCHEMA } from "./db";
-import type { PrismaClient, SimulationRun } from "@/generated/prisma/client";
+import type { Prisma, PrismaClient, SimulationRun } from "@/generated/prisma/client";
 import type { CompletedRun } from "@/types/run-history";
 import { deterministicInsight } from "./advisor";
 
@@ -33,25 +33,49 @@ function repository(t: TestContext) {
   const global = globalThis as unknown as { qSplitDatabase?: { url: string; client: PrismaClient; schemaVersion?: string } };
   const prior = global.qSplitDatabase, priorUrl = process.env.DATABASE_URL;
   const rows = new Map([[id, record()]]);
-  const stats = { writes: 0, reads: 0, fail: false };
+  const stats = { writes: 0, reads: 0, fail: false, failPrune: false, conflicts: 0, transactions: 0 };
   const check = () => { if (stats.fail) throw new Error("secret-password must not be exposed"); };
   const url = "postgresql://test:test@snapshot-test.invalid/test";
   process.env.DATABASE_URL = url;
-  global.qSplitDatabase = { url, schemaVersion: DATABASE_CLIENT_SCHEMA, client: { simulationRun: {
+  global.qSplitDatabase = { url, schemaVersion: DATABASE_CLIENT_SCHEMA, client: {
+    async $transaction<T>(operation: (tx: Prisma.TransactionClient) => Promise<T>, options: { isolationLevel: string }) {
+      assert.equal(options.isolationLevel, "Serializable"); stats.transactions++;
+      const before = structuredClone(rows);
+      try {
+        const result = await operation(this as unknown as Prisma.TransactionClient);
+        if (stats.conflicts > 0) { stats.conflicts--; throw Object.assign(new Error("private conflict details"), { code: "P2034" }); }
+        return result;
+      } catch (error) {
+        rows.clear(); before.forEach((row, id) => rows.set(id, row)); throw error;
+      }
+    },
+    simulationRun: {
     update: async ({ where, data }: { where: { id: string; sessionId: string | null }; data: Partial<SimulationRun> }) => {
       check(); stats.writes++;
       const existing = rows.get(where.id);
       if (!existing || existing.sessionId !== where.sessionId) throw Object.assign(new Error("private missing record details"), { code: "P2025" });
       const result = { ...existing, ...data }; rows.set(where.id, result); return result;
     },
-    deleteMany: async ({ where }: { where: { id: string; sessionId: string | null } }) => { check(); stats.writes++; return { count: rows.get(where.id)?.sessionId === where.sessionId && rows.delete(where.id) ? 1 : 0 }; },
-    findMany: async ({ take, where }: { take?: number; where: { sessionId: string | null; isSnapshot?: boolean; workloadId?: string } }) => {
-      check(); stats.reads++; return [...rows.values()].filter(row => row.sessionId === where.sessionId && (!where.workloadId || row.workloadId === where.workloadId) && (where.isSnapshot === undefined || row.isSnapshot === where.isSnapshot)).sort((a, b) => +b.completedAt - +a.completedAt).slice(0, take);
+    deleteMany: async ({ where }: { where: { id: string | { notIn: string[] }; sessionId: string | null; isSnapshot?: boolean; snapshotName?: null } }) => {
+      check(); stats.writes++;
+      if (stats.failPrune && typeof where.id !== "string") throw new Error("secret-password pruning failure");
+      const targets = [...rows.values()].filter(row => row.sessionId === where.sessionId &&
+        (where.isSnapshot === undefined || row.isSnapshot === where.isSnapshot) &&
+        (where.snapshotName === undefined || row.snapshotName === where.snapshotName) &&
+        (typeof where.id === "string" ? row.id === where.id : !where.id.notIn.includes(row.id)));
+      targets.forEach(row => rows.delete(row.id)); return { count: targets.length };
+    },
+    findMany: async ({ take, where, orderBy, select }: { take?: number; where: { sessionId: string | null; isSnapshot?: boolean; snapshotName?: null; workloadId?: string }; orderBy: { createdAt?: string; completedAt?: string; id?: string }[]; select?: { id: boolean } }) => {
+      check(); stats.reads++;
+      const results = [...rows.values()].filter(row => row.sessionId === where.sessionId && (!where.workloadId || row.workloadId === where.workloadId) &&
+        (where.isSnapshot === undefined || row.isSnapshot === where.isSnapshot) && (where.snapshotName === undefined || row.snapshotName === where.snapshotName))
+        .sort((a, b) => (orderBy[0].createdAt ? +b.createdAt - +a.createdAt : +b.completedAt - +a.completedAt) || b.id.localeCompare(a.id)).slice(0, take);
+      return select ? results.map(row => ({ id: row.id })) : results;
     },
     upsert: async ({ where, create, update }: { where: { id: string; sessionId: string | null }; create: SimulationRun; update: Partial<SimulationRun> }) => {
       check(); stats.writes++;
       if (rows.has(where.id) && rows.get(where.id)!.sessionId !== where.sessionId) throw Object.assign(new Error("private duplicate record details"), { code: "P2002" });
-      const result = rows.has(where.id) ? { ...rows.get(where.id)!, ...update } : { ...create, createdAt: new Date() }; rows.set(where.id, result); return result;
+      const result = rows.has(where.id) ? { ...rows.get(where.id)!, ...update } : { ...create, createdAt: new Date(), snapshotName: null, isSnapshot: false, snapshotUpdatedAt: null }; rows.set(where.id, result); return result;
     },
   } } as unknown as PrismaClient };
   t.after(() => { global.qSplitDatabase = prior; if (priorUrl === undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL = priorUrl; });
@@ -290,4 +314,74 @@ test("automatic browser sessions scope API history, snapshots, comparisons, expo
   await reloaded.fetch(`/api/runs/${runA.id}`, { method: "DELETE" });
   assert.ok(!rows.has(runA.id)); assert.ok(rows.has(runB.id)); assert.ok(rows.has(id));
   assert.deepEqual((await (await b.fetch("/api/runs")).json()).runs.map((run: SavedSimulationRun) => run.id), [runB.id]);
+});
+
+function retentionRecord(index: number, sessionId: string | null): SimulationRun {
+  const input = fixture();
+  input.id = `c367fe2e-f083-4996-8cbd-${String(index).padStart(12, "0")}`;
+  if (index % 2) {
+    input.request.workload_id = "quantum_mips"; input.request.scale_param = 64;
+    input.telemetry.workload_id = "quantum_mips"; input.telemetry.workload_name = "Quantum-MIPS"; input.telemetry.scale_label = "M = 64";
+  }
+  return { ...createRunRecord(input), sessionId, createdAt: new Date(Date.UTC(2020, 0, 1, 0, index)),
+    snapshotName: null, isSnapshot: false, snapshotUpdatedAt: null } as SimulationRun;
+}
+
+test("a twenty-first unpinned save prunes only its session's oldest run across workloads and protects named or pinned snapshots", async t => {
+  const { rows } = repository(t);
+  const oldest = retentionRecord(0, "session-a");
+  for (let i = 0; i < 20; i++) { const row = retentionRecord(i, "session-a"); rows.set(row.id, row); }
+  // Deliberately independent protection flags cover older/inconsistent metadata too.
+  const named = { ...retentionRecord(100, "session-a"), createdAt: new Date("2019-01-01"), snapshotName: "Keep named forever" };
+  const pinned = { ...retentionRecord(101, "session-a"), createdAt: new Date("2019-01-01"), isSnapshot: true };
+  rows.set(named.id, named); rows.set(pinned.id, pinned);
+  for (let i = 200; i < 225; i++) { const row = retentionRecord(i, "session-b"); rows.set(row.id, row); }
+  const protectedRows = structuredClone([...rows.values()].filter(row => row.sessionId !== "session-a" || row.snapshotName !== null || row.isSnapshot));
+  const fresh = { ...fixture(), completedAt: "2000-01-01T00:00:00.000Z" };
+  // A backdated completion must still use its server insertion time for FIFO.
+  fresh.id = "c367fe2e-f083-4996-8cbd-000000000021";
+  const saved = await POST(sessionRequest("", "POST", "session-a", fresh));
+  assert.equal(saved.status, 201);
+  assert.ok(!rows.has(oldest.id)); assert.ok(rows.has(fresh.id));
+  assert.equal([...rows.values()].filter(row => row.sessionId === "session-a" && !row.isSnapshot && row.snapshotName === null).length, 20);
+  for (let i = 1; i < 20; i++) assert.ok(rows.has(retentionRecord(i, "session-a").id));
+  for (const row of protectedRows) assert.deepEqual(rows.get(row.id), row, "Pruning cannot change named/pinned snapshots, other sessions, or legacy rows");
+  const createdAt = rows.get(fresh.id)!.createdAt;
+  assert.equal((await POST(sessionRequest("", "POST", "session-a", fresh))).status, 201);
+  assert.deepEqual(rows.get(fresh.id)!.createdAt, createdAt, "Retries never refresh FIFO age");
+  assert.equal([...rows.values()].filter(row => row.sessionId === "session-a").length, 22, "Snapshots do not count against the twenty-run cap");
+});
+
+test("one save clears an existing legacy backlog with deterministic timestamp ties without pruning another session", async t => {
+  const { rows } = repository(t); rows.clear();
+  for (let i = 0; i < 25; i++) {
+    const row = { ...retentionRecord(i, null), createdAt: new Date("2020-01-01") }; rows.set(row.id, row);
+  }
+  const pinned = { ...retentionRecord(100, null), isSnapshot: true, snapshotName: "Legacy baseline" };
+  const foreign = retentionRecord(200, "session-a"); rows.set(pinned.id, pinned); rows.set(foreign.id, foreign);
+  assert.equal((await POST(sessionRequest("", "POST", null, fixture()))).status, 201);
+  assert.equal([...rows.values()].filter(row => row.sessionId === null && !row.isSnapshot && row.snapshotName === null).length, 20);
+  for (let i = 0; i < 25; i++) assert.equal(rows.has(retentionRecord(i, null).id), i >= 6, "Equal server timestamps use UUID descending as the tie-breaker");
+  assert.deepEqual(rows.get(pinned.id), pinned); assert.deepEqual(rows.get(foreign.id), foreign);
+});
+
+test("prune failures roll back the save, and serialization conflicts retry atomically with a bounded failure path", async t => {
+  const { rows, stats } = repository(t);
+  for (let i = 0; i < 20; i++) { const row = retentionRecord(i, "session-a"); rows.set(row.id, row); }
+  const before = structuredClone(rows), fresh = { ...fixture(), id: "c367fe2e-f083-4996-8cbd-000000000021" };
+  stats.failPrune = true;
+  const failed = await POST(sessionRequest("", "POST", "session-a", fresh));
+  assert.equal(failed.status, 503); assert.ok(!(await failed.text()).includes("secret-password"));
+  assert.deepEqual(rows, before, "A failed prune must not leave a twenty-first run committed");
+  stats.failPrune = false; stats.conflicts = 1;
+  const attempts = stats.transactions;
+  assert.equal((await POST(sessionRequest("", "POST", "session-a", fresh))).status, 201);
+  assert.equal(stats.transactions - attempts, 2);
+  assert.ok(!rows.has(retentionRecord(0, "session-a").id)); assert.ok(rows.has(fresh.id));
+  assert.equal([...rows.values()].filter(row => row.sessionId === "session-a").length, 20);
+  const after = structuredClone(rows), priorAttempts = stats.transactions;
+  stats.conflicts = 3;
+  const exhausted = await POST(sessionRequest("", "POST", "session-a", { ...fresh, id: "c367fe2e-f083-4996-8cbd-000000000022" }));
+  assert.equal(exhausted.status, 503); assert.ok(!(await exhausted.text()).includes("private conflict"));
+  assert.equal(stats.transactions - priorAttempts, 3); assert.deepEqual(rows, after);
 });

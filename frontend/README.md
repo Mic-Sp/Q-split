@@ -81,6 +81,10 @@ token for that page lifetime. Comparisons and exports use this session's loaded
 history. No sign-in or session controls are required.
 
 - Creates assign the header's session; payload fields cannot override ownership.
+- Each save atomically retains at most 20 unpinned runs per session across all
+  workloads, including the legacy `NULL` bucket. FIFO uses server creation time
+  (UUID breaks ties); retries preserve that time. Named or pinned snapshots never
+  count toward the cap and are never pruned. Write conflicts retry the transaction.
 - Lists (including pinned snapshots and workload filters) and mutations use that
   exact session. Missing headers select only the legacy `NULL` bucket.
 - Malformed headers return `400`. A foreign/missing snapshot update returns `404`;
