@@ -5,6 +5,9 @@ import { TierTooltip } from "@/components/tier-tooltip";
 import { SCALE_DESCRIPTIONS, WORKLOADS, workloadScaleLabel } from "@/lib/workloads";
 import type { WorkloadId } from "@/types/telemetry";
 
+/**
+ * Render workload-specific scale choices with accessible context tooltips; selection changes controls only.
+ */
 export function TargetScales({ workload, scale, onSelect }: { workload: WorkloadId; scale: number; onSelect: (scale: number) => void }) {
   const [openScale, setOpenScale] = useState<number | null>(null);
   return <div className="flex flex-wrap gap-1.5">

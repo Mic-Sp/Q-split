@@ -11,6 +11,12 @@ export const DATABASE_CLIENT_SCHEMA = "simulation-run-snapshots-v2";
 
 export const DATABASE_NOT_CONFIGURED = "Persistent history is not configured. Add your Neon DATABASE_URL to frontend/.env.local and restart the app. Simulations still work normally.";
 
+/**
+ * Lazily obtain a server-only Neon-backed Prisma client or an unconfigured null.
+ * Reuse the development singleton only when connection URL and schema version match;
+ * disconnect obsolete clients after configuration/client-generation changes. This
+ * constructs the client and validates URL shape, not database reachability.
+ */
 export function getDatabase(): PrismaClient | null {
   const connectionString = process.env.DATABASE_URL?.trim();
   if (!connectionString || /YOUR_ENDPOINT|REPLACE_ME/.test(connectionString)) return null;
@@ -34,6 +40,9 @@ export function getDatabase(): PrismaClient | null {
   return client;
 }
 
+/**
+ * Map known schema failures to actionable notices without exposing driver text or credentials.
+ */
 export function databaseNotice(error: unknown): string {
   // Never return driver error messages: they can contain connection credentials.
   if (error && typeof error === "object" && "code" in error && ["P2021", "P2022"].includes(String(error.code))) {
@@ -42,6 +51,12 @@ export function databaseNotice(error: unknown): string {
   return "Persistent history is temporarily unavailable. Your simulation still completed; retry saving when the database is reachable.";
 }
 
+/**
+ * Bound application wait time for a database promise and always clear its timer.
+ * Promise.race does not cancel the underlying operation; driver query/connection
+ * timeouts remain separate safeguards, and a timed-out write may still finish.
+ * @throws Error When the application deadline wins, or the original operation rejects.
+ */
 export async function withDatabaseTimeout<T>(operation: Promise<T>, timeoutMs = 6_000): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {

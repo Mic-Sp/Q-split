@@ -6,6 +6,15 @@ import { mergeRuns, runsForWorkload } from "@/lib/run-history";
 import { snapshotPatch } from "@/lib/benchmark-snapshot";
 import type { WorkloadId } from "@/types/telemetry";
 
+/**
+ * Manage workload-scoped history with a tab-local, idempotent background save queue.
+ * Keep pending/in-flight writes across workload switches; only fetched/displayed
+ * rows are scoped. Generation checks ignore stale refreshes, UUID tombstones
+ * prevent deleted runs reappearing, and metadata timestamps protect newer names.
+ * Saving is independent of simulator loading and retries preserve the original UUID.
+ * @param workload Active family used for server queries and returned row filtering.
+ * @returns Scoped rows, availability, queue/mutation state, and async row actions.
+ */
 export function usePersistentRuns(workload: WorkloadId) {
   const [runs, setRuns] = useState<SavedSimulationRun[]>([]);
   const [availability, setAvailability] = useState<HistoryAvailability | "loading">("loading");
@@ -21,6 +30,7 @@ export function usePersistentRuns(workload: WorkloadId) {
   const [busyIds, setBusyIds] = useState<string[]>([]);
   const [mutationMessage, setMutationMessage] = useState<string | null>(null);
   const mounted = useRef(false);
+  // Each refresh owns a generation; workload switches invalidate even uncancelled manual lookups.
   const refreshVersion = useRef(0);
   const invalidateRefresh = useCallback(() => { refreshVersion.current++; }, []);
 
@@ -51,6 +61,7 @@ export function usePersistentRuns(workload: WorkloadId) {
     return refresh();
   }, [refresh]);
 
+  // Keep this callback stable across workload changes: in-flight simulation effects depend on saveRun.
   const persist = useCallback(function persistRun(run: CompletedRun): Promise<SavedSimulationRun | null> {
     if (deleted.current.has(run.id) || deleting.current.has(run.id)) return Promise.resolve(null);
     const active = inFlight.current.get(run.id);
@@ -62,6 +73,7 @@ export function usePersistentRuns(workload: WorkloadId) {
       });
       const result = await response.json() as SaveRunResult;
       if (result.status === "saved" && response.ok && result.run?.id === run.id) {
+        // Remove only the exact payload saved; a newer queued advisor-enriched object still needs a write.
         if (pending.current.get(run.id) === run) pending.current.delete(run.id);
         if (mounted.current) {
           setRuns((current) => mergeRuns(current, [result.run]).filter(row => !deleted.current.has(row.id)));
@@ -84,6 +96,7 @@ export function usePersistentRuns(workload: WorkloadId) {
     void work.then(() => {
       inFlight.current.delete(run.id);
       if (mounted.current) setSavingCount(inFlight.current.size);
+      // Serialize per UUID: finish the old save, then drain a newer payload instead of racing writes.
       const newer = pending.current.get(run.id);
       if (newer && newer !== run && !deleting.current.has(run.id)) void persistRun(newer);
     });
@@ -108,6 +121,7 @@ export function usePersistentRuns(workload: WorkloadId) {
     if (mounted.current) setBusyIds([...mutations.current]);
   };
 
+  /** Persist the immutable run first when needed, then apply the metadata-only name/pin mutation. */
   const nameSnapshot = async (id: string, name: string, run?: CompletedRun): Promise<boolean> => {
     let metadata: ReturnType<typeof snapshotPatch>;
     try { metadata = snapshotPatch({ snapshotName: name }); }
@@ -132,6 +146,7 @@ export function usePersistentRuns(workload: WorkloadId) {
     } finally { endMutation(id); }
   };
 
+  /** Coordinate deletion with pending saves and retain the row/queue if the database mutation fails. */
   const deleteRun = async (id: string): Promise<boolean> => {
     if (!beginMutation(id)) return false;
     deleting.current.add(id);
@@ -142,6 +157,7 @@ export function usePersistentRuns(workload: WorkloadId) {
       const response = await fetch(`/api/runs/${id}`, { method: "DELETE", signal: AbortSignal.timeout(8_000) });
       const result = await response.json();
       if (!response.ok || result.status !== "deleted" || result.id !== id) throw new Error(result.message || "Run deletion failed. The table entry has been retained.");
+      // Install the tombstone only after success; late refreshes or advisor saves must not resurrect this UUID.
       deleted.current.add(id); pending.current.delete(id);
       if (mounted.current) { setRuns(current => current.filter(run => run.id !== id)); setPendingCount(pending.current.size); }
       return true;
@@ -155,6 +171,7 @@ export function usePersistentRuns(workload: WorkloadId) {
     }
   };
 
+  /** Refresh active history while retrying every queued run, including inactive workloads. */
   const retryPending = useCallback(() => {
     void refreshHistory();
     pending.current.forEach((run) => { void persist(run); });

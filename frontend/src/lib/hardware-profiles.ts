@@ -11,14 +11,23 @@ export const HARDWARE_PROFILES = {
     description: "Noise-free reference with 100% coherence; baseline depth and gate time. Capacity is controlled separately; this profile does not imply unlimited qubits or error-corrected hardware. Analytical prep is 0.15 ms; N=15 sequential Aer retains 0.05 ms setup." },
 } satisfies Record<HardwareProfile, { label: string; topology: string; referenceQubits: number | null; depthMultiplier: number; gateTimeMultiplier: number; prepMs: number; decayScale: number | null; description: string }>;
 
+/**
+ * Narrow untrusted values to known comparative architecture registry keys.
+ */
 export function isHardwareProfile(value: unknown): value is HardwareProfile {
   return typeof value === "string" && (HARDWARE_PROFILE_IDS as readonly string[]).includes(value);
 }
 
+/**
+ * Resolve a known profile label while keeping unknown historical identifiers readable.
+ */
 export function hardwareLabel(value: string) {
   return isHardwareProfile(value) ? HARDWARE_PROFILES[value].label : value;
 }
 
+/**
+ * Explain topology savings separately from gate-time/coherence assumptions for nonbaseline profiles.
+ */
 export function architectureTradeOff(profile: HardwareProfile) {
   if (profile === "google_weber_grid") return "Square-grid connectivity reduces modeled SWAP routing to 0.78× Heavy-Hex depth with 0.45× gate time, while its coherence decay window is shorter (850).";
   if (profile === "ionq_forte_trapped_ion") return "All-to-all ion connectivity removes SWAP layers (0.55× depth), but laser-driven shared vibrational-mode gates cost 180× gate time with 0.85 ms prep/readout; the decay scale is 8500.";

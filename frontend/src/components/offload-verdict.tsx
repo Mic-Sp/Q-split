@@ -9,6 +9,9 @@ const STATUS = {
   blocked: { icon: CircleX, style: "border-rose-400/20 bg-rose-400/5 text-rose-300" },
 };
 
+/**
+ * Present the completed snapshot's systems verdict; compact text retains full context in an accessible popover.
+ */
 export function OffloadVerdictStrip({ snapshot, compact = false }: { snapshot: Snapshot | null; compact?: boolean }) {
   const verdict = snapshot ? offloadVerdict(snapshot.data, snapshot.request) : null;
   const style = verdict ? STATUS[verdict.status] : { icon: Activity, style: "border-slate-800 bg-slate-900/35 text-slate-400" };

@@ -1,6 +1,7 @@
 import type { HybridTelemetryResponse, SimulationRequest, StageNode, StageStatus } from "@/types/telemetry";
 import type { AdvisorInsight } from "@/types/advisor";
 
+/** Immutable execution payload identified by a stable UUID for idempotent background-save retries. */
 export interface CompletedRun {
   id: string;
   completedAt: string;
@@ -9,6 +10,7 @@ export interface CompletedRun {
   advisorInsight?: AdvisorInsight;
 }
 
+/** JSON-safe persisted row; circuitDepth is a decimal string because PostgreSQL BIGINT exceeds JS safe integers. */
 export interface SavedSimulationRun {
   id: string;
   completedAt: string;

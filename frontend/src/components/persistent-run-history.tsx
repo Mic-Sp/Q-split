@@ -11,6 +11,12 @@ import { benchmarkHistory } from "@/lib/run-history";
 import type { WorkloadId } from "@/types/telemetry";
 import { downloadBenchmark } from "@/lib/benchmark-export";
 
+/**
+ * Render the active workload's recent/pinned rows, selections, and export controls.
+ * The parent keys this component by workload to reset checkboxes and filters on
+ * switches. Resolve selections against scoped rows on every render so deletions or
+ * stale IDs cannot enter the matrix/download; hidden selected own-workload rows remain exportable.
+ */
 export function PersistentRunHistory({ history, onRestore, workload }: { workload: WorkloadId; history: ReturnType<typeof usePersistentRuns>; onRestore: (run: SavedSimulationRun) => void }) {
   const [showAll, setShowAll] = useState(false);
   const listId = useId();
@@ -19,6 +25,7 @@ export function PersistentRunHistory({ history, onRestore, workload }: { workloa
   const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
   const { runs, candidates, visibleRuns } = benchmarkHistory(history.runs, workload, namedOnly, showAll);
   const workloadLabel = workload === "shors_crypto" ? "Shor’s Cryptography" : "Quantum-MIPS";
+  // Resolve UUIDs against the active family before deriving either the matrix or the download pool.
   const selectedRuns = selectedBenchmarkRuns(runs, selectedIds);
   const exportRuns = benchmarkExportRuns(runs, visibleRuns, selectedIds);
   const toggleSelection = (id: string) => {

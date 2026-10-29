@@ -10,12 +10,22 @@ function invalid(message: string): never {
   throw new Error(message);
 }
 
+/**
+ * Validate an optional nonnegative safe integer; keep absent summary metrics null rather than zero.
+ */
 function optionalInteger(value: unknown, label: string, max: number): number | null {
   if (value === undefined || value === null) return null;
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > max) invalid(`Invalid ${label}.`);
   return value;
 }
 
+/**
+ * Validate a completed run and derive the immutable Prisma create payload.
+ * Cross-check workload, route, and QPU capacity against telemetry before persistence.
+ * Store full JSON beside summaries, convert safe circuit depths to BigInt, and bind
+ * optional advisor output to the same run UUID. Snapshot metadata is changed elsewhere.
+ * @throws Error For malformed IDs, configuration/telemetry mismatches, or invalid metrics.
+ */
 export function createRunRecord(value: unknown): Prisma.SimulationRunCreateInput {
   if (!value || typeof value !== "object" || Array.isArray(value)) invalid("A completed simulation object is required.");
   const run = value as CompletedRun;
@@ -40,6 +50,7 @@ export function createRunRecord(value: unknown): Prisma.SimulationRunCreateInput
   }
   const stages = Object.values(telemetry.stages);
   if (stages.some((stage) => stage.latency_ms < 0)) invalid("Latency cannot be negative.");
+  // Preserve the legacy stage-sum summary; benchmark wall-clock math reads full telemetry for QPU I/O.
   const latency = totalLatency(telemetry);
   if (!Number.isFinite(latency)) invalid("Invalid total latency.");
   const quantum = telemetry.stages.stage_2_quantum_kernel.metrics;
@@ -68,6 +79,11 @@ export function createRunRecord(value: unknown): Prisma.SimulationRunCreateInput
   };
 }
 
+/**
+ * Convert Prisma Date/BigInt values to the public JSON history contract.
+ * Keep full request/telemetry JSON and optional legacy advisor metrics; snapshot
+ * fields missing from historical rows receive compatible null/false defaults.
+ */
 export function serializeRun(run: SimulationRun): SavedSimulationRun {
   return {
     id: run.id, completedAt: run.completedAt.toISOString(), createdAt: run.createdAt.toISOString(),

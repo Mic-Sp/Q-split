@@ -12,6 +12,7 @@ export const ADVISOR_MAX_OUTPUT_CHARS = 4096;
 
 const sectionKeys = ["routingDiagnosis", "spaceTimeTradeOff", "optimizationRecommendation"] as const;
 
+/** Provider-facing JSON schema; local verification remains authoritative even when the provider accepts it. */
 export const ADVISOR_RESPONSE_SCHEMA = {
   type: "object", additionalProperties: false, required: sectionKeys,
   properties: Object.fromEntries(sectionKeys.map((key) => [key, {
@@ -41,6 +42,9 @@ const physicalClaims = [
   /\b(?:physical|real|actual)[\s-]+(?:QPU|quantum[\s-]+(?:hardware|processor|device))\b[^.!?]{0,40}\b(?:executed|ran|measured|benchmarked)\b/gi,
 ];
 
+/**
+ * Detect known affirmative physical-device claims while allowing explicit simulation disclaimers.
+ */
 function claimsPhysicalExecution(sentence: string): boolean {
   return physicalClaims.some((pattern) => [...sentence.matchAll(pattern)].some((match) => {
     const preceding = sentence.slice(Math.max(0, match.index! - 40), match.index);
@@ -50,6 +54,9 @@ function claimsPhysicalExecution(sentence: string): boolean {
   }));
 }
 
+/**
+ * Normalize Unicode, hyphens, invisible controls, and whitespace before sentence/policy checks.
+ */
 function normalizeSection(value: string): string {
   return value.normalize("NFKC")
     .replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g, "")
@@ -57,7 +64,14 @@ function normalizeSection(value: string): string {
     .replace(/\s+/g, " ").trim();
 }
 
-/** Stricter live-generation gate, separate from legacy history serialization. */
+/**
+ * Apply the strict live-output gate after provider JSON schema guidance.
+ * Require exactly three fields, bounded normalized text, and one to four sentences;
+ * reject known unsupported controls and physical-execution claims. These custom
+ * TypeScript checks are stricter than legacy history parsing, without using Zod.
+ * @returns A normalized section object suitable for caching and display.
+ * @throws Error For shape, size, text, sentence, or supported-control violations.
+ */
 export function validateGeneratedSections(value: unknown): AdvisorSections {
   if (!value || typeof value !== "object" || Array.isArray(value) ||
       Object.keys(value).length !== sectionKeys.length ||
@@ -67,6 +81,7 @@ export function validateGeneratedSections(value: unknown): AdvisorSections {
     const raw = sections[key];
     if (raw.length > ADVISOR_SECTION_MAX_CHARS || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(raw)) throw new Error("Invalid advisor output text.");
     const text = normalizeSection(raw);
+    // Locale-aware sentence boundaries avoid treating decimal points in telemetry as separate sentences.
     const sentences = [...sentenceSegmenter.segment(text)].filter(({ segment }) => /[\p{L}\p{N}]/u.test(segment));
     if (text.length < ADVISOR_SECTION_MIN_CHARS || text.length > ADVISOR_SECTION_MAX_CHARS ||
         sentences.length < 1 || sentences.length > ADVISOR_MAX_SENTENCES ||
@@ -77,6 +92,9 @@ export function validateGeneratedSections(value: unknown): AdvisorSections {
   return sections;
 }
 
+/**
+ * Bound provider text before JSON parsing, then require the complete live-output validation policy.
+ */
 export function parseGeneratedOutput(text: unknown): AdvisorSections {
   if (typeof text !== "string" || !text.trim() || text.length > ADVISOR_MAX_OUTPUT_CHARS) throw new Error("Invalid advisor output size.");
   return validateGeneratedSections(JSON.parse(text));

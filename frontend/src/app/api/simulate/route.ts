@@ -2,6 +2,12 @@ import { API_BASE_URL } from "@/lib/config";
 import { parseSimulationRequest } from "@/lib/workloads";
 import { parseTelemetry } from "@/lib/telemetry";
 
+/**
+ * Validate cockpit controls and proxy one uncached simulation to FastAPI.
+ * Use the server URL override before the legacy public fallback, combine caller
+ * cancellation with an 85-second deadline, and reject malformed/mismatched telemetry.
+ * @returns JSON telemetry, HTTP 400/413 for invalid input, or 502 for lookup/schema failure.
+ */
 export async function POST(request: Request) {
   const headers = { "Cache-Control": "no-store" };
   let input;

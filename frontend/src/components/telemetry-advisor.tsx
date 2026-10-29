@@ -10,10 +10,18 @@ import type { Snapshot } from "@/lib/telemetry";
 import type { AdvisorInsight, AdvisorResponse } from "@/types/advisor";
 import type { CompletedRun } from "@/types/run-history";
 
+/** Adapt an immutable session snapshot to the persistence/advisor wire shape without reading live controls. */
 const completedRun = (snapshot: Snapshot): CompletedRun => ({
   id: snapshot.id, completedAt: snapshot.completedAt, request: snapshot.request, telemetry: snapshot.data,
 });
 
+/**
+ * Manage on-demand analysis for one immutable completed snapshot.
+ * Only same-workload previous runs are eligible; comparison IDs determine whether
+ * saved/generated insights are reusable. A synchronous ref prevents rapid duplicate
+ * requests, cancellation protects unmounted runs, and local fallback can be queued
+ * for persistence independently from simulation loading.
+ */
 export function TelemetryAdvisor({ snapshot, previous: previousCandidate, onInsight, onPersisted, savedInsight, saving, persistenceMessage, simulationLoading }: {
   snapshot: Snapshot | null;
   previous?: Snapshot;
@@ -33,6 +41,7 @@ export function TelemetryAdvisor({ snapshot, previous: previousCandidate, onInsi
   const controller = useRef<AbortController | null>(null);
   const inFlight = useRef(false);
   useEffect(() => () => controller.current?.abort(), []);
+  // Insight reuse depends on both the analyzed run and the current comparison toggle/context.
   const comparisonId = compare && previous ? previous.id : null;
   const available = generated?.previousRunId === comparisonId ? generated : savedInsight?.previousRunId === comparisonId ? savedInsight : null;
   const insight = available === savedInsight && available ? cachedInsight(available) : available;

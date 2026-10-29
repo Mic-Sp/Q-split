@@ -14,6 +14,10 @@ export interface OffloadVerdict {
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
 export const SIGNIFICANT_OFFLOAD_SPEEDUP = 2;
 
+/**
+ * Derive the limiting-system verdict and append relevant architecture/workload context.
+ * The result describes modeled offload conditions, not a measured physical-device speedup.
+ */
 export function offloadVerdict(data: HybridTelemetryResponse, request: SimulationRequest): OffloadVerdict {
   const verdict = baseOffloadVerdict(data, request);
   const context = data.stages.stage_2_quantum_kernel.node === "QPU" ? architectureTradeOff(request.hardware_profile) : "";
@@ -22,6 +26,12 @@ export function offloadVerdict(data: HybridTelemetryResponse, request: Simulatio
   return { ...verdict, message: [verdict.message, context, mips].filter(Boolean).join(" ") };
 }
 
+/**
+ * Apply verdict precedence so resource failures cannot masquerade as fast execution.
+ * Capacity, unsupported routing, RAM, and prerequisite failures precede coherence
+ * and I/O warnings. An advantage window requires >=70% survival and >=2x gains
+ * for both kernel and wall-clock CPU comparisons; zero/unavailable baselines do not qualify.
+ */
 function baseOffloadVerdict(data: HybridTelemetryResponse, request: SimulationRequest): OffloadVerdict {
   const kernel = data.stages.stage_2_quantum_kernel;
   const minimum = qubitThresholds(request.scale_param, request.workload_id).minimum;
@@ -38,6 +48,7 @@ function baseOffloadVerdict(data: HybridTelemetryResponse, request: SimulationRe
 
   const memoryBudget = kernel.metrics.statevector_memory_budget_gib;
   const width = finite(kernel.metrics.statevector_qubits) ? kernel.metrics.statevector_qubits : finite(kernel.metrics.qubits_required) ? kernel.metrics.qubits_required : minimum;
+  // 16*2^q > B*2^30 rearranges to q > log2(B)+26; equality still fits the binary-GiB budget.
   if (kernel.node !== "QPU" && finite(memoryBudget) && memoryBudget > 0 && width > Math.log2(memoryBudget) + 26) {
     return { title: "Classical Memory Wall", status: "blocked",
       message: `${kernel.node} statevector emulation needs 2^${formatValue(width + 4)} bytes, exceeding its ${formatValue(memoryBudget)} GiB RAM budget. ${request.workload_id === "quantum_mips"
@@ -57,6 +68,7 @@ function baseOffloadVerdict(data: HybridTelemetryResponse, request: SimulationRe
   const baseline = raw && typeof raw === "object" ? raw as Record<string, unknown> : null;
   const cpuTotal = baseline?.feasible === true && finite(baseline.total_ms) && baseline.total_ms > 0 ? baseline.total_ms : null;
   const cpuKernel = baseline?.feasible === true && finite(baseline.kernel_ms) && baseline.kernel_ms > 0 ? baseline.kernel_ms : null;
+  // An overhead share alone does not prove CPU is faster; only a feasible counterfactual justifies that claim.
   if (timing.totalMs > 0 && timing.overheadMs / timing.totalMs > 0.4) {
     const cpuComparison = cpuTotal !== null && cpuTotal < timing.totalMs
       ? `CPU execution remains faster (${formatDuration(cpuTotal)} versus ${formatDuration(timing.totalMs)}) because offload I/O penalties erase the compute gain.`

@@ -9,6 +9,11 @@ const BUCKETS = [
   { key: "overheadMs", label: "Interconnect & Control Overhead", shortLabel: "I/O & control", color: "bg-amber-400", text: "text-amber-300" },
 ] as const;
 
+/**
+ * Render numerical latency shares with a visual floor for tiny nonzero segments.
+ * Legend and accessible labels use actual bucket percentages, not minimum-width
+ * pixels. A zero/missing total produces an explicit empty state rather than division by zero.
+ */
 export function LatencyProportion({ data, compact = false }: { data?: HybridTelemetryResponse; compact?: boolean }) {
   const timing = data ? pipelineLatencyBuckets(data) : null;
   const segments = BUCKETS.map(bucket => {

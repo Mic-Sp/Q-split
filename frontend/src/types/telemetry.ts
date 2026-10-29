@@ -4,12 +4,14 @@ export type HardwareProfile = typeof HARDWARE_PROFILE_IDS[number];
 export type WorkloadId = "shors_crypto" | "quantum_mips";
 export type StageNode = "CPU" | "GPU" | "QPU";
 
+/** Three sequential placement selectors; route labels describe projected costs, not physical dispatch. */
 export interface RoutingConfig {
   stage_1_node: StageNode;
   stage_2_node: StageNode;
   stage_3_node: StageNode;
 }
 
+/** Captured run controls; scale meaning and qubit-tier formulas are workload-specific. */
 export interface SimulationRequest {
   workload_id: WorkloadId;
   scale_param: number;
@@ -18,6 +20,7 @@ export interface SimulationRequest {
   routing?: Partial<RoutingConfig> | null;
 }
 
+/** Per-stage wire telemetry: GPU latency includes I/O; QPU preparation/readout remain separate metric fields. */
 export interface StageTelemetry {
   name: string;
   node: StageNode;
@@ -27,6 +30,7 @@ export interface StageTelemetry {
   metrics: Record<string, unknown>;
 }
 
+/** Canonical backend response with three keyed stages and explicit live-reference versus analytical provenance. */
 export interface HybridTelemetryResponse {
   workload_id: string;
   workload_name: string;

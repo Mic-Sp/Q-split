@@ -17,6 +17,9 @@ export const metadata: Metadata = {
   description: "Explore quantum-classical workload pipelines, hardware limitations, and simulation telemetry.",
 };
 
+/**
+ * Provide the shared dark console theme and font variables around the App Router page tree.
+ */
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html

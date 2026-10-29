@@ -6,6 +6,9 @@ import { SNAPSHOT_NAME_LIMIT } from "@/lib/benchmark-snapshot";
 import type { CompletedRun } from "@/types/run-history";
 import type { Snapshot } from "@/lib/telemetry";
 
+/**
+ * Name the current completed snapshot, clearing the input only after the async save/pin operation succeeds.
+ */
 export function CaptureBenchmark({ snapshot, disabled, busy, onCapture }: {
   snapshot: Snapshot | null;
   disabled: boolean;

@@ -5,6 +5,12 @@ import { WORKLOADS } from "@/lib/workloads";
 // Next.js uses its default Node.js runtime; Cache Components forbids a runtime override.
 const headers = { "Cache-Control": "no-store" };
 
+/**
+ * Read newest runs plus older pinned snapshots, optionally within one workload.
+ * Validate filters before database access; the shors_factoring history alias maps
+ * to canonical shors_crypto. Filtering occurs before the limit so other workloads
+ * cannot crowd out the active family's recent window. Responses are never cached.
+ */
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
   const rawLimit = params.get("limit") ?? "20";
@@ -32,6 +38,12 @@ export async function GET(request: Request) {
   }
 }
 
+/**
+ * Validate and idempotently persist one completed run under its stable UUID.
+ * Bound payloads to 1 MiB, derive summaries server-side, and preserve immutable
+ * configuration/telemetry and existing snapshot metadata on retries. Optional
+ * validated advisor output updates only its diagnostic field; DB outages are sanitized.
+ */
 export async function POST(request: Request) {
   let data: ReturnType<typeof createRunRecord>;
   try {

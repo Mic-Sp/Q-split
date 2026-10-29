@@ -3,8 +3,15 @@ import type { SavedSimulationRun } from "@/types/run-history";
 import type { SimulationRequest } from "@/types/telemetry";
 
 export const SNAPSHOT_NAME_LIMIT = 120;
+/** Validate the UUID route identifier before issuing any snapshot/delete database operation. */
 export const validRunId = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 
+/**
+ * Validate a metadata-only name/pin mutation and reject mass assignment.
+ * Normalize printable names to NFC with a 120-character limit. Explicit unpinning
+ * clears the name; contradictory pin/name combinations are rejected.
+ * @throws Error For malformed metadata or invalid names.
+ */
 export function snapshotPatch(value: unknown): { snapshotName: string | null; isSnapshot: boolean } {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Provide a snapshot name.");
   const input = value as Record<string, unknown>;
@@ -20,6 +27,11 @@ export function snapshotPatch(value: unknown): { snapshotName: string | null; is
   return { snapshotName: name, isSnapshot: true };
 }
 
+/**
+ * Copy exact captured controls without reapplying profile-click capacity defaults.
+ * Only legacy omissions receive default routing/capacity; clone the route object
+ * so editing restored controls cannot mutate a saved benchmark.
+ */
 export function restoredConfiguration(run: SavedSimulationRun): SimulationRequest {
   return { workload_id: run.request.workload_id, scale_param: run.request.scale_param,
     hardware_profile: run.request.hardware_profile,

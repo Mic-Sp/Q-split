@@ -63,6 +63,9 @@ interface DashboardState extends SimulationSession {
 }
 type Action = { type: "start" } | { type: "slow" } | { type: "error"; error: string } | { type: "success"; snapshot: Snapshot };
 
+/**
+ * Update request lifecycle without losing workload-specific snapshots; only successful runs create session transitions.
+ */
 function reducer(state: DashboardState, action: Action): DashboardState {
   if (action.type === "start") return { ...state, loading: true, slow: false, error: null };
   if (action.type === "slow") return { ...state, slow: true };
@@ -70,6 +73,9 @@ function reducer(state: DashboardState, action: Action): DashboardState {
   return { ...recordCompletedRun(state, action.snapshot), loading: false, slow: false, error: null };
 }
 
+/**
+ * Present backend stage severity independently of the coherence-budget KPI classification.
+ */
 function StatusBadge({ status }: { status: StageStatus }) {
   const style = STATUS[status];
   return (
@@ -93,6 +99,11 @@ const metricLabels: Record<string, string> = {
   parallel_speedup_ceiling_reached: "Parallel speedup ceiling reached", depth_model: "Depth model",
 };
 
+/**
+ * Render selected routing alongside an immutable completed-stage result.
+ * Selection and measured/model output may differ during dirty/in-flight states;
+ * route controls never mutate the stored result or submit work automatically.
+ */
 function PipelineCard({ index, stage, selectedNode, onNodeChange, pending, workload }: {
   index: number;
   workload: WorkloadId;
@@ -162,6 +173,12 @@ function PipelineCard({ index, stage, selectedNode, onNodeChange, pending, workl
   );
 }
 
+/**
+ * Coordinate editable controls, submitted requests, per-workload sessions, and persistence.
+ * Only explicit run actions capture/submit configuration; request completion and
+ * background database saving have separate lifecycles. Restore loads saved controls
+ * without reapplying profile defaults or automatically executing the simulation.
+ */
 export default function Home() {
   const [workload, setWorkload] = useState<WorkloadId>("shors_crypto");
   const persistentHistory = usePersistentRuns(workload);
@@ -170,6 +187,7 @@ export default function Home() {
   const [hardware, setHardware] = useState<HardwareProfile>("ibm_heron_nisq");
   const [availableQubits, setAvailableQubits] = useState(String(DEFAULT_AVAILABLE_QUBITS));
   const [routing, setRouting] = useState<RoutingConfig>(DEFAULT_ROUTING);
+  // Separate submitted configuration from live edits; only an explicit run changes this effect input.
   const [submittedRequest, setSubmittedRequest] = useState<SimulationRequest | null>(null);
   const [restoreMessage, setRestoreMessage] = useState<string | null>(null);
   const [state, dispatch] = useReducer(reducer, {
@@ -182,6 +200,7 @@ export default function Home() {
     const controller = new AbortController();
     const slowNotice = setTimeout(() => { if (active) dispatch({ type: "slow" }); }, 10000);
     const timeout = setTimeout(() => controller.abort(new Error("The engine took too long to respond. Please retry; it may be waking up.")), 90000);
+    // Keep one captured request with its result/UUID even if controls change before the response arrives.
     const request = submittedRequest;
     void simulate(request, controller.signal).then((data) => {
       if (active && !controller.signal.aborted) {
@@ -223,6 +242,7 @@ export default function Home() {
     snapshot.request.hardware_profile !== hardware || snapshot.request.available_qubits !== capacity || PIPELINE.some(({ routingKey }) =>
       (snapshot.request.routing?.[routingKey] ?? DEFAULT_ROUTING[routingKey]) !== routing[routingKey])
   );
+  /** Capture current controls for one execution; persistence receives that same captured request. */
   const runSimulation = () => {
     if (!validCapacity) return;
     setRestoreMessage(null);
@@ -234,16 +254,19 @@ export default function Home() {
   const updateNode = (key: keyof RoutingConfig, node: StageNode) => {
     setRouting((current) => current[key] === node ? current : { ...current, [key]: node });
   };
+  /** Explicit profile clicks apply native/ideal defaults; restoration intentionally bypasses this handler. */
   const selectHardware = (profile: HardwareProfile) => {
     setHardware(profile);
     setAvailableQubits(String(hardwareDefaultQubits(profile, scale, workload)));
   };
+  /** Switch control defaults without clearing the other workload's completed snapshots or pending saves. */
   const selectWorkload = (next: WorkloadId) => {
     const target = WORKLOADS[next].scales[0];
     setWorkload(next); setScale(target);
     setRouting({ ...DEFAULT_ROUTING });
     if (hardware === "ideal_sim") setAvailableQubits(String(hardwareDefaultQubits(hardware, target, next)));
   };
+  /** Restore captured controls verbatim, leaving execution to the next explicit Run action. */
   const restoreRun = (run: SavedSimulationRun) => {
     const restored = restoredConfiguration(run);
     setWorkload(restored.workload_id); setScale(restored.scale_param); setHardware(restored.hardware_profile);
@@ -471,6 +494,9 @@ export default function Home() {
   );
 }
 
+/**
+ * Render precomputed metric differences with raw duration hover values, without recomputing comparison semantics.
+ */
 function DeltaTable({ changes }: { changes: Transition["changes"] }) {
   if (!changes.length) return <p className="text-xs text-slate-400">No metric changes from the previous successful run.</p>;
   return (

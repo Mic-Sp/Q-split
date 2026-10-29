@@ -1,5 +1,8 @@
 import type { AdvisorInsight } from "@/types/advisor";
 
+/**
+ * Map canonical insight provenance to consistent source styling and an explanatory accessible label.
+ */
 export function AdvisorSourceBadge({ source }: { source: AdvisorInsight["source"] }) {
   const label = source === "gemini" ? "Live AI" : source === "cached" ? "Cached DB Hit" : "Deterministic Fallback";
   const title = source === "gemini" ? "Live Gemini AI" : source === "cached" ? "Neon PostgreSQL Read-Through Cache" : "Deterministic Local Fallback";

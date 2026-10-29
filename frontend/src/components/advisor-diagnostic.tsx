@@ -1,5 +1,8 @@
 import { ADVISOR_HEADINGS, type AdvisorInsight, type AdvisorSections } from "@/types/advisor";
 
+/**
+ * Render validated diagnostic fields as plain text under stable headings, without interpreting provider markup.
+ */
 export function AdvisorDiagnostic({ insight }: { insight: AdvisorInsight }) {
   return <div className="@container"><div className="grid gap-2 @3xl:grid-cols-3">
     {(Object.entries(ADVISOR_HEADINGS) as [keyof AdvisorSections, string][]).map(([key, heading]) => (

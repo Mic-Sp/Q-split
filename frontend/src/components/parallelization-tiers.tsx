@@ -6,6 +6,11 @@ import { activeParallelizationTier, workloadScaleLabel } from "@/lib/workloads";
 import { useState } from "react";
 import { formatValue, qubitThresholds } from "@/lib/telemetry";
 
+/**
+ * Resolve workload-specific formulas and highlight the capacity's unlocked tier.
+ * The controlled qubit value owns selection, while local state owns tooltip visibility;
+ * choosing a tier emits its exact threshold and does not change the hardware profile.
+ */
 export function ParallelizationTiers({ scale, availableQubits, onSelect, compact = false, workload = "shors_crypto" }: { scale: number; availableQubits: number; workload?: WorkloadId; onSelect: (value: number) => void; compact?: boolean }) {
   const [openTier, setOpenTier] = useState<string | null>(null);
   const n = workload === "shors_crypto" && (scale === 512 || scale === 2048) ? scale : Math.ceil(Math.log2(scale));

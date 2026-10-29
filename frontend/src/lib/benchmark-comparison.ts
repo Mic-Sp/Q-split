@@ -8,6 +8,11 @@ const number = new Intl.NumberFormat("en-US", { maximumFractionDigits: 6 });
 const finite = (value: unknown): number | null => typeof value === "number" && Number.isFinite(value) ? value : null;
 const signed = (value: number) => `${value > 0 ? "+" : ""}${number.format(Object.is(value, -0) ? 0 : value)}`;
 
+/**
+ * Normalize a saved row into the same wall-clock/coherence metrics used by KPIs.
+ * Missing values stay null, blocked work contributes no executed cost, and circuit
+ * depth uses its persisted decimal string to preserve PostgreSQL BIGINT precision.
+ */
 export function benchmarkMetrics(run: SavedSimulationRun) {
   const kernel = run.telemetry.stages.stage_2_quantum_kernel;
   const metrics = kernel.metrics;
@@ -24,17 +29,30 @@ export function benchmarkMetrics(run: SavedSimulationRun) {
   };
 }
 
+/**
+ * Match selected UUIDs to currently available rows in selection order.
+ * Deduplicate, drop deleted/foreign IDs absent from the supplied pool, and cap at
+ * three. The first retained selection is the comparison reference, not the newest row.
+ */
 export function selectedBenchmarkRuns(runs: SavedSimulationRun[], ids: string[]) {
   const byId = new Map(runs.map(run => [run.id, run]));
   return [...new Set(ids)].flatMap(id => byId.has(id) ? [byId.get(id)!] : []).slice(0, MAX_COMPARISON_RUNS);
 }
 
+/**
+ * Toggle one valid UUID after pruning stale selections; reject a fourth distinct row without disturbing order.
+ */
 export function toggleBenchmarkSelection(runs: SavedSimulationRun[], ids: string[], id: string) {
   const selected = selectedBenchmarkRuns(runs, ids).map(run => run.id);
   if (selected.includes(id)) return selected.filter(value => value !== id);
   return selected.length < MAX_COMPARISON_RUNS && runs.some(run => run.id === id) ? [...selected, id] : selected;
 }
 
+/**
+ * Export selected rows across the current workload's filters, or exactly the visible rows.
+ * The caller must supply a workload-scoped pool; an empty selection does not imply
+ * exporting all cached history or other workloads.
+ */
 export function benchmarkExportRuns(runs: SavedSimulationRun[], visible: SavedSimulationRun[], ids: string[]) {
   const selected = selectedBenchmarkRuns(runs, ids);
   return selected.length ? selected : visible;
@@ -49,6 +67,13 @@ export interface ComparisonMetric {
   rawDelta?: string;
 }
 
+/**
+ * Build aligned comparison columns relative to the first selected benchmark.
+ * Each column emits the same metric order for matrix row matching. Durations keep
+ * raw hover values, coherence differences are percentage points, categorical cells
+ * track equality, and BigInt subtraction preserves large circuit-depth deltas.
+ * Missing metrics suppress numeric deltas rather than fabricating zero baselines.
+ */
 export function benchmarkComparison(runs: SavedSimulationRun[]) {
   const chosen = runs.slice(0, MAX_COMPARISON_RUNS);
   if (!chosen.length) return [];
@@ -69,9 +94,11 @@ export function benchmarkComparison(runs: SavedSimulationRun[]) {
       rawDelta: index === 0 ? undefined : `${value > baseline ? "+" : value < baseline ? "−" : ""}${formatRawMilliseconds(Math.abs(value - baseline))}`,
       changed: index > 0 && value !== baseline,
     });
+    // Subtract decimal-string depths as BigInt before formatting; Number could lose low-order bits.
     const depth = metrics.circuitDepth === null ? null : BigInt(metrics.circuitDepth);
     const baselineDepth = reference.circuitDepth === null ? null : BigInt(reference.circuitDepth);
     const coherence = numeric("Coherence survival", metrics.coherenceSurvival, reference.coherenceSurvival, "%", "pp");
+    // Survival deltas are percentage points; the independent budget classification can also change.
     coherence.value += metrics.coherenceStatus ? ` · ${metrics.coherenceStatus}` : "";
     coherence.changed ||= index > 0 && metrics.coherenceStatus !== reference.coherenceStatus;
     return {

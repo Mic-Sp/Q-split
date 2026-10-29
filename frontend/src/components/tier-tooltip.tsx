@@ -4,6 +4,13 @@ import { useEffect, useId, useLayoutEffect, useRef, type ReactNode } from "react
 import { createPortal } from "react-dom";
 import { CircleHelp } from "lucide-react";
 
+/**
+ * Share a controlled, portaled tooltip across tier, scale, and info triggers.
+ * Hover/focus opens without selecting; click/Enter/Space may also call onSelect.
+ * Position against the visual viewport, constrain overflow, support keyboard
+ * scrolling/Escape, and delay closing so the pointer can enter the tooltip panel.
+ * selected controls aria-pressed/styling independently from tooltip visibility.
+ */
 export function TierTooltip({ label, displayLabel, children, onSelect, open, onOpenChange, variant = "tier", footer = true, selected }: {
   label: string;
   displayLabel?: string;
@@ -45,6 +52,7 @@ export function TierTooltip({ label, displayLabel, children, onSelect, open, onO
       const tooltip = panel.current;
       const margin = 12;
       const gap = 8;
+      // A visual viewport can be smaller/offset during zoom or an on-screen keyboard; portals use viewport coordinates.
       const viewport = window.visualViewport;
       const leftEdge = viewport?.offsetLeft ?? 0;
       const topEdge = viewport?.offsetTop ?? 0;
@@ -78,6 +86,7 @@ export function TierTooltip({ label, displayLabel, children, onSelect, open, onO
     window.addEventListener("scroll", onScroll, true);
     window.visualViewport?.addEventListener("resize", position);
     window.visualViewport?.addEventListener("scroll", position);
+    // Reflow after content/trigger resizing, and remove all observers/listeners when the panel closes.
     const observer = new ResizeObserver(position);
     if (trigger.current) observer.observe(trigger.current);
     if (panel.current) observer.observe(panel.current);

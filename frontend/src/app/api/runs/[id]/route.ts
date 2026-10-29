@@ -5,6 +5,11 @@ import { snapshotPatch, validRunId } from "@/lib/benchmark-snapshot";
 const headers = { "Cache-Control": "no-store" };
 type Context = { params: Promise<{ id: string }> };
 
+/**
+ * Validate a UUID and <=2 KiB snapshot metadata mutation before database writes.
+ * Only naming/pin state and its update timestamp change; request and telemetry
+ * remain immutable. Return 404 for a missing row and sanitized availability states.
+ */
 export async function PATCH(request: Request, { params }: Context) {
   const { id } = await params;
   if (!validRunId(id)) return Response.json({ message: "Provide a valid run UUID." }, { status: 400, headers });
@@ -28,6 +33,10 @@ export async function PATCH(request: Request, { params }: Context) {
   }
 }
 
+/**
+ * Delete one UUID idempotently, treating an already-absent row as a successful retry.
+ * No bulk deletion or telemetry mutation is exposed; connection errors remain sanitized.
+ */
 export async function DELETE(_request: Request, { params }: Context) {
   const { id } = await params;
   if (!validRunId(id)) return Response.json({ message: "Provide a valid run UUID." }, { status: 400, headers });

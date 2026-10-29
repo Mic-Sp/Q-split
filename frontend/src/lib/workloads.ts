@@ -29,25 +29,45 @@ export const SCALE_DESCRIPTIONS: Record<WorkloadId, Record<number, string>> = {
   },
 };
 
+/**
+ * Validate the workload/scale pair against the shared cockpit preset registry.
+ */
 export function validWorkloadScale(workload: unknown, scale: unknown): workload is WorkloadId {
   return typeof workload === "string" && Object.hasOwn(WORKLOADS, workload) &&
     typeof scale === "number" && WORKLOADS[workload as WorkloadId].scales.includes(scale);
 }
 
+/**
+ * Label M-candidate searches separately from small N moduli and RSA bit-width selectors.
+ */
 export function workloadScaleLabel(scale: number, workload: WorkloadId = "shors_crypto") {
   return workload === "quantum_mips" ? MIPS_LABELS[scale] ?? `M = ${scale.toLocaleString("en-US")}`
     : scale < 512 ? `N = ${scale}` : `RSA-${scale}`;
 }
 
+/**
+ * Resolve usable-qubit thresholds with the same formulas as the backend.
+ * MIPS uses k=ceil(log2(M)); Shor RSA selectors already contain bit-width n.
+ * The eight-qubit N=15 reference overrides Shor's general 2n+3 minimum.
+ * @returns Minimum, Windowed, and ceiling register widths, excluding physical QEC overhead.
+ */
 export function workloadThresholds(scale: number, workload: WorkloadId = "shors_crypto") {
   if (workload === "quantum_mips") {
+    // Index bits address M candidates; ancillary workspaces add fixed and replicated register widths.
     const k = Math.ceil(Math.log2(scale));
     return { minimum: k + 4, windowed: 2 * k + 8, ceiling: 4 * k + 16 };
   }
+  // RSA selectors denote bit-widths, whereas small Shor selectors denote the actual composite integer.
   const n = scale === 512 || scale === 2048 ? scale : Math.ceil(Math.log2(scale));
   return { minimum: scale === 15 ? 8 : 2 * n + 3, windowed: 3 * n, ceiling: Math.ceil(5.5 * n) };
 }
 
+/**
+ * Choose the highest unlocked tier for a valid custom capacity.
+ * Intervals are minimum-inclusive and next-threshold-exclusive; ceiling capacity
+ * saturates the final tier. Invalid int32 capacities and below-minimum inputs
+ * return null so the UI does not show an executable tier.
+ */
 export function activeParallelizationTier(scale: number, availableQubits: number, workload: WorkloadId = "shors_crypto"): "minimum" | "windowed" | "ceiling" | null {
   if (!Number.isSafeInteger(availableQubits) || availableQubits < 1 || availableQubits > 2_147_483_647) return null;
   const thresholds = workloadThresholds(scale, workload);
@@ -56,8 +76,14 @@ export function activeParallelizationTier(scale: number, availableQubits: number
   return availableQubits >= thresholds.minimum ? "minimum" : null;
 }
 
+/**
+ * Select the calibrated host-stage crossover: CPU for tiny batches, GPU for larger presets.
+ */
 export function preferredMipsHost(scale: number): "CPU" | "GPU" { return scale === 64 ? "CPU" : "GPU"; }
 
+/**
+ * Explain preferred MIPS host placement without promising quantum viability or real retrieval advantage.
+ */
 export function mipsRoutingContext(scale: number) {
   const host = preferredMipsHost(scale);
   return `${host} → QPU → ${host} is the modeled preferred host placement ${scale === 64
@@ -66,6 +92,12 @@ export function mipsRoutingContext(scale: number) {
 }
 
 // The same contract protects proxy requests and persisted benchmark payloads.
+/**
+ * Validate and normalize proxy inputs without forwarding arbitrary extra fields.
+ * Only omitted workload/scale fields receive defaults; explicit invalid values
+ * are rejected. Routing permits known partial keys and preserves manual capacity.
+ * @throws Error If workload/scale, architecture, capacity, or routing is invalid.
+ */
 export function parseSimulationRequest(value: unknown): SimulationRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid simulation configuration.");
   const input = value as SimulationRequest;

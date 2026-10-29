@@ -5,6 +5,9 @@ import { benchmarkComparison } from "@/lib/benchmark-comparison";
 import type { SavedSimulationRun } from "@/types/run-history";
 import { hardwareLabel } from "@/lib/hardware-profiles";
 
+/**
+ * Render aligned metric rows from selection-ordered columns; column zero supplies every reference delta.
+ */
 export function BenchmarkComparison({ runs, onRemove }: { runs: SavedSimulationRun[]; onRemove: (id: string) => void }) {
   const columns = benchmarkComparison(runs);
   if (!columns.length) return null;

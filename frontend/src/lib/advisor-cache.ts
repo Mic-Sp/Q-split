@@ -14,6 +14,11 @@ const CACHE_TIMEOUT_MS = 1500;
 // Completed results live in Neon, not in an unbounded in-memory cache.
 const inFlight = new Map<string, Promise<AdvisorResponse>>();
 
+/**
+ * Hash validated run identity/context and generation policy into a stable fingerprint.
+ * The UUIDs, normalized current/previous digests, model, schema, and policy all matter.
+ * Identical controls submitted as a new run are not a global configuration-cache hit.
+ */
 export function advisorCacheKey(input: AdvisorRequest, model: string, policy: string): string {
   return createHash("sha256").update(JSON.stringify({
     version: CACHE_VERSION, policy, model,
@@ -22,10 +27,21 @@ export function advisorCacheKey(input: AdvisorRequest, model: string, policy: st
   })).digest("hex");
 }
 
+/**
+ * Resolve one analysis via Neon read-through cache, coalesced generation, or fallback.
+ * Revalidate saved output before reuse; database failures never prevent generation.
+ * The in-process map shares concurrent work, while completed diagnostics live in
+ * SimulationRun.advisorInsight. Update an existing full run only, preserving the
+ * dashboard's complete telemetry and its background-save responsibility.
+ * @param generate Provider-or-fallback producer with its own bounded deadline.
+ * @param started Lookup start time for current telemetry, including cache wait.
+ * @returns Insight plus persistence status; cache/shared followers incur no new API cost.
+ */
 export async function adviseWithCache(input: AdvisorRequest, model: string, policy: string,
   generate: () => Promise<AdvisorInsight>, started = performance.now()): Promise<AdvisorResponse> {
   const elapsed = () => Math.round(performance.now() - started);
   const cacheKey = advisorCacheKey(input, model, policy);
+  // Coalesce identical concurrent analyses, not unrelated runs with coincidentally identical control values.
   const active = inFlight.get(cacheKey);
   if (active) {
     const result = await active;
@@ -46,6 +62,7 @@ export async function adviseWithCache(input: AdvisorRequest, model: string, poli
         if (row?.advisorInsight) {
           try {
             const saved = parseAdvisorInsight(row.advisorInsight, input.current.id);
+            // A fallback or stale policy/context is a cache miss, even when its run UUID still matches.
             if (saved.source !== "fallback" && saved.cacheKey === cacheKey && saved.model === model &&
                 saved.previousRunId === (input.previous?.id ?? null)) {
               const sections = validateGeneratedSections(saved.sections);

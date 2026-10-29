@@ -5,6 +5,9 @@ import { formatDuration, formatRawMilliseconds } from "@/lib/duration";
 const tokens = (value: number) => value.toLocaleString("en-US");
 const usd = (value: number) => `$${value.toFixed(6)}`;
 
+/**
+ * Display current lookup charges separately from reused generation usage and show unknown legacy values explicitly.
+ */
 export function AdvisorTelemetryBar({ insight }: { insight: AdvisorInsight }) {
   const current = insight.telemetry;
   const original = insight.usage;

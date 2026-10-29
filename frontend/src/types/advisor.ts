@@ -1,5 +1,6 @@
 import type { CompletedRun } from "@/types/run-history";
 
+/** Three plain-text diagnostic fields shared by provider schema, local fallback, and saved history. */
 export interface AdvisorSections {
   routingDiagnosis: string;
   spaceTimeTradeOff: string;
@@ -8,6 +9,7 @@ export interface AdvisorSections {
 
 export type FallbackReason = "missing_key" | "rate_limited" | "timeout" | "provider_error" | "invalid_response" | "network_error";
 
+/** Original generation usage and configured USD estimate; may be absent on legacy saved insights. */
 export interface AdvisorUsage {
   inputTokens: number;
   outputTokens: number;
@@ -16,12 +18,14 @@ export interface AdvisorUsage {
   estimatedCostUsd: number;
 }
 
+/** Current lookup accounting; reuse/fallback charges zero while original generation usage remains separate. */
 export interface AdvisorTelemetry extends AdvisorUsage {
   latencyMs: number | null;
   costSavedUsd: number;
   shared: boolean;
 }
 
+/** Run-bound diagnostic provenance, optional context fingerprint, and original/current usage metadata. */
 export interface AdvisorInsight {
   runId: string;
   previousRunId: string | null;
@@ -38,11 +42,13 @@ export interface AdvisorInsight {
   telemetry?: AdvisorTelemetry;
 }
 
+/** Analysis plus independent database persistence status; unavailable storage does not invalidate the diagnostic. */
 export interface AdvisorResponse {
   insight: AdvisorInsight;
   persistence?: { status: "saved" | "pending" | "unavailable" | "unconfigured"; message?: string };
 }
 
+/** Completed current run and optional previous run from the same workload family. */
 export interface AdvisorRequest {
   current: CompletedRun;
   previous?: CompletedRun;

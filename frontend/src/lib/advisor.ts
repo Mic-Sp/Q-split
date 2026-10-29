@@ -7,6 +7,11 @@ import type { CompletedRun } from "@/types/run-history";
 import type { AdvisorInsight, AdvisorSections, FallbackReason } from "@/types/advisor";
 import { parseAdvisorTelemetry, parseAdvisorUsage, zeroUsage } from "@/lib/advisor-telemetry";
 
+/**
+ * Read persisted/local diagnostic sections with legacy-compatible length bounds.
+ * Live provider output additionally passes validateGeneratedSections; accepting old
+ * history here must not silently weaken the current generation/cache policy.
+ */
 export function parseAdvisorSections(value: unknown): AdvisorSections {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid advisor diagnostic.");
   const result = value as AdvisorSections;
@@ -15,6 +20,11 @@ export function parseAdvisorSections(value: unknown): AdvisorSections {
   return { routingDiagnosis: result.routingDiagnosis.trim(), spaceTimeTradeOff: result.spaceTimeTradeOff.trim(), optimizationRecommendation: result.optimizationRecommendation.trim() };
 }
 
+/**
+ * Bind saved insight metadata to its run and validate provenance/accounting fields.
+ * Allow absent usage/lookup fields for older history; require source/model/fallback
+ * metadata to agree and keep original usage distinct from current lookup telemetry.
+ */
 export function parseAdvisorInsight(value: unknown, runId: string): AdvisorInsight {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid advisor insight.");
   const insight = value as AdvisorInsight;
@@ -45,6 +55,12 @@ const notices: Record<FallbackReason, string> = {
   network_error: "The AI advisor could not be reached. Showing a deterministic local diagnostic.",
 };
 
+/**
+ * Explain completed telemetry using executable local workload/architecture rules.
+ * Discard a foreign-workload previous run, prioritize blockers over tuning, and
+ * produce zero-provider-usage fallback sections. The same recommendation grounds
+ * live AI prompts, so provider and offline paths share supported control choices.
+ */
 export function deterministicInsight(current: CompletedRun, previous: CompletedRun | undefined, reason: FallbackReason): AdvisorInsight {
   previous = previous?.request.workload_id === current.request.workload_id ? previous : undefined;
   const { request, telemetry } = current;
@@ -83,6 +99,11 @@ export function deterministicInsight(current: CompletedRun, previous: CompletedR
     } };
 }
 
+/**
+ * Choose the next MIPS experiment in blocker-first order.
+ * Resolve unsupported hosts, capacity, and selected-tier RAM before recommending
+ * CPU/GPU crossover, extra ancillas, or architecture/coherence comparisons.
+ */
 function mipsRecommendation(current: CompletedRun, thresholds: ReturnType<typeof qubitThresholds>, unsupported: boolean, capacityBlocked: boolean, memoryBlocked: boolean) {
   const { request, telemetry } = current;
   const kernel = telemetry.stages.stage_2_quantum_kernel;
@@ -99,6 +120,9 @@ function mipsRecommendation(current: CompletedRun, thresholds: ReturnType<typeof
   return `Keep ${route}. At the Multi-Oracle ceiling, extra qubits are idle; reduce M or compare IonQ Forte's longer coherence window against its 180× gate-time penalty. Ideal Noise-Free isolates modeled noise and does not represent physical error correction. O(√M) iterations still grow with scale.`;
 }
 
+/**
+ * Explain index-width tiers and distinguish classical RAM limits from projected QPU coherence and live Aer evidence.
+ */
 function mipsSpaceTime(current: CompletedRun, thresholds: ReturnType<typeof qubitThresholds>) {
   const { request, telemetry } = current;
   const kernel = telemetry.stages.stage_2_quantum_kernel, m = kernel.metrics;

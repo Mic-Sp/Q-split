@@ -11,6 +11,10 @@ export const DEFAULT_AVAILABLE_QUBITS = 133;
 
 export const qubitThresholds = workloadThresholds;
 
+/**
+ * Resolve profile-click defaults: native reference count or the active ideal tier ceiling.
+ * Call only for explicit profile selection; snapshot restoration must preserve its saved capacity.
+ */
 export function hardwareDefaultQubits(profile: HardwareProfile, scale: number, workload: WorkloadId = "shors_crypto"): number {
   return HARDWARE_PROFILES[profile].referenceQubits ?? qubitThresholds(scale, workload).ceiling;
 }
@@ -21,12 +25,20 @@ export const PIPELINE = [
   { key: "stage_3_classical_post", routingKey: "stage_3_node", label: "Classical postprocessing" },
 ] as const;
 
+/**
+ * Render generic metric values for display, keeping numeric/BigInt formatting out of raw exports.
+ */
 export function formatValue(value: unknown): string {
   if (value === undefined) return "—";
   if (typeof value === "number" || typeof value === "bigint") return new Intl.NumberFormat("en-US", { maximumFractionDigits: 3 }).format(value);
   return typeof value === "string" ? value : JSON.stringify(value) ?? "—";
 }
 
+/**
+ * Sum the stage latency fields for the legacy persisted summary.
+ * This excludes separately reported QPU preparation/readout. Use pipelineTiming
+ * for cockpit, benchmark, and CSV wall-clock totals including exclusive QPU I/O.
+ */
 export function totalLatency(data: HybridTelemetryResponse): number {
   return Object.values(data.stages).reduce((sum, stage) => sum + stage.latency_ms, 0);
 }
@@ -35,6 +47,12 @@ export interface MetricDelta { label: string; before: string; after: string; bef
 export interface Snapshot { id: string; completedAt: string; request: SimulationRequest; data: HybridTelemetryResponse }
 export interface Transition { id: number; before: Snapshot; after: Snapshot; changes: MetricDelta[] }
 
+/**
+ * Compare immutable completed-run snapshots before applying display formatting.
+ * The union of metric keys includes added/removed fields; raw comparisons retain
+ * changes hidden by rounded readouts. Duration deltas include unshortened hover
+ * values, and total latency uses full wall-clock accounting rather than stage sums.
+ */
 export function describeChanges(before: Snapshot, after: Snapshot): MetricDelta[] {
   const changes: MetricDelta[] = [];
   const add = (label: string, from: unknown, to: unknown, duration = false) => {
@@ -62,6 +80,12 @@ export function describeChanges(before: Snapshot, after: Snapshot): MetricDelta[
   return changes;
 }
 
+/**
+ * Check the engine's structural response contract while retaining workload-specific metrics.
+ * Requires all stage keys, known nodes/statuses, finite times, and metric objects;
+ * it does not prune diagnostics or replace the advisor's stricter trust boundary.
+ * @throws Error For missing stages or malformed telemetry.
+ */
 export function parseTelemetry(value: unknown): HybridTelemetryResponse {
   if (!value || typeof value !== "object") throw new Error("The engine returned an invalid telemetry response.");
   const data = value as HybridTelemetryResponse;
@@ -85,6 +109,13 @@ export function parseTelemetry(value: unknown): HybridTelemetryResponse {
   return data;
 }
 
+/**
+ * Submit one captured configuration through the same-origin simulation proxy.
+ * Validate the response and verify echoed workload, stage placement, and QPU kernel
+ * capacity so older backends cannot silently present fixed routing as custom work.
+ * @param signal Caller-owned cancellation/deadline signal.
+ * @throws Error For HTTP, schema, or requested-control conformance failures.
+ */
 export async function simulate(request: SimulationRequest, signal: AbortSignal): Promise<HybridTelemetryResponse> {
   const response = await fetch("/api/simulate", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request), signal,

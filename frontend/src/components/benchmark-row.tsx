@@ -16,6 +16,11 @@ const timeFormatter = new Intl.DateTimeFormat("en-US", { year: "numeric", month:
 const budgetStyle = { NOMINAL: "text-emerald-300 border-emerald-400/25", DEGRADED: "text-amber-300 border-amber-400/25", EXCEEDED: "text-rose-300 border-rose-400/25" };
 const button = "inline-flex min-h-7 items-center gap-1 rounded border border-slate-700 px-2 py-1 text-[10px] text-slate-300 hover:border-cyan-400/50 disabled:opacity-40";
 
+/**
+ * Render an immutable saved run with metadata-only naming and explicit row actions.
+ * Editing state is local to the UUID-keyed row; failed async mutations retain the
+ * current row/name, and restoration delegates to the captured-configuration handler.
+ */
 export function BenchmarkRow({ run, busy, selected, selectionDisabled, onSelect, onName, onDelete, onRestore }: {
   run: SavedSimulationRun;
   busy: boolean;

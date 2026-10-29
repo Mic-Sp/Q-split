@@ -24,17 +24,26 @@ function object(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+/**
+ * Bound and normalize a string while removing control and invisible direction-changing characters.
+ */
 function clean(value: unknown, maxLength = 100): string {
   if (typeof value !== "string" || value.length > maxLength) invalid();
   return value.normalize("NFKC").replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g, "").trim();
 }
 
+/**
+ * Accept only a bounded normalized enum token; arbitrary explanatory text never becomes a model fact.
+ */
 function choice<T extends string>(value: unknown, allowed: readonly T[]): T {
   const token = clean(value);
   if (!allowed.includes(token as T)) invalid();
   return token as T;
 }
 
+/**
+ * Validate finite bounded numeric metrics without coercion, optionally requiring a safe integer.
+ */
 function number(value: unknown, minimum: number, maximum: number, integer = false): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value < minimum || value > maximum ||
       (integer && !Number.isSafeInteger(value))) invalid();
@@ -43,6 +52,12 @@ function number(value: unknown, minimum: number, maximum: number, integer = fals
 
 // Only fixed-size primitive fields survive. Never copy arbitrary metric objects,
 // measurement strings, descriptions, prompt text, or saved advisor output.
+/**
+ * Rebuild an allowlisted, bounded primitive metric digest from untrusted telemetry.
+ * Drop nested dictionaries, measurement text, and unknown fields rather than
+ * forwarding possible instructions. A blocked MIPS depth multiplier may be null
+ * and is omitted, not coerced to a misleading numeric factor.
+ */
 function metrics(value: unknown): StageTelemetry["metrics"] {
   const source = object(value);
   const result: StageTelemetry["metrics"] = {};
@@ -77,6 +92,13 @@ function metrics(value: unknown): StageTelemetry["metrics"] {
   return result;
 }
 
+/**
+ * Validate identity/configuration and rebuild trusted workload/architecture context.
+ * Stage display text and dynamic bottleneck explanations are discarded; labels and
+ * recognized reason prefixes are reconstructed. QPU allocation is capacity-bounded,
+ * while classical emulation may legitimately use its own larger minimum register.
+ * @throws Error For malformed metrics, configuration, or telemetry disagreement.
+ */
 function validateRun(value: unknown): CompletedRun {
   const run = object(value);
   const id = clean(run.id, 50).toLowerCase();
@@ -102,6 +124,7 @@ function validateRun(value: unknown): CompletedRun {
     available_qubits: config.available_qubits === undefined ? DEFAULT_AVAILABLE_QUBITS : number(config.available_qubits, 1, MAX_QUBITS, true),
     routing,
   };
+  // Derive trusted labels/architecture from validated selectors; never trust caller-supplied explanatory prose.
   const source = object(run.telemetry);
   if (choice(source.workload_id, ["shors_crypto", "quantum_mips"]) !== request.workload_id) invalid();
   const stages = object(source.stages);
@@ -124,6 +147,7 @@ function validateRun(value: unknown): CompletedRun {
     }
     if (node === "QPU" && numeric.available_qubits !== undefined && numeric.available_qubits !== request.available_qubits) invalid();
     const available = numeric.available_qubits ?? request.available_qubits;
+    // Physical capacity bounds QPU allocation, not CPU/GPU RAM-backed emulation of a minimum register.
     for (const field of ["qubits_allocated", "idle_qubits"]) {
       if (typeof numeric[field] === "number" && node === "QPU" && numeric[field] > (available as number)) invalid();
     }
@@ -148,6 +172,11 @@ function validateRun(value: unknown): CompletedRun {
   return { id, completedAt, request, telemetry };
 }
 
+/**
+ * Validate current/optional previous completed runs before cache or provider work.
+ * Reject cross-workload comparisons at the server boundary, independently of the
+ * UI's session scoping. Return pruned runs, not the original input objects.
+ */
 export function validateAdvisorRequest(value: unknown): AdvisorRequest {
   const input = object(value);
   const current = validateRun(input.current);
@@ -156,6 +185,11 @@ export function validateAdvisorRequest(value: unknown): AdvisorRequest {
   return { current, ...(previous ? { previous } : {}) };
 }
 
+/**
+ * Produce a small trusted AI/cache digest, even when called outside the route parser.
+ * Revalidate the run, attach registry-owned architecture constants, and compute
+ * wall-clock total with QPU I/O. Never include arbitrary stage prose or saved AI text.
+ */
 export function advisorDigest(run: CompletedRun) {
   // Safe even when called independently of the route's pre-flight parser.
   run = validateRun(run);
@@ -172,8 +206,19 @@ export function advisorDigest(run: CompletedRun) {
   } };
 }
 
+/**
+ * Distinguish byte-limit violations (HTTP 413) from ordinary invalid requests (HTTP 400).
+ */
 export class AdvisorPayloadTooLarge extends Error {}
 
+/**
+ * Read bounded UTF-8 JSON incrementally before validating the advisor contract.
+ * Check both advertised length and actual bytes so missing/chunked/multibyte bodies
+ * cannot evade the 64 KiB ceiling. Streaming decoding preserves split code points;
+ * cancel/release the reader on failures without invoking a provider or database.
+ * @throws AdvisorPayloadTooLarge For an advertised or actual oversized payload.
+ * @throws Error For malformed UTF-8, JSON, or completed-run schema.
+ */
 export async function readAdvisorRequest(request: Request): Promise<AdvisorRequest> {
   const length = request.headers.get("content-length");
   if (length !== null) {
