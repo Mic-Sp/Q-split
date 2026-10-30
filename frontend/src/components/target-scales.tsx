@@ -14,9 +14,9 @@ export function TargetScales({ workload, scale, onSelect }: { workload: Workload
     {WORKLOADS[workload].scales.map(value => <TierTooltip key={value} variant="scale" footer={false}
       label={workloadScaleLabel(value, workload)} selected={scale === value} onSelect={() => onSelect(value)}
       open={openScale === value} onOpenChange={open => setOpenScale(current => open ? value : current === value ? null : current)}>
-      <p className="font-semibold text-cyan-200">{workloadScaleLabel(value, workload)}</p>
+      <p className="font-semibold text-cyan-800 dark:text-cyan-200">{workloadScaleLabel(value, workload)}</p>
       <p className="mt-2">{SCALE_DESCRIPTIONS[workload][value]}</p>
-      <p className="mt-3 border-t border-slate-800 pt-2 text-[10px] leading-5 text-slate-500">Illustrative workload model; depth and timing depend on tier, routing, and hardware. Escape dismisses this tooltip.</p>
+      <p className="mt-3 border-t border-slate-200 dark:border-slate-800 pt-2 text-[10px] leading-5 text-slate-600 dark:text-slate-400">Illustrative workload model; depth and timing depend on tier, routing, and hardware. Escape dismisses this tooltip.</p>
     </TierTooltip>)}
   </div>;
 }

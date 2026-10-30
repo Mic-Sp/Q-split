@@ -87,30 +87,30 @@ export function TelemetryAdvisor({ snapshot, previous: previousCandidate, onInsi
   };
   const saved = insight && ((insight === generated && serverSaved) || savedInsight?.generatedAt === insight.generatedAt);
 
-  return <section aria-label="AI Telemetry Advisor" className="min-w-0 rounded-xl border border-cyan-400/20 bg-slate-900/40">
-    <div className="console-header flex flex-wrap items-center justify-between gap-2 rounded-t-xl border-b border-slate-700/80 p-3">
-      <div className="flex items-center gap-2"><BrainCircuit size={16} className="shrink-0 text-cyan-400" /><div>
-        <h2 className="text-sm font-semibold text-cyan-100">AI Telemetry Advisor</h2>
-        <p className="mt-0.5 text-[10px] leading-4 text-slate-400">Completed-run architecture diagnostics · on demand</p>
+  return <section aria-label="AI Telemetry Advisor" className="min-w-0 rounded-xl border border-cyan-700/20 dark:border-cyan-400/20 console-panel bg-white dark:bg-slate-900/40">
+    <div className="console-header flex flex-wrap items-center justify-between gap-2 rounded-t-xl border-b border-slate-300 dark:border-slate-700/80 p-3">
+      <div className="flex items-center gap-2"><BrainCircuit size={16} className="shrink-0 text-cyan-700 dark:text-cyan-400" /><div>
+        <h2 className="text-sm font-semibold text-cyan-900 dark:text-cyan-100">AI Telemetry Advisor</h2>
+        <p className="mt-0.5 text-[10px] leading-4 text-slate-600 dark:text-slate-400">Completed-run architecture diagnostics · on demand</p>
       </div></div>
-      <button type="button" disabled={!snapshot || loading || simulationLoading} onClick={() => { void generate(); }} className="inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-3 py-1.5 text-[11px] font-semibold text-cyan-200 hover:bg-cyan-400/15 disabled:cursor-not-allowed disabled:opacity-50">
+      <button type="button" disabled={!snapshot || loading || simulationLoading} onClick={() => { void generate(); }} className="inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-cyan-700/30 dark:border-cyan-400/30 bg-cyan-700/10 dark:bg-cyan-400/10 px-3 py-1.5 text-[11px] font-semibold text-cyan-800 dark:text-cyan-200 hover:bg-cyan-700/15 dark:hover:bg-cyan-400/15 disabled:cursor-not-allowed disabled:opacity-50">
         {loading ? <LoaderCircle size={14} className="animate-spin" /> : <Sparkles size={14} />}{loading ? "Analyzing telemetry…" : insight ? "Analyze run" : "Generate analysis"}
       </button>
     </div>
     <div className="space-y-3 p-3">
-      {snapshot && <p className="text-[10px] leading-4 text-slate-400">Analyzing {snapshot.data.scale_label} · {snapshot.request.hardware_profile} · {Object.values(snapshot.data.stages).map((stage) => stage.node).join(" → ")}. Uses completed-run settings even if controls have since changed.</p>}
-      {previous && <label className="flex items-center gap-2 text-xs leading-5 text-slate-400"><input type="checkbox" checked={compare} onChange={(event) => setCompare(event.target.checked)} disabled={loading} className="size-4 shrink-0 accent-cyan-400" />Compare with previous completed run ({previous.data.scale_label})</label>}
-      {loading && <p role="status" className="flex items-center gap-2 text-xs text-cyan-200"><LoaderCircle size={14} className="animate-spin" />Analyzing routing, qubit budget, and telemetry. Simulations remain available.</p>}
-      {!insight && !loading && <p className="py-3 text-sm leading-6 text-slate-400">{snapshot ? "Generate a diagnostic to explain this run’s bottlenecks and choose the next configuration to try." : "Run a simulation to enable the advisor."}</p>}
+      {snapshot && <p className="text-[10px] leading-4 text-slate-600 dark:text-slate-400">Analyzing {snapshot.data.scale_label} · {snapshot.request.hardware_profile} · {Object.values(snapshot.data.stages).map((stage) => stage.node).join(" → ")}. Uses completed-run settings even if controls have since changed.</p>}
+      {previous && <label className="flex items-center gap-2 text-xs leading-5 text-slate-600 dark:text-slate-400"><input type="checkbox" checked={compare} onChange={(event) => setCompare(event.target.checked)} disabled={loading} className="size-4 shrink-0 accent-cyan-700 dark:accent-cyan-400" />Compare with previous completed run ({previous.data.scale_label})</label>}
+      {loading && <p role="status" className="flex items-center gap-2 text-xs text-cyan-800 dark:text-cyan-200"><LoaderCircle size={14} className="animate-spin" />Analyzing routing, qubit budget, and telemetry. Simulations remain available.</p>}
+      {!insight && !loading && <p className="py-3 text-sm leading-6 text-slate-600 dark:text-slate-400">{snapshot ? "Generate a diagnostic to explain this run’s bottlenecks and choose the next configuration to try." : "Run a simulation to enable the advisor."}</p>}
       {insight && <>
         <AdvisorTelemetryBar insight={insight} />
-        <p className="text-[10px] font-semibold uppercase tracking-wider text-cyan-300">{insight.source !== "fallback" ? `Gemini · ${insight.model}` : "Local deterministic diagnostic"}{insight.previousRunId ? " · includes previous-run comparison" : ""}</p>
-        {insight.notice && <div role="status" className="flex gap-2 rounded-lg border border-amber-400/20 bg-amber-400/5 p-3 text-xs leading-6 text-amber-200"><CircleAlert size={15} className="mt-1 shrink-0" /><p>{insight.notice}</p></div>}
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-cyan-700 dark:text-cyan-300">{insight.source !== "fallback" ? `Gemini · ${insight.model}` : "Local deterministic diagnostic"}{insight.previousRunId ? " · includes previous-run comparison" : ""}</p>
+        {insight.notice && <div role="status" className="flex gap-2 rounded-lg border border-amber-700/20 dark:border-amber-400/20 bg-amber-700/5 dark:bg-amber-400/5 p-3 text-xs leading-6 text-amber-800 dark:text-amber-200"><CircleAlert size={15} className="mt-1 shrink-0" /><p>{insight.notice}</p></div>}
         <AdvisorDiagnostic insight={insight} />
-        <p role="status" className="text-xs leading-6 text-slate-400">{saved ? "Insight saved with this run in Persistent Run History." : saving ? "Saving insight in the background…" : "Insight is available in this tab; use Retry saving in Persistent Run History if its save is pending."}</p>
-        {!saved && persistenceMessage && <p className="text-xs leading-6 text-amber-200 [overflow-wrap:anywhere]">{persistenceMessage}</p>}
-        {!saved && cacheMessage && !persistenceMessage && <p className="text-xs leading-6 text-amber-200 [overflow-wrap:anywhere]">{cacheMessage}</p>}
-        <p className="text-[10px] leading-5 text-slate-500">Generated guidance interprets this simulator’s estimates; it is not a physical hardware measurement.</p>
+        <p role="status" className="text-xs leading-6 text-slate-600 dark:text-slate-400">{saved ? "Insight saved with this run in Persistent Run History." : saving ? "Saving insight in the background…" : "Insight is available in this tab; use Retry saving in Persistent Run History if its save is pending."}</p>
+        {!saved && persistenceMessage && <p className="text-xs leading-6 text-amber-800 dark:text-amber-200 [overflow-wrap:anywhere]">{persistenceMessage}</p>}
+        {!saved && cacheMessage && !persistenceMessage && <p className="text-xs leading-6 text-amber-800 dark:text-amber-200 [overflow-wrap:anywhere]">{cacheMessage}</p>}
+        <p className="text-[10px] leading-5 text-slate-600 dark:text-slate-400">Generated guidance interprets this simulator’s estimates; it is not a physical hardware measurement.</p>
       </>}
     </div>
   </section>;

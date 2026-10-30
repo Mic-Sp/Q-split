@@ -2,13 +2,25 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Theme variables apply before hydration through next-themes' root class. */
 :root {
+  color-scheme: light;
+  --background: #f1f4f8;
+  --foreground: var(--color-slate-900);
+  --surface: #fff;
+  --muted: var(--color-slate-600);
+  --border: var(--color-slate-200);
+  --panel-shadow: 0 1px 2px rgb(15 23 42 / 0.05), 0 4px 12px rgb(15 23 42 / 0.04);
+}
+
+.dark {
   color-scheme: dark;
   --background: var(--color-slate-950);
   --foreground: var(--color-slate-100);
   --surface: var(--color-slate-900);
   --muted: var(--color-slate-400);
   --border: var(--color-slate-800);
+  --panel-shadow: none;
 }
 
 @theme inline {
@@ -29,7 +41,7 @@
   }
 
   :focus-visible {
-    outline: 2px solid var(--color-cyan-400);
+    outline: 2px solid light-dark(var(--color-cyan-700), var(--color-cyan-400));
     outline-offset: 3px;
   }
 
@@ -41,7 +53,16 @@
 }
 
 @layer components {
+  .console-panel {
+    box-shadow: var(--panel-shadow);
+  }
+
   .console-header {
+    background-color: var(--color-slate-50);
+    box-shadow: inset 0 1px 0 #fff;
+  }
+
+  .dark .console-header {
     background-color: var(--color-slate-950);
     box-shadow: inset 0 1px 0 rgb(148 163 184 / 0.05);
   }

@@ -55,14 +55,14 @@ export function ParallelizationTiers({ scale, availableQubits, onSelect, compact
     {tiers.map((tier) => <TierTooltip key={tier.label} selected={activeTier === tier.key} label={`${tier.label} · ${formatValue(tier.value)} qubits`} onSelect={() => onSelect(tier.value)}
       displayLabel={compact ? `${tier.shortLabel} · ${formatValue(tier.value)}` : undefined}
       open={openTier === tier.label} onOpenChange={(isOpen) => setOpenTier((current) => isOpen ? tier.label : current === tier.label ? null : current)}>
-      <p className="font-semibold text-cyan-200">{tier.label}</p>
-      <p className="mt-1 text-[10px] text-slate-400">{workloadScaleLabel(scale, workload)} · {workload === "quantum_mips" ? "k" : "n"} = {formatValue(n)} bits</p>
+      <p className="font-semibold text-cyan-800 dark:text-cyan-200">{tier.label}</p>
+      <p className="mt-1 text-[10px] text-slate-600 dark:text-slate-400">{workloadScaleLabel(scale, workload)} · {workload === "quantum_mips" ? "k" : "n"} = {formatValue(n)} bits</p>
       <dl className="mt-3 space-y-2">
-        <div><dt className="text-[10px] uppercase tracking-wider text-slate-500">Qubit formula</dt><dd className="font-mono text-slate-200">{tier.formula}</dd></div>
-        <div className="rounded-lg border border-cyan-400/15 bg-cyan-400/5 px-3 py-2"><dt className="text-[10px] text-slate-400">At the selected scale</dt><dd className="font-mono text-cyan-200">{tier.calculation}</dd></div>
-        <div><dt className="text-[10px] uppercase tracking-wider text-slate-500">Circuit depth</dt><dd className="font-mono text-slate-200">{tier.depth}</dd></div>
+        <div><dt className="text-[10px] uppercase tracking-wider text-slate-600 dark:text-slate-400">Qubit formula</dt><dd className="font-mono text-slate-800 dark:text-slate-200">{tier.formula}</dd></div>
+        <div className="rounded-lg border border-cyan-700/15 dark:border-cyan-400/15 bg-cyan-700/5 dark:bg-cyan-400/5 px-3 py-2"><dt className="text-[10px] text-slate-600 dark:text-slate-400">At the selected scale</dt><dd className="font-mono text-cyan-800 dark:text-cyan-200">{tier.calculation}</dd></div>
+        <div><dt className="text-[10px] uppercase tracking-wider text-slate-600 dark:text-slate-400">Circuit depth</dt><dd className="font-mono text-slate-800 dark:text-slate-200">{tier.depth}</dd></div>
       </dl>
-      <p className="mt-3 text-slate-300">{tier.tradeoff}</p>
+      <p className="mt-3 text-slate-700 dark:text-slate-300">{tier.tradeoff}</p>
     </TierTooltip>)}
   </div>;
 }

@@ -136,21 +136,21 @@ export function TierTooltip({ label, displayLabel, children, onSelect, open, onO
         }
       }}
       onClick={() => { show(); onSelect?.(); }}
-      className={variant === "info" ? "inline-flex size-5 shrink-0 items-center justify-center rounded text-cyan-400/70 hover:bg-cyan-400/10 hover:text-cyan-200" : [
+      className={variant === "info" ? "inline-flex size-5 shrink-0 items-center justify-center rounded text-cyan-700 dark:text-cyan-400/70 hover:bg-cyan-700/10 dark:hover:bg-cyan-400/10 hover:text-cyan-800 dark:hover:text-cyan-200" : [
         variant === "scale" ? "min-h-9 rounded-lg border px-2 py-2 font-mono text-[11px] transition-colors" : "inline-flex min-h-8 items-center gap-1.5 rounded-md border px-2 py-1.5 text-left text-[10px]",
-        "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300",
-        selected ? "border-cyan-400/50 bg-cyan-400/10 text-cyan-200" : "border-slate-800 text-slate-400 hover:border-cyan-400/40 hover:text-cyan-200",
-        variant === "scale" && !selected ? "bg-slate-950/70" : "",
+        "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 dark:focus-visible:outline-cyan-300",
+        selected ? "border-cyan-700/50 dark:border-cyan-400/50 bg-cyan-700/10 dark:bg-cyan-400/10 text-cyan-800 dark:text-cyan-200" : "border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:border-cyan-700/40 dark:hover:border-cyan-400/40 hover:text-cyan-800 dark:hover:text-cyan-200",
+        variant === "scale" && !selected ? "bg-slate-50 dark:bg-slate-950/70" : "",
       ].join(" ")}>
-      {variant !== "info" && (displayLabel ?? label)}{variant !== "scale" && <CircleHelp size={13} aria-hidden="true" className="shrink-0 text-cyan-400/70" />}
+      {variant !== "info" && (displayLabel ?? label)}{variant !== "scale" && <CircleHelp size={13} aria-hidden="true" className="shrink-0 text-cyan-700 dark:text-cyan-400/70" />}
     </button>
     {open && createPortal(
       <div ref={panel} id={id} role="tooltip"
         onPointerEnter={() => { hovering.current = true; cancelClose(); }}
         onPointerLeave={() => { hovering.current = false; closeWhenIdle(); }}
-        className="invisible fixed z-[100] w-96 overflow-y-auto rounded-xl border border-cyan-400/30 bg-slate-950 p-4 text-xs leading-6 text-slate-300 shadow-2xl shadow-black/60 [overflow-wrap:anywhere]">
+        className="invisible fixed z-[100] w-96 overflow-y-auto rounded-xl border border-cyan-700/30 dark:border-cyan-400/30 bg-slate-50 dark:bg-slate-950 p-4 text-xs leading-6 text-slate-700 dark:text-slate-300 shadow-2xl shadow-slate-900/10 dark:shadow-black/60 [overflow-wrap:anywhere]">
         {children}
-        {footer && <p className="mt-3 border-t border-slate-800 pt-2 text-[10px] leading-5 text-slate-500">Illustrative architecture model; physical error-correction overhead excluded. ↑ / ↓ scroll; Escape dismisses this tooltip.</p>}
+        {footer && <p className="mt-3 border-t border-slate-200 dark:border-slate-800 pt-2 text-[10px] leading-5 text-slate-600 dark:text-slate-400">Illustrative architecture model; physical error-correction overhead excluded. ↑ / ↓ scroll; Escape dismisses this tooltip.</p>}
       </div>, document.body,
     )}
   </>;
