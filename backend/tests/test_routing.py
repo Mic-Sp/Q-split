@@ -54,6 +54,7 @@ class RoutingTests(unittest.TestCase):
         # Routing regression checks should not depend on stochastic phase counts.
         self.kernel = patch("backend.main.execute_live_shors_15", side_effect=lambda a=7, noisy=True: {
             "qubits": 8, "depth": 189, "top_measurements": "|0100⟩ (1/4)",
+            "gate_counts": {"cx": 100, "measure": 4}, "counts": {"0100": 512},
             "period_r": 4, "coherence_pct": round(100.0 * math.exp(-189 / 1200.0), 2) if noisy else 100.0,
         })
         self.kernel.start()
@@ -333,9 +334,9 @@ class RoutingTests(unittest.TestCase):
                     self.assertIsNone(baseline["kernel_ms"])
                     self.assertIsNone(baseline["total_ms"])
         with patch("backend.main.execute_live_shors_15", side_effect=AssertionError("Baseline must not execute Aer")):
-            self.assertEqual(classical_cpu_baseline(15)["kernel_ms"], 92.5)
+            self.assertEqual(classical_cpu_baseline(15)["kernel_ms"], 3.5)
             parallel = run_shors_pipeline(15, "ideal_sim", available_qubits=22)
-            self.assertEqual(parallel.stages[STAGE_KEYS[1]].metrics["classical_cpu_baseline"]["total_ms"], 92.85)
+            self.assertEqual(parallel.stages[STAGE_KEYS[1]].metrics["classical_cpu_baseline"]["total_ms"], 3.85)
 
     def test_hardware_enum_and_routes_accept_four_profiles_and_reject_unknown(self):
         for profile, scale in itertools.product(HARDWARE_PROFILES, [15, 21, 35, 512, 2048]):
@@ -368,16 +369,16 @@ class RoutingTests(unittest.TestCase):
                     expected = 100.0 if profile == "ideal_sim" else round(100 * math.exp(-depth / architecture["decay_scale"]), 2)
                     self.assertEqual(kernel.metrics["coherence_survival_pct"], expected)
 
-    def test_sequential_aer_reference_projects_new_architectures_without_native_transpilation(self):
+    def test_sequential_aer_reference_uses_shared_depth_model_across_architectures(self):
         stages = {profile: run_shors_pipeline(15, profile, available_qubits=8).stages[STAGE_KEYS[1]] for profile in HARDWARE_PROFILES}
-        self.assertEqual(stages["ibm_heron_nisq"].latency_ms, 1.85)
+        self.assertEqual(stages["ibm_heron_nisq"].latency_ms, 0.07)
         self.assertEqual(stages["ideal_sim"].metrics["coherence_survival_pct"], 100)
         self.assertEqual(stages["ibm_heron_nisq"].metrics["io_state_prep_ms"], 0.05)
         for profile in ["google_weber_grid", "ionq_forte_trapped_ion"]:
             architecture = HARDWARE_PROFILES[profile]
-            depth = math.ceil(189 * architecture["depth_factor"])
+            depth = math.ceil(288 * architecture["depth_factor"])
             self.assertEqual(stages[profile].metrics["circuit_depth"], depth)
-            self.assertEqual(stages[profile].latency_ms, round(1.85 * depth / 189 * architecture["gate_factor"], 6))
+            self.assertEqual(stages[profile].latency_ms, round(depth * 0.00025 * architecture["gate_factor"], 6))
             self.assertIn("projection", stages[profile].metrics["depth_model"])
         self.assertLess(stages["google_weber_grid"].latency_ms, stages["ibm_heron_nisq"].latency_ms)
         self.assertGreater(stages["ionq_forte_trapped_ion"].latency_ms, classical_cpu_baseline(15)["kernel_ms"])

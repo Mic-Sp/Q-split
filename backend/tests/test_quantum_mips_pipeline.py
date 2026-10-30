@@ -177,7 +177,7 @@ class QuantumMipsPipelineTests(unittest.TestCase):
         self.assertFalse(kernel.metrics["retrieval_reliable"])
         self.assertIn("CATASTROPHIC QPU DECOHERENCE", result.primary_bottleneck)
         self.assertIn("no verified top-1", post.output_summary)
-        self.assertEqual(post.status, "WARNING")
+        self.assertEqual(post.status, "CRITICAL_BOTTLENECK")
 
     def test_cpu_baseline_matches_all_cpu_dispatch_without_extra_reference_execution(self):
         for scale, tier in itertools.product(QUANTUM_MIPS_SCALES, ["minimum_qubits_required", "windowed_qubits_required", "ceiling_qubits_required"]):

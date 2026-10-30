@@ -1,4 +1,4 @@
-import { API_BASE_URL } from "@/lib/config";
+import { engineHeaders, engineUrl } from "@/lib/engine";
 import { parseSimulationRequest } from "@/lib/workloads";
 import { parseTelemetry } from "@/lib/telemetry";
 
@@ -19,9 +19,9 @@ export async function POST(request: Request) {
     return Response.json({ detail: "Provide a valid workload, scale, hardware profile, capacity, and routing." }, { status: 400, headers });
   }
   try {
-    const backend = (process.env.SIMULATION_API_URL?.trim() || API_BASE_URL).replace(/\/+$/, "");
+    const backend = engineUrl();
     const response = await fetch(`${backend}/api/simulate`, { method: "POST", cache: "no-store",
-      headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+      headers: { "Content-Type": "application/json", ...engineHeaders() }, body: JSON.stringify(input),
       signal: AbortSignal.any([request.signal, AbortSignal.timeout(85_000)]) });
     const body = await response.json();
     if (!response.ok) return Response.json({ detail: typeof body?.detail === "string" ? body.detail : "The engine rejected this simulation." }, { status: response.status, headers });

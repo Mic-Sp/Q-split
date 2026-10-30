@@ -51,6 +51,8 @@ These vocabularies are intentionally separate: a `NOMINAL` coherence budget alon
 
 Profile depth, latency, and coherence factors are comparative modeling assumptions. Available QPU qubits can be overridden independently of the profile's reference capacity; overrides beyond that reference are exploratory.
 
+All Shor sizes, including N=15, use the same workspace-tier depth formula and modeled gate timing (`depth × 0.00025 ms × hardware gate factor`). For live N=15 runs, `aer_reference_circuit_depth`, `aer_gate_counts`, and `aer_counts` separately report the compiled reference; `circuit_depth` remains the analytical hardware projection. Both small Aer references compile to `{cx, rz, sx, x}` with fixed transpilation and simulator seeds for reproducible measurement counts.
+
 ---
 
 ## Interface and saved runs
@@ -93,12 +95,17 @@ The zero-dependency limiter is **process-local**: quotas survive warm-process/mo
 
    ```dotenv
    SIMULATION_API_URL=http://localhost:8000
+   ENGINE_SECRET=
    DATABASE_URL=
    DATABASE_URL_UNPOOLED=
    GEMINI_API_KEY=
    ```
 
    Set `DATABASE_URL` to the Neon connection for persistent history and advisor caching. `DATABASE_URL_UNPOOLED` supplies a direct connection for Prisma migrations and maintenance; it falls back to `DATABASE_URL` when blank. Without database credentials, simulations still work; without a Gemini key, the advisor supplies deterministic local diagnostics.
+
+   For a publicly reachable engine, set the same nonempty `ENGINE_SECRET` in the FastAPI process environment and the Next.js server environment (locally, `frontend/.env.local`). The proxy sends it as `X-Engine-Secret`; missing or incorrect credentials receive HTTP 401 before simulation dispatch. For example, start FastAPI with `ENGINE_SECRET='your-shared-secret' backend/venv/bin/python -m uvicorn backend.main:app --port 8000`. An unset or blank secret allows unauthenticated local development; CORS does not authenticate direct HTTP clients. Engine routes grant no browser CORS access because browsers use the Next.js proxy. Keep the secret out of `NEXT_PUBLIC_*` variables.
+
+   `GET /` is a public, uncached health probe that performs no simulation and does not wait for simulation worker threads. Each Next.js Node server startup pings it once with a three-second timeout; engine downtime does not fail frontend startup. A cold engine may still take longer to become ready.
 
 3. In a separate terminal, create the Python environment and start the backend **from the repository root**:
 
@@ -121,7 +128,8 @@ The zero-dependency limiter is **process-local**: quotas survive warm-process/mo
    From the repository root:
 
    ```sh
-   backend/venv/bin/python -m unittest discover -s backend/tests -v
+   backend/venv/bin/python -m pip install -r backend/requirements-dev.txt
+   backend/venv/bin/python -m pytest backend/tests -q
    ```
 
    From `frontend/`:

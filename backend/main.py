@@ -6,14 +6,16 @@ QPU/GPU. Coherence is a depth-based proxy, not an injected calibrated noise mode
 Next.js owns database persistence, AI diagnostics, and provider/cache economics.
 """
 
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Depends, FastAPI, HTTPException, Request, Security
+from fastapi.security import APIKeyHeader
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing import Dict, Any, Literal, Optional
 import math
+import os
+from secrets import compare_digest
 from time import perf_counter
 from fractions import Fraction
 from qiskit import QuantumCircuit, transpile
@@ -26,14 +28,21 @@ app = FastAPI(
     version="2.0.0"
 )
 
-# Enable CORS for your local Next.js dev server and Vercel deployment
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Browsers use the same-origin Next.js proxy. Server-to-server fetches do not
+# need CORS; deliberately do not grant browser origins access to engine routes.
+engine_secret_header = APIKeyHeader(name="X-Engine-Secret", auto_error=False)
+
+
+async def require_engine_secret(secret: Optional[str] = Security(engine_secret_header)):
+    """Enforce the optional server-only shared secret before simulation dispatch.
+
+    Set ENGINE_SECRET on both FastAPI and Next.js for publicly reachable engines.
+    An unset/blank value preserves unauthenticated local development. CORS is
+    not authentication: direct HTTP clients must pass this check when enabled.
+    """
+    expected = os.environ.get("ENGINE_SECRET", "").strip()
+    if expected and (secret is None or not compare_digest(secret.encode("utf-8"), expected.encode("utf-8"))):
+        raise HTTPException(status_code=401, detail="Invalid engine credentials.")
 
 # ==========================================
 # 1. UNIFIED PYDANTIC CONTRACT
@@ -87,6 +96,16 @@ HARDWARE_PROFILES = {
     "ideal_sim": {"topology": "Noise-free reference", "reference_qubits": None, "depth_factor": 1.0,
                   "gate_factor": 1.0, "prep_ms": 0.15, "decay_scale": None},
 }
+
+
+def coherence_status(survival_pct: float) -> str:
+    """Classify modeled survival consistently with the frontend coherence budget."""
+    return "NOMINAL" if survival_pct >= 70 else "DEGRADED" if survival_pct >= 35 else "EXCEEDED"
+
+
+def coherence_stage_status(survival_pct: float) -> str:
+    """Translate the shared coherence classification into stage severity."""
+    return {"NOMINAL": "OPTIMAL", "DEGRADED": "WARNING", "EXCEEDED": "CRITICAL_BOTTLENECK"}[coherence_status(survival_pct)]
 
 
 class RoutingConfig(BaseModel):
@@ -176,6 +195,10 @@ class HybridTelemetryResponse(BaseModel):
 # ==========================================
 # 2. LIVE QISKIT AER KERNEL FOR N = 15
 # ==========================================
+NATIVE_BASIS_GATES = ["cx", "rz", "sx", "x"]
+AER_SEED = 7
+
+
 def c_amod15(a: int, power: int):
     """Build a controlled, four-work-qubit modular multiplication gate.
 
@@ -215,7 +238,8 @@ def execute_live_shors_15(a: int = 7, noisy: bool = True) -> Dict[str, Any]:
             this flag does not attach an Aer thermal or depolarizing noise model.
 
     Returns:
-        Compiled qubit count/depth, leading measured phases, extracted period,
+        Native-basis compiled qubit count/depth/gate counts, seeded shot counts,
+        leading measured phases, extracted period,
         and modeled coherence percentage. The known demonstration period is
         retained if sampled candidate denominators do not verify nontrivial factors.
 
@@ -240,14 +264,15 @@ def execute_live_shors_15(a: int = 7, noisy: bool = True) -> Dict[str, Any]:
     qc.measure(range(n_count), range(n_count))
 
     # Simulate in Qiskit Aer
-    sim = AerSimulator()
-    t_qc = transpile(qc, sim)
-    counts = sim.run(t_qc, shots=512).result().get_counts()
+    sim = AerSimulator(method="statevector", max_parallel_threads=1)
+    t_qc = transpile(qc, basis_gates=NATIVE_BASIS_GATES,
+                     optimization_level=1, seed_transpiler=AER_SEED)
+    counts = sim.run(t_qc, shots=512, seed_simulator=AER_SEED).result().get_counts()
 
     # Classical Continued Fractions Post-Processing
     measured_phases = []
     extracted_r = 4
-    for bitstring, count in sorted(counts.items(), key=lambda x: x[1], reverse=True)[:4]:
+    for bitstring, count in sorted(counts.items(), key=lambda x: (-x[1], x[0]))[:4]:
         decimal_val = int(bitstring, 2)
         phase = decimal_val / (2**n_count)
         frac = Fraction(phase).limit_denominator(15)
@@ -262,6 +287,8 @@ def execute_live_shors_15(a: int = 7, noisy: bool = True) -> Dict[str, Any]:
     return {
         "qubits": 8,
         "depth": t_qc.depth(),
+        "gate_counts": dict(t_qc.count_ops()),
+        "counts": dict(counts),
         "top_measurements": ", ".join(measured_phases[:3]),
         "period_r": extracted_r,
         "coherence_pct": round(100.0 * math.exp(-t_qc.depth() / 1200.0), 2) if noisy else 100.0
@@ -332,10 +359,10 @@ def execute_live_quantum_mips_64() -> Dict[str, Any]:
     circuit = build_quantum_mips_grover_circuit()
     simulator = AerSimulator(method="statevector", max_parallel_threads=1)
     started = perf_counter()
-    compiled = transpile(circuit, basis_gates=["cx", "rz", "sx", "x"],
-                         optimization_level=1, seed_transpiler=7)
+    compiled = transpile(circuit, basis_gates=NATIVE_BASIS_GATES,
+                         optimization_level=1, seed_transpiler=AER_SEED)
     compiled_at = perf_counter()
-    counts = simulator.run(compiled, shots=QUANTUM_MIPS_AER_SHOTS, seed_simulator=7).result().get_counts()
+    counts = simulator.run(compiled, shots=QUANTUM_MIPS_AER_SHOTS, seed_simulator=AER_SEED).result().get_counts()
     finished = perf_counter()
     peak = max(counts, key=counts.get)
     return {"reference_circuit_depth": compiled.depth(), "aer_reference_qubits": compiled.num_qubits,
@@ -450,9 +477,6 @@ def qpu_capacity_plan(scale_param: int, available_qubits: int) -> Dict[str, Any]
     }
 
 
-N15_REFERENCE_KERNEL_MS = 1.85
-
-
 def _run_default_shors_pipeline(
     scale_param: int, hardware_profile: str, qpu_plan: Optional[Dict[str, Any]] = None,
 ) -> HybridTelemetryResponse:
@@ -468,7 +492,8 @@ def _run_default_shors_pipeline(
         executes Aer; other paths use analytical depth and canned factor summaries.
 
     Hardware factors project depth/time/coherence without native topology
-    transpilation. Legacy IBM/ideal N=15 timing retains 1.85 ms gates and 0.05 ms I/O."""
+    transpilation. All sizes use the same analytical depth and gate-time model;
+    compiled Aer reference depth is reported separately from modeled depth."""
     architecture = HARDWARE_PROFILES[hardware_profile]
     noisy = hardware_profile != "ideal_sim"
     legacy = hardware_profile in ("ibm_heron_nisq", "ideal_sim")
@@ -485,10 +510,12 @@ def _run_default_shors_pipeline(
     # --- CASE A: LIVE QISKIT EXECUTION (N = 15) ---
     if scale_param == 15 and (qpu_plan is None or qpu_plan["parallelization_tier"] == "Space-Optimized Sequential"):
         qpu_res = execute_live_shors_15(a=7, noisy=noisy)
-        reference_depth = qpu_res["depth"]
+        reference_depth = qpu_plan["circuit_depth"] if qpu_plan else int(4.5 * n_bits ** 3)
         depth = math.ceil(reference_depth * architecture["depth_factor"])
-        coherence = qpu_res["coherence_pct"] if legacy else round(100.0 * math.exp(-depth / architecture["decay_scale"]), 2)
-        gate_ms = N15_REFERENCE_KERNEL_MS if legacy else round(N15_REFERENCE_KERNEL_MS * depth / reference_depth * architecture["gate_factor"], 6)
+        coherence = 100.0 if not noisy else round(100.0 * math.exp(-depth / architecture["decay_scale"]), 2)
+        status = coherence_stage_status(coherence)
+        reliable = coherence_status(coherence) != "EXCEEDED"
+        gate_ms = round(depth * 0.00025 * architecture["gate_factor"], 2 if legacy else 6)
         r = qpu_res["period_r"]
         p = math.gcd(a**(r // 2) - 1, 15)
         q = math.gcd(a**(r // 2) + 1, 15)
@@ -498,7 +525,9 @@ def _run_default_shors_pipeline(
             workload_name="Shor's Algorithm",
             scale_label=scale_label,
             execution_mode="LIVE_QISKIT_AER",
-            primary_bottleneck="NONE (Fits Within NISQ Coherence Window)",
+            primary_bottleneck=("NONE (Fits Within NISQ Coherence Window)" if status == "OPTIMAL" else
+                                "NISQ TWO-QUBIT GATE NOISE (Degrading Phase Peaks)" if reliable else
+                                "CATASTROPHIC QPU DECOHERENCE"),
             stages={
                 "stage_1_classical_pre": StageTelemetry(
                     name="Euclidean Coprime & Base Filter",
@@ -512,25 +541,31 @@ def _run_default_shors_pipeline(
                     name="Quantum Period Finding (ModExp + IQFT)",
                     node="QPU",
                     latency_ms=gate_ms,
-                    status="OPTIMAL",
+                    status=status,
                     output_summary=f"Peaks at {qpu_res['top_measurements']} -> Extracted period r = {r}.",
                     metrics={
                         "qubits_required": qpu_res["qubits"],
                         "circuit_depth": depth,
                         "reference_circuit_depth": reference_depth,
+                        "aer_reference_circuit_depth": qpu_res["depth"],
+                        "aer_gate_counts": qpu_res["gate_counts"],
+                        "aer_counts": qpu_res["counts"],
                         # Preserve the original Aer-reference setup for legacy profiles.
                         # Ion prep_ms includes readout; do not add that overhead twice.
                         "io_state_prep_ms": 0.05 if legacy else architecture["prep_ms"],
                         "coherence_survival_pct": coherence,
+                        "coherence_status": coherence_status(coherence),
                     }
                 ),
                 "stage_3_classical_post": StageTelemetry(
                     name="Continued Fractions & Factor GCD",
                     node="CPU",
                     latency_ms=0.21,
-                    status="OPTIMAL",
-                    output_summary=f"Computed gcd({a}^({r}/2) ± 1, 15) -> Successfully factored 15 = {p} × {q}.",
-                    metrics={"algorithm": "Continued Fractions", "factors_found": f"{p} × {q}"}
+                    status=status,
+                    output_summary=(f"Computed gcd({a}^({r}/2) ± 1, 15) -> Successfully factored 15 = {p} × {q}." if reliable
+                                    else "STARVED: modeled QPU coherence is insufficient to extract reliable factors."),
+                    metrics={"algorithm": "Continued Fractions", "factors_found": f"{p} × {q}" if reliable else "NONE (Decohered)",
+                             "coherence_status": coherence_status(coherence)}
                 )
             }
         )
@@ -544,22 +579,21 @@ def _run_default_shors_pipeline(
 
     if not noisy:
         coherence_pct = 100.0
-        qpu_status = "OPTIMAL"
-        post_status = "OPTIMAL"
         bottleneck = "NONE (Noise-Free QPU Analytical Projection)" if qpu_plan else "CLASSICAL SIMULATION RAM WALL (2^N Statevector Limit)"
     else:
         # A depth-based proxy, not a calibrated T1/T2 or gate-error simulation.
         # Slow trapped-ion gates affect time separately from their longer decay scale.
         # exp(-D/lambda) stays in [0, 1]; lambda is measured in depth units, not T1/T2 time.
         coherence_pct = round(max(0.0, 100.0 * math.exp(-circuit_depth / architecture["decay_scale"])), 2)
-        if coherence_pct > 40:
-            qpu_status = "WARNING"
-            post_status = "OPTIMAL"
+        if coherence_status(coherence_pct) == "NOMINAL":
+            bottleneck = "NONE (Fits Within NISQ Coherence Window)"
+        elif coherence_status(coherence_pct) == "DEGRADED":
             bottleneck = "NISQ TWO-QUBIT GATE NOISE (Degrading Phase Peaks)"
         else:
-            qpu_status = "CRITICAL_BOTTLENECK"
-            post_status = "WARNING"
             bottleneck = f"CATASTROPHIC QPU DECOHERENCE ({circuit_depth:,} Gates Exceed T1/T2 Window)"
+
+    qpu_status = post_status = coherence_stage_status(coherence_pct)
+    reliable = coherence_status(coherence_pct) != "EXCEEDED"
 
     factor_lookup = {
         15: ("r = 4", "15 = 3 × 5"),
@@ -599,19 +633,21 @@ def _run_default_shors_pipeline(
                     "circuit_depth": circuit_depth,
                     "reference_circuit_depth": reference_depth,
                     "io_state_prep_ms": architecture["prep_ms"],
-                    "coherence_survival_pct": coherence_pct
+                    "coherence_survival_pct": coherence_pct,
+                    "coherence_status": coherence_status(coherence_pct),
                 }
             ),
             "stage_3_classical_post": StageTelemetry(
                 name="Continued Fractions & Factor GCD",
                 node="CPU",
                 latency_ms=round(0.25 * (n_bits / 4), 2),
-                status=post_status if coherence_pct > 15 else "CRITICAL_BOTTLENECK",
+                status=post_status,
                 output_summary=(
-                    f"Continued Fractions output: {factor_str}" if coherence_pct > 15 or not noisy
+                    f"Continued Fractions output: {factor_str}" if reliable
                     else f"STARVED: QPU output collapsed to uniform white noise ({period_str}). Cannot extract factors."
                 ),
-                metrics={"algorithm": "Continued Fractions", "factors_found": factor_str if not noisy or coherence_pct > 15 else "NONE (Decohered)"}
+                metrics={"algorithm": "Continued Fractions", "factors_found": factor_str if reliable else "NONE (Decohered)",
+                         "coherence_status": coherence_status(coherence_pct)}
             )
         }
     )
@@ -758,7 +794,7 @@ def classical_cpu_baseline(scale_param: int) -> Dict[str, Any]:
     kernel_ms = None
     total_ms = None
     if feasible:
-        gate_ms = N15_REFERENCE_KERNEL_MS if scale_param == 15 else round(int(4.5 * n_bits ** 3) * 0.00025, 2)
+        gate_ms = round(int(4.5 * n_bits ** 3) * 0.00025, 2)
         kernel_ms = round(gate_ms * 2 ** (qubits - 8) * profile["latency_factor"], 2)
         pre_ms = 0.14 if scale_param == 15 else round(0.12 * math.log2(n_bits), 2)
         post_ms = 0.21 if scale_param == 15 else round(0.25 * n_bits / 4, 2)
@@ -898,6 +934,7 @@ def quantum_mips_kernel(scale_param: int, hardware_profile: HardwareProfile = "i
                "depth_model": "Analytical Grover/Durr-Hoyer reference: round(4.2 sqrt(M) log2(M))",
                "circuit_depth": 0, "compute_latency_ms": 0.0, "io_state_prep_ms": 0.0,
                "coherence_survival_pct": 0.0 if node == "QPU" else 100.0,
+               "coherence_status": "EXCEEDED" if node == "QPU" else "NOMINAL",
                "routing_model": "ILLUSTRATIVE_V1 (not device measurements)", "routing_supported": True,
                "aer_executed": False, "retrieval_reliable": False,
                "model_scope": "Known marked candidate; vector loading and an adaptive maximum-finding oracle are not executed."}
@@ -939,9 +976,10 @@ def quantum_mips_kernel(scale_param: int, hardware_profile: HardwareProfile = "i
         # Noise-free is explicit; physical profiles use a depth proxy, independent of elapsed gate time.
         coherence = 100.0 if architecture["decay_scale"] is None else round(100 * math.exp(-depth / architecture["decay_scale"]), 2)
         metrics.update({"circuit_depth": depth, "compute_latency_ms": gate_ms, "io_state_prep_ms": architecture["prep_ms"],
-                        "coherence_survival_pct": coherence, "retrieval_reliable": coherence >= 35})
+                        "coherence_survival_pct": coherence,
+                        "retrieval_reliable": coherence_status(coherence) != "EXCEEDED"})
         stage.latency_ms = gate_ms  # QPU preparation/readout is exclusive, counted separately.
-        stage.status = "OPTIMAL" if coherence >= 70 else "WARNING" if coherence >= 35 else "CRITICAL_BOTTLENECK"
+        stage.status = coherence_stage_status(coherence)
     else:
         cost = _quantum_mips_statevector_cost(plan, reference_depth, node)
         metrics.update({key: value for key, value in cost.items() if key != "latency_ms"})
@@ -949,6 +987,7 @@ def quantum_mips_kernel(scale_param: int, hardware_profile: HardwareProfile = "i
                         "coherence_survival_pct": 100.0, "retrieval_reliable": True})
         stage.latency_ms = cost["latency_ms"]  # GPU launch/transfer is inclusive.
         stage.status = "WARNING"
+    metrics["coherence_status"] = coherence_status(metrics["coherence_survival_pct"])
     token = metrics.get("top_1_token_index", QUANTUM_MIPS_TARGET_INDEX)
     metrics.update({"top_1_token_index": token,
                     "result_source": "measured_noise_free_aer_reference" if live else "analytical_marked_state_projection"})
@@ -992,14 +1031,21 @@ def run_quantum_mips_pipeline(scale_param: int, hardware_profile: HardwareProfil
     elif post.metrics["execution_feasible"]:
         post.metrics.update({"candidate_index": kernel.metrics["top_1_token_index"],
                              "candidate_source": kernel.metrics["result_source"],
+                             "coherence_status": kernel.metrics["coherence_status"],
                              "verification_model": "Modeled FP16 cost; no candidate vectors supplied for actual reranking."})
+        if kernel.node == "QPU" and kernel.metrics["coherence_status"] != "NOMINAL":
+            post.status = coherence_stage_status(kernel.metrics["coherence_survival_pct"])
         if not kernel.metrics["retrieval_reliable"]:
-            post.status = "WARNING"
             post.output_summary += " QPU candidate is unreliable; no verified top-1 retrieval is claimed."
     stages = dict(zip(STAGE_KEYS, [pre, kernel, post]))
+    post.metrics["coherence_status"] = ("EXCEEDED" if post.node == "QPU" and not post.metrics["execution_feasible"]
+                                        else kernel.metrics["coherence_status"])
     blocked = next((stage for stage in stages.values() if not stage.metrics["execution_feasible"]), None)
     if blocked:
         bottleneck = blocked.metrics.get("blocking_reason", f"UNSUPPORTED QPU ROUTING ({blocked.name})")
+    elif kernel.node == "QPU" and kernel.metrics["coherence_status"] != "NOMINAL":
+        bottleneck = ("CATASTROPHIC QPU DECOHERENCE" if kernel.metrics["coherence_status"] == "EXCEEDED"
+                      else "QPU COHERENCE BUDGET DEGRADED")
     else:
         rank = {"OPTIMAL": 0, "WARNING": 1, "CRITICAL_BOTTLENECK": 2}
         limiting = max(stages.values(), key=lambda stage: (rank[stage.status], stage.latency_ms))
@@ -1090,9 +1136,8 @@ def run_shors_pipeline(
                     f"{plan['idle_qubits']:,} qubits idle."
                 )
                 stage.metrics["depth_model"] = (
-                    ("Compiled 8-qubit Aer reference circuit" if hardware_profile in ("ibm_heron_nisq", "ideal_sim")
-                     else "Architecture-adjusted Aer reference projection") if response.execution_mode == "LIVE_QISKIT_AER"
-                    else "Illustrative analytical projection (4.5 coefficient, log base 2)"
+                    "Illustrative analytical projection (4.5 coefficient, log base 2); "
+                    "compiled Aer reference depth reported separately when executed"
                 )
 
         if key == "stage_2_quantum_kernel":
@@ -1187,6 +1232,14 @@ def run_shors_pipeline(
             ))
             response.primary_bottleneck = reasons.get(key, response.primary_bottleneck)
     response.stages["stage_2_quantum_kernel"].metrics["classical_cpu_baseline"] = classical_cpu_baseline(scale_param)
+    for stage in response.stages.values():
+        if "coherence_survival_pct" in stage.metrics:
+            stage.metrics["coherence_status"] = coherence_status(stage.metrics["coherence_survival_pct"])
+        if stage.node == "QPU" and not stage.metrics["execution_feasible"]:
+            stage.metrics["coherence_status"] = "EXCEEDED"
+    kernel, post = [response.stages[key] for key in STAGE_KEYS[1:]]
+    if post.node != "QPU" or post.metrics["execution_feasible"]:
+        post.metrics["coherence_status"] = kernel.metrics["coherence_status"]
     return response
 
 
@@ -1194,11 +1247,13 @@ def run_shors_pipeline(
 # 4. API ENDPOINTS
 # ==========================================
 @app.get("/")
-def health_check():
+async def health_check():
     """Return engine identity without invoking Aer, database, or provider services."""
-    return {"status": "online", "engine": "Q-Split Hybrid Profiler v2.0"}
+    return JSONResponse({"status": "online", "engine": "Q-Split Hybrid Profiler v2.0"},
+                        headers={"Cache-Control": "no-store"})
 
-@app.post("/api/simulate", response_model=HybridTelemetryResponse)
+@app.post("/api/simulate", response_model=HybridTelemetryResponse,
+          dependencies=[Depends(require_engine_secret)])
 def simulate_workload(req: SimulationRequest):
     """Dispatch a Pydantic-validated request to its workload's three-stage builder.
 
