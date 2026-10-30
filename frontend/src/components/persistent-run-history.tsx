@@ -7,7 +7,8 @@ import type { SavedSimulationRun } from "@/types/run-history";
 import { BenchmarkRow } from "@/components/benchmark-row";
 import { BenchmarkComparison } from "@/components/benchmark-comparison";
 import { benchmarkExportRuns, MAX_COMPARISON_RUNS, selectedBenchmarkRuns, toggleBenchmarkSelection } from "@/lib/benchmark-comparison";
-import { benchmarkHistory } from "@/lib/run-history";
+import { runsForWorkload } from "@/lib/run-history";
+import { coherenceBudget } from "@/lib/kpi-metrics";
 import type { WorkloadId } from "@/types/telemetry";
 import { downloadBenchmark } from "@/lib/benchmark-export";
 
@@ -20,10 +21,19 @@ import { downloadBenchmark } from "@/lib/benchmark-export";
 export function PersistentRunHistory({ history, onRestore, workload }: { workload: WorkloadId; history: ReturnType<typeof usePersistentRuns>; onRestore: (run: SavedSimulationRun) => void }) {
   const [showAll, setShowAll] = useState(false);
   const listId = useId();
-  const [namedOnly, setNamedOnly] = useState(false);
+  const [filter, setFilter] = useState<"all" | "nominal" | "pinned">("all");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
-  const { runs, candidates, visibleRuns } = benchmarkHistory(history.runs, workload, namedOnly, showAll);
+  const runs = runsForWorkload(history.runs, workload);
+  const nominalRuns = runs.filter(run => coherenceBudget(run.telemetry).status === "NOMINAL");
+  const pinnedRuns = runs.filter(run => run.isSnapshot || Boolean(run.snapshotName));
+  const candidates = filter === "nominal" ? nominalRuns : filter === "pinned" ? pinnedRuns : runs;
+  const visibleRuns = candidates.slice(0, showAll ? candidates.length : 5);
+  const filters = [
+    { value: "all", label: "All Runs", count: runs.length },
+    { value: "nominal", label: "Nominal Only", count: nominalRuns.length },
+    { value: "pinned", label: "Pinned Only", count: pinnedRuns.length },
+  ] as const;
   const workloadLabel = workload === "shors_crypto" ? "Shor’s Cryptography" : "Quantum-MIPS";
   // Resolve UUIDs against the active family before deriving either the matrix or the download pool.
   const selectedRuns = selectedBenchmarkRuns(runs, selectedIds);
@@ -42,7 +52,7 @@ export function PersistentRunHistory({ history, onRestore, workload }: { workloa
   return (
     <section aria-label="Persistent Run History" className="mt-4 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/35">
       <div className="console-header flex flex-wrap items-center justify-between gap-2 border-b border-slate-700/80 p-3">
-        <div className="flex items-center gap-2"><Database size={16} className="text-cyan-400" /><div><h2 className="text-sm font-semibold text-cyan-100">Persistent Run History</h2><p className="mt-0.5 text-[10px] text-slate-500">Showing latest {visibleRuns.length} of {candidates.length} saved {workloadLabel} {namedOnly ? "snapshots" : "runs"} · Central time</p></div></div>
+        <div className="flex items-center gap-2"><Database size={16} className="text-cyan-400" /><div><h2 className="text-sm font-semibold text-cyan-100">Persistent Run History</h2><p className="mt-0.5 text-[10px] text-slate-500">Showing latest {visibleRuns.length} of {candidates.length} saved {workloadLabel} {filter === "pinned" ? "snapshots" : "runs"} · Central time</p></div></div>
         <div className="flex flex-wrap items-center gap-2">
           {(["csv", "json"] as const).map(format => <button type="button" key={format} disabled={!exportRuns.length} onClick={() => exportTelemetry(format)} className="inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-cyan-400/25 px-2.5 py-1.5 text-[11px] text-cyan-200 hover:bg-cyan-400/10 disabled:opacity-40"><Download size={12} />Export {format.toUpperCase()}</button>)}
           {candidates.length > 5 && <button type="button" aria-expanded={showAll} aria-controls={listId} onClick={() => setShowAll(value => !value)} className="inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-slate-700 px-2.5 py-1.5 text-[11px] text-slate-300 hover:border-cyan-400/50">{showAll ? "Show latest 5" : `Show all ${candidates.length} runs`}<ChevronDown size={12} className={showAll ? "rotate-180" : ""} /></button>}
@@ -51,7 +61,7 @@ export function PersistentRunHistory({ history, onRestore, workload }: { workloa
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 p-2">
         <div role="group" aria-label="Benchmark history filter" className="flex flex-wrap gap-1">
-          {[false, true].map(value => <button key={String(value)} type="button" aria-pressed={namedOnly === value} onClick={() => { setNamedOnly(value); setShowAll(false); setDownloadMessage(null); }} className={`min-h-8 rounded-md px-3 py-1 text-[11px] ${namedOnly === value ? "bg-cyan-400/10 text-cyan-200" : "text-slate-400 hover:bg-slate-800"}`}>{value ? "Named Snapshots Only" : "All Recent Runs"}</button>)}
+          {filters.map(({ value, label, count }) => <button key={value} type="button" aria-pressed={filter === value} aria-controls={listId} onClick={() => { setFilter(value); setShowAll(false); setDownloadMessage(null); }} className={`min-h-8 rounded-md px-3 py-1 text-[11px] ${filter === value ? "bg-cyan-400/10 text-cyan-200" : "text-slate-400 hover:bg-slate-800"}`}>{label} ({count})</button>)}
         </div>
         <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-400">
           <span role="status" aria-label="Benchmark selection status">{selectedRuns.length} / {MAX_COMPARISON_RUNS} selected · Exporting {selectedRuns.length ? `${selectedRuns.length} selected runs (including hidden rows)` : `${visibleRuns.length} displayed rows`}</span>
@@ -66,7 +76,7 @@ export function PersistentRunHistory({ history, onRestore, workload }: { workloa
         {history.availability === "loading" && <p className="flex items-center gap-2 py-4 text-xs text-slate-400"><LoaderCircle size={14} className="animate-spin" />Loading saved runs…</p>}
         {history.availability === "ready" && runs.length === 0 && <p className="py-6 text-center text-sm text-slate-400">No saved {workloadLabel} runs yet. Completed simulations for this workload will appear here automatically.</p>}
       </div>}
-      {namedOnly && candidates.length === 0 && <p className="p-4 text-xs text-slate-400">No named {workloadLabel} snapshots yet. Capture a completed run or name a recent run.</p>}
+      {filter !== "all" && runs.length > 0 && candidates.length === 0 && <p className="p-4 text-xs text-slate-400">{filter === "pinned" ? `No pinned or named ${workloadLabel} snapshots yet. Capture a completed run or name a recent run.` : `No loaded ${workloadLabel} runs have a NOMINAL coherence status.`}</p>}
       <BenchmarkComparison runs={selectedRuns} onRemove={toggleSelection} />
       <div id={listId} role="region" aria-label="Benchmark Comparison Table" tabIndex={0} className="overflow-x-auto">
         <table className="w-full min-w-[1280px] table-fixed text-left">
