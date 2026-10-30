@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { CLIENT_SESSION_STORAGE_KEY, createClientId, createSessionClient, getClientSessionId } from "./client-session";
 import { isRunSessionId, readRunSession, RUN_SESSION_HEADER } from "./run-session";
+import { SESSION_A, SESSION_B } from "./test-support/api";
 
 const storage = () => {
   const values = new Map<string, string>();
@@ -27,14 +28,30 @@ test("a browser initializes once, survives reloads, and isolates independent ses
 });
 
 test("stored tokens follow the server contract and invalid values are replaced", () => {
-  for (const stored of ["existing_session-1", "", "a,b", "bad token", "x".repeat(129)]) {
+  for (const stored of [SESSION_A, SESSION_A.toUpperCase(), "existing_session-1", "", "a,b", "bad token", "x".repeat(129)]) {
     const saved = storage(); saved.setItem(CLIENT_SESSION_STORAGE_KEY, stored);
     const client = createSessionClient(() => ({ sessionStorage: saved }));
     const token = client.getSessionId();
     assert.ok(isRunSessionId(token));
-    if (stored === "existing_session-1") assert.equal(token, stored); else assert.notEqual(token, stored);
+    if (isRunSessionId(stored)) assert.equal(token, stored.toLowerCase()); else assert.notEqual(token, stored);
     assert.equal(saved.getItem(CLIENT_SESSION_STORAGE_KEY), token);
   }
+});
+
+test("session validation requires the complete UUID v4 representation and normalizes hex case", () => {
+  for (const invalid of [null, undefined, 42, {}, "", "session-a", "00000000-0000-0000-0000-000000000000",
+    SESSION_A.replace("-4996-", "-1996-"), SESSION_A.replace("-8cbd-", "-7cbd-"),
+    SESSION_A.replaceAll("-", ""), `{${SESSION_A}}`, `urn:uuid:${SESSION_A}`, `${SESSION_A},${SESSION_B}`,
+    `${SESSION_A}\n`, ` ${SESSION_A}`, `${SESSION_A}suffix`]) {
+    assert.equal(isRunSessionId(invalid), false, String(invalid));
+  }
+  for (const valid of [SESSION_A, SESSION_A.toUpperCase(), SESSION_A.replace("-8cbd-", "-bcbd-")]) {
+    assert.ok(isRunSessionId(valid));
+    assert.equal(readRunSession(new Request("http://localhost/api/runs", { headers: { [RUN_SESSION_HEADER]: valid } })), valid.toLowerCase());
+  }
+  assert.throws(() => readRunSession(new Request("http://localhost/api/runs")), /canonical UUID v4/);
+  const combined = new Headers([[RUN_SESSION_HEADER, SESSION_A], [RUN_SESSION_HEADER, SESSION_B]]);
+  assert.throws(() => readRunSession(new Request("http://localhost/api/runs", { headers: combined })), /canonical UUID v4/);
 });
 
 test("blocked storage access, reads, or writes keep a stable page-local fallback", () => {

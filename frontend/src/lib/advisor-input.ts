@@ -9,6 +9,10 @@ import { WORKLOADS, validWorkloadScale, workloadScaleLabel } from "@/lib/workloa
 import { pipelineTiming } from "@/lib/kpi-metrics";
 
 export const ADVISOR_BODY_LIMIT = 65_536;
+export const ADVISOR_TEXT_LIMIT = 100;
+// Covers supported RSA/slow trapped-ion projections without admitting years of latency.
+export const ADVISOR_MAX_LATENCY_MS = 30 * 24 * 60 * 60 * 1000;
+export const ADVISOR_MAX_CIRCUIT_DEPTH = 100_000_000_000;
 const MAX_QUBITS = 2_147_483_647; // Matches FastAPI's positive int32 capacity contract.
 const TIERS = ["Sequential Minimum", "Multi-Oracle Ceiling", "Blocked · statevector memory", "Space-Optimized Sequential", "Windowed Parallel", "Carry-Lookahead Parallel",
   "Blocked · insufficient capacity", "Blocked · upstream stage unavailable", "Unavailable · unsupported QPU route"];
@@ -27,9 +31,22 @@ function object(value: unknown): Record<string, unknown> {
 /**
  * Bound and normalize a string while removing control and invisible direction-changing characters.
  */
-function clean(value: unknown, maxLength = 100): string {
+function clean(value: unknown, maxLength = ADVISOR_TEXT_LIMIT): string {
   if (typeof value !== "string" || value.length > maxLength) invalid();
-  return value.normalize("NFKC").replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g, "").trim();
+  const normalized = value.normalize("NFKC").replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g, "").trim();
+  if (normalized.length > maxLength) invalid();
+  return normalized;
+}
+
+/** Bound untrusted explanatory text before fixed-vocabulary classification; never forward it verbatim. */
+export function sanitizeAdvisorText(value: unknown): string {
+  if (typeof value !== "string") invalid();
+  return value.normalize("NFKC")
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g, " ")
+    .replace(/<\|[^>]{0,100}\|>|\[\/?INST\]|<<\/?SYS>>/gi, "")
+    .replace(/\b(?:SYSTEM|ASSISTANT|USER|DEVELOPER|TOOL)\s*:/gi, "")
+    .replace(/[<>{}\[\]`]/g, "")
+    .replace(/\s+/g, " ").trim().slice(0, ADVISOR_TEXT_LIMIT);
 }
 
 /**
@@ -42,9 +59,14 @@ function choice<T extends string>(value: unknown, allowed: readonly T[]): T {
 }
 
 /**
- * Validate finite bounded numeric metrics without coercion, optionally requiring a safe integer.
+ * Coerce only complete, bounded JSON-style decimal strings. Reject booleans,
+ * arrays, whitespace, hex, partial numbers, non-finite values, and unsafe integers.
  */
 function number(value: unknown, minimum: number, maximum: number, integer = false): number {
+  if (typeof value === "string") {
+    if (value.length > 32 || value.trim() !== value || !/^(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(value)) invalid();
+    value = Number(value);
+  }
   if (typeof value !== "number" || !Number.isFinite(value) || value < minimum || value > maximum ||
       (integer && !Number.isSafeInteger(value))) invalid();
   return value;
@@ -64,17 +86,17 @@ function metrics(value: unknown): StageTelemetry["metrics"] {
   const numeric = [
     ["index_bits", 1, 31, true], ["candidate_count", 1, 1048576, true], ["grover_iterations", 0, 10000, true],
     ["statevector_qubits", 0, MAX_QUBITS, true], ["planned_qubits", 0, MAX_QUBITS, true],
-    ["compute_latency_ms", 0, Number.MAX_SAFE_INTEGER, false], ["depth_multiplier", 0, 1, false],
-    ["measured_peak_probability", 0, 1, false], ["aer_runtime_ms", 0, Number.MAX_SAFE_INTEGER, false],
+    ["compute_latency_ms", 0, ADVISOR_MAX_LATENCY_MS, false], ["depth_multiplier", 0, 1, false],
+    ["measured_peak_probability", 0, 1, false], ["aer_runtime_ms", 0, ADVISOR_MAX_LATENCY_MS, false],
     ["qubits_required", 1, MAX_QUBITS, true], ["available_qubits", 1, MAX_QUBITS, true],
     ["qubits_allocated", 0, MAX_QUBITS, true], ["minimum_qubits_required", 1, MAX_QUBITS, true],
-    ["idle_qubits", 0, MAX_QUBITS, true], ["circuit_depth", 0, Number.MAX_SAFE_INTEGER, true],
-    ["coherence_survival_pct", 0, 100, false], ["io_state_prep_ms", 0, Number.MAX_SAFE_INTEGER, false],
-    ["launch_transfer_overhead_ms", 0, Number.MAX_SAFE_INTEGER, false], ["compute_latency_factor", 0, Number.MAX_SAFE_INTEGER, false],
-    ["statevector_memory_budget_gib", 1, Number.MAX_SAFE_INTEGER, false],
-    ["reference_circuit_depth", 0, Number.MAX_SAFE_INTEGER, true], ["reference_qubits", 1, MAX_QUBITS, true],
+    ["idle_qubits", 0, MAX_QUBITS, true], ["circuit_depth", 0, ADVISOR_MAX_CIRCUIT_DEPTH, true],
+    ["coherence_survival_pct", 0, 100, false], ["io_state_prep_ms", 0, 60_000, false],
+    ["launch_transfer_overhead_ms", 0, 60_000, false], ["compute_latency_factor", 0, 1000, false],
+    ["statevector_memory_budget_gib", 1, 65_536, false],
+    ["reference_circuit_depth", 0, ADVISOR_MAX_CIRCUIT_DEPTH, true], ["reference_qubits", 1, MAX_QUBITS, true],
     ["routing_depth_multiplier", 0, 1, false], ["gate_time_multiplier", 0, 180, false],
-    ["coherence_decay_scale", 1, Number.MAX_SAFE_INTEGER, false], ["io_readout_ms", 0, Number.MAX_SAFE_INTEGER, false],
+    ["coherence_decay_scale", 1, 1_000_000_000, false], ["io_readout_ms", 0, 60_000, false],
   ] as const;
   for (const [key, min, max, integer] of numeric) {
     if (Object.hasOwn(source, key) && !(key === "depth_multiplier" && source[key] === null)) result[key] = number(source[key], min, max, integer);
@@ -151,15 +173,17 @@ function validateRun(value: unknown): CompletedRun {
     for (const field of ["qubits_allocated", "idle_qubits"]) {
       if (typeof numeric[field] === "number" && node === "QPU" && numeric[field] > (available as number)) invalid();
     }
+    if (node === "QPU" && typeof numeric.qubits_allocated === "number" && typeof numeric.idle_qubits === "number" &&
+        numeric.qubits_allocated + numeric.idle_qubits > (available as number)) invalid();
     normalized[key] = { name: WORKLOADS[workload].stages[PIPELINE.findIndex(stage => stage.key === key)] ?? label, node,
-      latency_ms: number(stage.latency_ms, 0, Number.MAX_SAFE_INTEGER),
+      latency_ms: number(stage.latency_ms, 0, ADVISOR_MAX_LATENCY_MS),
       status: choice(stage.status, ["OPTIMAL", "WARNING", "CRITICAL_BOTTLENECK"]),
       output_summary: "", metrics: numeric };
   }
   for (const field of ["workload_name", "scale_label"]) if (source[field] !== undefined && typeof source[field] !== "string") invalid();
   // Dynamic explanations are deliberately discarded; only a recognized fixed
   // reason reaches the model or the deterministic fallback.
-  const reason = clean(source.primary_bottleneck, ADVISOR_BODY_LIMIT);
+  const reason = sanitizeAdvisorText(source.primary_bottleneck);
   const bottleneck = BOTTLENECKS.find((prefix) => reason === prefix || reason.startsWith(`${prefix} (`) || reason.startsWith(`${prefix}:`)) ?? "UNCLASSIFIED BOTTLENECK";
   const telemetry: HybridTelemetryResponse = {
     workload_id: request.workload_id,
@@ -168,7 +192,7 @@ function validateRun(value: unknown): CompletedRun {
     execution_mode: choice(source.execution_mode, ["LIVE_QISKIT_AER", "NISQ_ANALYTICAL_PROFILER"]),
     primary_bottleneck: bottleneck, stages: normalized,
   };
-  if (totalLatency(telemetry) > Number.MAX_SAFE_INTEGER) invalid();
+  if (totalLatency(telemetry) > ADVISOR_MAX_LATENCY_MS || pipelineTiming(telemetry).totalMs > ADVISOR_MAX_LATENCY_MS) invalid();
   return { id, completedAt, request, telemetry };
 }
 

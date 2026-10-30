@@ -1,3 +1,4 @@
+import { SESSION_A, SESSION_B, SESSION_C } from "./test-support/api";
 import assert from "node:assert/strict";
 import { beforeEach, test, type TestContext } from "node:test";
 import { POST } from "@/app/api/advisor/route";
@@ -26,8 +27,8 @@ const fixture = () => ({ current: {
   } },
 } });
 const sections = { routingDiagnosis: "CPU → QPU → CPU routing completes without a critical bottleneck.", spaceTimeTradeOff: "28 qubits reach the carry-lookahead ceiling for N = 21.", optimizationRecommendation: "Compare the NISQ hardware profile at the same capacity and scale." };
-const request = (value: unknown, sessionId?: string) => new Request("http://localhost/api/advisor", { method: "POST", body: JSON.stringify(value),
-  ...(sessionId === undefined ? {} : { headers: { "X-Session-Id": sessionId } }),
+const request = (value: unknown, sessionId: string = SESSION_A) => new Request("http://localhost/api/advisor", { method: "POST", body: JSON.stringify(value),
+  headers: { "X-Session-Id": sessionId },
 });
 const response = () => Response.json({ candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify(sections) }] } }],
   usageMetadata: { promptTokenCount: 1000, candidatesTokenCount: 90, totalTokenCount: 1090 } });
@@ -37,7 +38,7 @@ function repository(t: TestContext) {
   const original = global.qSplitDatabase;
   const env = { DATABASE_URL: process.env.DATABASE_URL, GEMINI_API_KEY: process.env.GEMINI_API_KEY, GEMINI_MODEL: process.env.GEMINI_MODEL, VERCEL: process.env.VERCEL };
   const url = "postgresql://test:test@cache-test.invalid/test";
-  const rows = new Map<string, { advisorInsight: AdvisorInsight | null; sessionId: string | null }>([[fixture().current.id, { advisorInsight: null, sessionId: null }]]);
+  const rows = new Map<string, { advisorInsight: AdvisorInsight | null; sessionId: string | null }>([[fixture().current.id, { advisorInsight: null, sessionId: SESSION_A }]]);
   const entries = new Map<string, { runId: string; advisorInsight: AdvisorInsight }>();
   const stats = { reads: 0, writes: 0, cacheWrites: 0, failRead: false, failWrite: false };
   process.env.DATABASE_URL = url; process.env.GEMINI_API_KEY = "test-key"; process.env.GEMINI_MODEL = "gemini-3.5-flash-lite";
@@ -116,10 +117,10 @@ test("five session provider attempts exhaust the quota while persistent cache hi
   const gate = t.mock.method(advisorRateLimiter, "consume", advisorRateLimiter.consume.bind(advisorRateLimiter));
   t.mock.method(globalThis, "fetch", async () => { calls++; return response(); });
   for (let index = 0; index < 5; index++) {
-    const result = await (await POST(rateRequest(index, "limited-session"))).json();
+    const result = await (await POST(rateRequest(index, SESSION_A))).json();
     assert.equal(result.insight.source, "gemini");
   }
-  const limited = await POST(rateRequest(5, "limited-session"));
+  const limited = await POST(rateRequest(5, SESSION_A));
   const body = await limited.json();
   assert.equal(limited.status, 200, "Local limits preserve the deterministic-fallback response contract");
   assert.equal(body.insight.source, "fallback");
@@ -129,7 +130,7 @@ test("five session provider attempts exhaust the quota while persistent cache hi
   assert.equal(calls, 5);
   const checks = gate.mock.callCount(), reads = stats.reads;
   for (let index = 0; index < 10; index++) {
-    const cached = await (await POST(rateRequest(0, "limited-session"))).json();
+    const cached = await (await POST(rateRequest(0, SESSION_A))).json();
     assert.equal(cached.insight.source, "cached");
     assert.equal(cached.insight.telemetry.totalTokens, 0);
   }
@@ -145,17 +146,17 @@ test("eight concurrent provider attempts across sessions exhaust the trusted IP 
   let calls = 0;
   t.mock.method(globalThis, "fetch", async () => { calls++; return response(); });
   const replies = await Promise.all(Array.from({ length: 9 }, (_, index) =>
-    (index % 2 ? analyzeTelemetry : POST)(rateRequest(index, `ip-session-${index}`))));
+    (index % 2 ? analyzeTelemetry : POST)(rateRequest(index, `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`))));
   const results = await Promise.all(replies.map(reply => reply.json()));
   assert.equal(results.filter(result => result.insight.source === "gemini").length, 8);
   const denied = results.findIndex(result => result.insight.fallbackReason === "rate_limited");
   assert.notEqual(denied, -1);
   assert.match(results[denied].insight.notice, /Live AI request limit reached.*Try again in/);
   assert.equal(calls, 8, "Rotating sessions and generic forwarding headers cannot bypass the connecting-IP quota");
-  const cached = await (await POST(rateRequest(0, "new-cached-session"))).json();
+  const cached = await (await POST(rateRequest(0, SESSION_C))).json();
   assert.equal(cached.insight.source, "cached", "An exhausted IP can still read valid cached insights");
   for (let index = 0; index < 5; index++) {
-    const otherIp = await (await POST(rateRequest(20 + index, `ip-session-${denied}`, "203.0.113.2"))).json();
+    const otherIp = await (await POST(rateRequest(20 + index, `00000000-0000-4000-8000-${String(denied).padStart(12, "0")}`, "203.0.113.2"))).json();
     assert.equal(otherIp.insight.source, "gemini", "An IP rejection never spends the rejected caller's session quota");
   }
   assert.equal(calls, 13);
@@ -167,7 +168,7 @@ test("coalesced diagnostics consume only the leader's provider token", async t =
   const gate = t.mock.method(advisorRateLimiter, "consume", advisorRateLimiter.consume.bind(advisorRateLimiter));
   let calls = 0;
   t.mock.method(globalThis, "fetch", async () => { calls++; return response(); });
-  const replies = await Promise.all(Array.from({ length: 12 }, (_, index) => POST(rateRequest(0, `shared-session-${index}`))));
+  const replies = await Promise.all(Array.from({ length: 12 }, (_, index) => POST(rateRequest(0, `10000000-0000-4000-8000-${String(index).padStart(12, "0")}`))));
   const results = await Promise.all(replies.map(reply => reply.json()));
   assert.ok(results.every(result => result.insight.source === "gemini"));
   assert.equal(calls, 1);
@@ -182,17 +183,17 @@ test("missing provider credentials consume no quota and failed outbound attempts
   t.mock.method(globalThis, "fetch", async () => { calls++; return Response.json({}, { status: 503 }); });
   delete process.env.GEMINI_API_KEY;
   for (let index = 0; index < 10; index++) {
-    const result = await (await POST(request(fixture(), "offline-session"))).json();
+    const result = await (await POST(request(fixture(), SESSION_A))).json();
     assert.equal(result.insight.fallbackReason, "missing_key");
   }
   assert.equal(gate.mock.callCount(), 0);
   assert.equal(calls, 0);
   process.env.GEMINI_API_KEY = "test-key";
   for (let index = 0; index < 5; index++) {
-    const result = await (await POST(request(fixture(), "offline-session"))).json();
+    const result = await (await POST(request(fixture(), SESSION_A))).json();
     assert.equal(result.insight.fallbackReason, "provider_error");
   }
-  const limited = await (await POST(request(fixture(), "offline-session"))).json();
+  const limited = await (await POST(request(fixture(), SESSION_A))).json();
   assert.equal(limited.insight.fallbackReason, "rate_limited");
   assert.equal(calls, 5, "Unsuccessful provider attempts still count toward the live-call budget");
 });
@@ -301,14 +302,14 @@ test("Advisor cache hits are global across sessions while IDs and persistence re
   const a = fixture(), b = fixture();
   b.current.id = "4d9c09fa-7843-4c63-9d2b-556f74c4e5ac";
   b.current.completedAt = "2026-10-29T16:00:00.000Z";
-  rows.set(a.current.id, { sessionId: "session-a", advisorInsight: null });
-  rows.set(b.current.id, { sessionId: "session-b", advisorInsight: null });
+  rows.set(a.current.id, { sessionId: SESSION_A, advisorInsight: null });
+  rows.set(b.current.id, { sessionId: SESSION_B, advisorInsight: null });
   t.mock.method(globalThis, "fetch", async () => { calls++; return response(); });
-  const first = await (await POST(request(a, "session-a"))).json();
+  const first = await (await POST(request(a, SESSION_A))).json();
   assert.equal(first.insight.source, "gemini"); assert.equal(first.persistence.status, "saved");
   const originalA = structuredClone(rows.get(a.current.id)!);
   process.env.GEMINI_API_KEY = "";
-  const second = await (await analyzeTelemetry(request(b, "session-b"))).json();
+  const second = await (await analyzeTelemetry(request(b, SESSION_B))).json();
   assert.equal(second.insight.source, "cached"); assert.equal(second.persistence.status, "saved");
   assert.equal(second.insight.cacheKey, first.insight.cacheKey);
   assert.equal(second.insight.runId, b.current.id); assert.equal(second.insight.previousRunId, null);
@@ -317,17 +318,17 @@ test("Advisor cache hits are global across sessions while IDs and persistence re
   assert.deepEqual(rows.get(a.current.id), originalA, "Reading a shared diagnostic cannot mutate its source run");
   assert.deepEqual(rows.get(b.current.id)!.advisorInsight, second.insight);
   assert.ok(!JSON.stringify(second).includes(a.current.id), "A shared response must not expose another run's identity");
-  for (const session of ["session-b", undefined]) {
+  for (const session of [SESSION_B, SESSION_C]) {
     const foreign = await (await POST(request(a, session))).json();
     assert.equal(foreign.persistence.status, "pending");
-    assert.deepEqual(rows.get(a.current.id), originalA, "Foreign/legacy requests cannot update another session's insight");
+    assert.deepEqual(rows.get(a.current.id), originalA, "Foreign requests cannot update another session's insight");
   }
   assert.equal(calls, 1);
   const reads = stats.reads, writes = stats.writes;
   assert.equal((await POST(request(a, ""))).status, 400);
   assert.equal(stats.reads, reads); assert.equal(stats.writes, writes);
   rows.clear();
-  const afterDeletion = await (await POST(request(b, "session-b"))).json();
+  const afterDeletion = await (await POST(request(b, SESSION_B))).json();
   assert.equal(afterDeletion.insight.source, "cached", "Deleting runs does not evict the global Advisor cache");
   assert.equal(afterDeletion.persistence.status, "pending"); assert.equal(calls, 1);
 });
@@ -341,7 +342,7 @@ test("client-supplied run insights cannot populate or poison the shared Advisor 
     routingDiagnosis: "This client-supplied diagnostic must never be served as shared generated output.",
   } };
   const other = fixture(); other.current.id = "4d9c09fa-7843-4c63-9d2b-556f74c4e5ac";
-  const result = await (await POST(request(other, "session-b"))).json();
+  const result = await (await POST(request(other, SESSION_B))).json();
   assert.equal(result.insight.source, "gemini"); assert.equal(calls, 2);
   assert.equal(result.insight.sections.routingDiagnosis, sections.routingDiagnosis);
 });
@@ -386,15 +387,15 @@ test("concurrent sessions share generation and bind current and previous UUIDs t
   aPrevious.id = "4d9c09fa-7843-4c63-9d2b-556f74c4e5ad";
   b.current.id = "4d9c09fa-7843-4c63-9d2b-556f74c4e5ac";
   bPrevious.id = "4d9c09fa-7843-4c63-9d2b-556f74c4e5ae";
-  rows.set(a.current.id, { sessionId: "session-a", advisorInsight: null });
-  rows.set(b.current.id, { sessionId: "session-b", advisorInsight: null });
+  rows.set(a.current.id, { sessionId: SESSION_A, advisorInsight: null });
+  rows.set(b.current.id, { sessionId: SESSION_B, advisorInsight: null });
   let release!: () => void, started!: () => void;
   const ready = new Promise<void>(resolve => { started = resolve; });
   t.mock.method(globalThis, "fetch", async () => {
     calls++; started(); await new Promise<void>(resolve => { release = resolve; }); return response();
   });
-  const first = POST(request({ ...a, previous: aPrevious }, "session-a")); await ready;
-  const second = POST(request({ ...b, previous: bPrevious }, "session-b"));
+  const first = POST(request({ ...a, previous: aPrevious }, SESSION_A)); await ready;
+  const second = POST(request({ ...b, previous: bPrevious }, SESSION_B));
   await new Promise(resolve => setTimeout(resolve, 0)); release();
   const [resultA, resultB] = await Promise.all([first.then(r => r.json()), second.then(r => r.json())]);
   assert.equal(calls, 1); assert.equal(resultB.insight.telemetry.shared, true);
@@ -404,7 +405,7 @@ test("concurrent sessions share generation and bind current and previous UUIDs t
     assert.equal(result.persistence.status, "saved");
     assert.equal(rows.get(current.id)!.advisorInsight!.runId, current.id);
   }
-  const cachedB = await (await POST(request({ ...b, previous: bPrevious }, "session-b"))).json();
+  const cachedB = await (await POST(request({ ...b, previous: bPrevious }, SESSION_B))).json();
   assert.equal(cachedB.insight.source, "cached"); assert.equal(cachedB.insight.previousRunId, bPrevious.id);
   assert.equal(calls, 1);
 });

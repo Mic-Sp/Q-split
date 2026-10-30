@@ -33,7 +33,7 @@ export function createSessionClient(getBrowser: () => SessionBrowser | null = ()
     try {
       storage = browser.sessionStorage;
       const stored = storage.getItem(CLIENT_SESSION_STORAGE_KEY);
-      if (isRunSessionId(stored)) sessionId = stored;
+      if (isRunSessionId(stored)) sessionId = stored.toLowerCase();
     } catch { /* Privacy settings may reject storage access or reads. */ }
     if (!sessionId) sessionId = createClientId();
     try { storage?.setItem(CLIENT_SESSION_STORAGE_KEY, sessionId); } catch { /* Use memory for this page lifetime. */ }

@@ -1,3 +1,4 @@
+import { apiRequest, parseAdvisorPrompt } from "./test-support/api";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { HARDWARE_PROFILE_IDS, type HardwareProfile } from "@/types/telemetry";
@@ -112,7 +113,7 @@ test("advisor route uses four-profile system facts for live output and determini
     const system = body.systemInstruction.parts[0].text;
     for (const profile of HARDWARE_PROFILE_IDS) assert.ok(system.includes(profile));
     for (const fact of ["0.78x", "0.55x", "180x", "8500", "53 active qubits"]) assert.ok(system.includes(fact));
-    const prompt = JSON.parse(body.contents[0].parts[0].text);
+    const prompt = parseAdvisorPrompt(body.contents[0].parts[0].text);
     assert.equal(prompt.current.architecture.topology, "All-to-All Ion Trap");
     assert.equal(prompt.previous.architecture.topology, "2D Square Grid");
     return Response.json({ candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify({
@@ -121,7 +122,7 @@ test("advisor route uses four-profile system facts for live output and determini
       optimizationRecommendation: "Compare Google Weber at the same capacity and scale to isolate gate-time differences.",
     }) }] } }], usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 60, totalTokenCount: 160 } });
   });
-  const request = (current: CompletedRun, previous?: CompletedRun) => new Request("http://localhost/api/advisor", { method: "POST", body: JSON.stringify({ current, previous }) });
+  const request = (current: CompletedRun, previous?: CompletedRun) => apiRequest("http://localhost/api/advisor", { method: "POST", body: JSON.stringify({ current, previous }) });
   const response = await POST(request(fixture("ionq_forte_trapped_ion"), fixture("google_weber_grid")));
   assert.equal(response.status, 200); assert.equal((await response.json()).insight.source, "gemini");
   delete process.env.GEMINI_API_KEY;

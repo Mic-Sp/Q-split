@@ -15,7 +15,7 @@ export async function PATCH(request: Request, { params }: Context) {
   const { id } = await params;
   if (!validRunId(id)) return Response.json({ message: "Provide a valid run UUID." }, { status: 400, headers });
   let metadata: ReturnType<typeof snapshotPatch>;
-  let sessionId: string | null;
+  let sessionId: string;
   try {
     sessionId = readRunSession(request);
     if (Number(request.headers.get("content-length")) > 2048) return Response.json({ message: "Snapshot metadata exceeds 2 KiB." }, { status: 413, headers });
@@ -43,7 +43,7 @@ export async function PATCH(request: Request, { params }: Context) {
 export async function DELETE(request: Request, { params }: Context) {
   const { id } = await params;
   if (!validRunId(id)) return Response.json({ message: "Provide a valid run UUID." }, { status: 400, headers });
-  let sessionId: string | null;
+  let sessionId: string;
   try { sessionId = readRunSession(request); } catch (error) {
     return Response.json({ message: (error as Error).message }, { status: 400, headers });
   }

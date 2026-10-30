@@ -14,7 +14,7 @@ const headers = { "Cache-Control": "no-store" };
  * cannot crowd out the active family's recent window. Responses are never cached.
  */
 export async function GET(request: Request) {
-  let sessionId: string | null;
+  let sessionId: string;
   try { sessionId = readRunSession(request); } catch (error) {
     return Response.json({ message: (error as Error).message }, { status: 400, headers });
   }
@@ -53,7 +53,7 @@ export async function GET(request: Request) {
  */
 export async function POST(request: Request) {
   let data: ReturnType<typeof createRunRecord>;
-  let sessionId: string | null;
+  let sessionId: string;
   try {
     sessionId = readRunSession(request);
     if (Number(request.headers.get("content-length")) > 1_048_576) {

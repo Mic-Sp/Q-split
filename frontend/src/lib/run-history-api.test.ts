@@ -1,3 +1,4 @@
+import { apiRequest, SESSION_A } from "./test-support/api";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Prisma, PrismaClient, SimulationRun } from "@/generated/prisma/client";
@@ -18,7 +19,7 @@ const fixture = () => ({
     },
   },
 });
-const postRequest = (body: unknown) => new Request("http://localhost/api/runs", { method: "POST", body: JSON.stringify(body) });
+const postRequest = (body: unknown) => apiRequest("http://localhost/api/runs", { method: "POST", body: JSON.stringify(body) });
 const cache = globalThis as unknown as { qSplitDatabase?: { url: string; client: PrismaClient; schemaVersion?: string } };
 
 test("history routes handle configuration, validation, saves, ordering, and failures without a live database", async () => {
@@ -26,14 +27,14 @@ test("history routes handle configuration, validation, saves, ordering, and fail
   const previousCache = cache.qSplitDatabase;
   try {
     process.env.DATABASE_URL = "";
-    let response = await GET(new Request("http://localhost/api/runs?limit=20"));
+    let response = await GET(apiRequest("http://localhost/api/runs?limit=20"));
     assert.equal(response.status, 200);
     assert.equal((await response.json()).status, "unconfigured");
     response = await POST(postRequest(fixture()));
     assert.equal((await response.json()).status, "unconfigured");
-    assert.equal((await GET(new Request("http://localhost/api/runs?limit=999"))).status, 400);
+    assert.equal((await GET(apiRequest("http://localhost/api/runs?limit=999"))).status, 400);
     assert.equal((await POST(postRequest({}))).status, 400);
-    assert.equal((await POST(new Request("http://localhost/api/runs", { method: "POST", headers: { "Content-Length": "1048577" }, body: "{}" }))).status, 413);
+    assert.equal((await POST(apiRequest("http://localhost/api/runs", { method: "POST", headers: { "Content-Length": "1048577" }, body: "{}" }))).status, 413);
 
     // Inject a repository double into the server-only singleton, never Neon.
     const rows = new Map<string, SimulationRun>();
@@ -51,14 +52,14 @@ test("history routes handle configuration, validation, saves, ordering, and fail
         },
         simulationRun: {
           upsert: async ({ where, create, update }: { where: { id: string; sessionId: string | null }; create: SimulationRun; update: Partial<SimulationRun> }) => {
-            assert.equal(where.sessionId, null);
-            assert.equal(create.sessionId, null);
+            assert.equal(where.sessionId, SESSION_A);
+            assert.equal(create.sessionId, SESSION_A);
             if (fail) throw Object.assign(new Error("secret-password must not be returned"), { code: fail });
             const row = rows.has(where.id) ? { ...rows.get(where.id)!, ...update } : { ...create, createdAt: new Date("2026-10-26T16:00:01.000Z"), snapshotName: null, isSnapshot: false };
             rows.set(where.id, row); return row;
           },
           findMany: async ({ take, orderBy, where, select }: { take?: number; orderBy: unknown; where: { sessionId: string | null; isSnapshot?: boolean; snapshotName?: null }; select?: { id: boolean } }) => {
-            assert.equal(where.sessionId, null);
+            assert.equal(where.sessionId, SESSION_A);
             assert.deepEqual(orderBy, [{ [select ? "createdAt" : "completedAt"]: "desc" }, { id: "desc" }]);
             if (fail) throw Object.assign(new Error("secret-password must not be returned"), { code: fail });
             return [...rows.values()].filter(row => (where.isSnapshot === undefined || row.isSnapshot === where.isSnapshot) &&
@@ -85,16 +86,16 @@ test("history routes handle configuration, validation, saves, ordering, and fail
     response = await POST(postRequest(withInsight));
     assert.equal((await response.json()).run.advisorInsight.source, "fallback");
     await POST(postRequest(fixture()));
-    response = await GET(new Request("http://localhost/api/runs"));
+    response = await GET(apiRequest("http://localhost/api/runs"));
     assert.equal((await response.json()).runs[0].advisorInsight.source, "fallback", "Late ordinary saves must not erase an insight");
     assert.equal(rows.size, 1, "Saving an insight must update the existing run");
     const newer = fixture(); newer.id = "c367fe2e-f083-4996-8cbd-c895d7a26b8e"; newer.completedAt = "2026-10-26T17:00:00.000Z";
     await POST(postRequest(newer));
-    response = await GET(new Request("http://localhost/api/runs?limit=1"));
+    response = await GET(apiRequest("http://localhost/api/runs?limit=1"));
     const list = await response.json(); assert.equal(list.runs.length, 1); assert.equal(list.runs[0].id, newer.id);
     assert.equal(response.headers.get("Cache-Control"), "no-store");
     fail = "P2021";
-    response = await GET(new Request("http://localhost/api/runs"));
+    response = await GET(apiRequest("http://localhost/api/runs"));
     assert.equal(response.status, 503); assert.match((await response.json()).message, /database setup is incomplete.*current results remain available/);
     fail = "P1001";
     response = await POST(postRequest(fixture()));

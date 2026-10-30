@@ -70,7 +70,9 @@ Profile depth, latency, and coherence factors are comparative modeling assumptio
 
 Advisor provider requests use two 60-second sliding windows: at most **5 live attempts per browser session** and **8 per connecting IP**. Valid persistent-cache hits and coalesced followers consume no tokens; missing provider credentials also consume none. Limits are checked atomically immediately before the outbound request, so failed provider attempts count. When a limit is reached, both advisor endpoint names return the usual HTTP 200 deterministic fallback with a cooldown notice and zero new model usage.
 
-On Vercel, IP identification uses the platform-controlled `x-vercel-forwarded-for` header, falling back to `x-real-ip` only when that header is absent. Arbitrary forwarding chains are ignored. Missing sessions share a legacy quota; missing, invalid, or untrusted IP headers share a conservative unknown-IP quota, including on non-Vercel hosts. See [Vercel's request-header documentation](https://vercel.com/docs/headers/request-headers#x-vercel-forwarded-for) for the forwarding trust boundary.
+On Vercel, IP identification uses the platform-controlled `x-vercel-forwarded-for` header, falling back to `x-real-ip` only when that header is absent. Arbitrary forwarding chains are ignored. Missing or malformed session UUIDs return `400`; missing, invalid, or untrusted IP headers share a conservative unknown-IP quota, including on non-Vercel hosts. See [Vercel's request-header documentation](https://vercel.com/docs/headers/request-headers#x-vercel-forwarded-for) for the forwarding trust boundary.
+
+Advisor input is validated before cache or provider access. Only complete decimal numbers or numeric strings within field-specific bounds are accepted, with exactly three known stages and supported workload scales. Latency totals are capped at 30 days and circuit depths at 100 billion to accommodate supported analytical projections. Display names, notes, snapshot labels, unknown metrics, and nested objects are excluded from model input. Remaining text is restricted to fixed vocabularies; bottleneck explanations are sanitized and capped at 100 characters before classification. The prompt encloses the resulting JSON in a `benchmark_telemetry` XML block and instructs the model to treat every value as passive data.
 
 The zero-dependency limiter is **process-local**: quotas survive warm-process/module reuse but are not coordinated across server instances or cold starts. Expired keys are automatically swept, and a 10,000-key cap rejects new identities instead of evicting active quotas. Strict deployment-wide provider budgets require a shared limiter or platform-level controls.
 
@@ -138,25 +140,28 @@ backend only executes simulations. From `frontend`, run `npm run db:generate` an
 `npm run db:migrate` to generate the client and deploy the additive migrations.
 Existing rows retain `sessionId = NULL` with their telemetry and snapshot metadata intact.
 
-Send the same optional `X-Session-Id` header on `GET /api/runs`, `POST /api/runs`,
+Send the same required `X-Session-Id` header on `GET /api/runs`, `POST /api/runs`,
 `PATCH /api/runs/:id`, `DELETE /api/runs/:id`, and `POST /api/advisor` (or
-`/api/analyze-telemetry`). Tokens are case-sensitive, contain 1–128 ASCII letters,
-digits, underscores, or hyphens, and should be unpredictable client-generated UUIDs.
+`/api/analyze-telemetry`). Tokens must be canonical hyphenated RFC 4122 UUID v4
+values with a valid variant, normalized to lowercase by the server. Missing or
+malformed tokens return `400` before payload parsing or database access.
 This is session isolation, not account authentication. The frontend automatically
 creates the token before its first history request, stores it under
 `q-split:session-id` in browser `sessionStorage`, and attaches it to every history,
 save, snapshot, deletion, and Advisor request. Reloads retain the workspace; a fresh
 tab session gets a new one. If storage is blocked, all requests share an in-memory
 token for that page lifetime. Comparisons and exports use this session's loaded
-history. No sign-in or session controls are required.
+history. Invalid legacy browser tokens are replaced with a fresh UUID v4. No sign-in
+or session controls are required.
 
 - Creates assign the header's session; payload fields cannot override ownership.
 - Each save atomically retains at most 20 unpinned runs per session across all
-  workloads, including the legacy `NULL` bucket. FIFO uses server creation time
+  workloads. FIFO uses server creation time
   (UUID breaks ties); retries preserve that time. Named or pinned snapshots never
   count toward the cap and are never pruned. Write conflicts retry the transaction.
 - Lists (including pinned snapshots and workload filters) and mutations use that
-  exact session. Missing headers select only the legacy `NULL` bucket.
+  exact session. Missing headers cannot access legacy `NULL` rows; those rows remain
+  unchanged and subject to the existing TTL policy.
 - Malformed headers return `400`. A foreign/missing snapshot update returns `404`;
   deletes remain idempotent `200` without affecting foreign rows. Reusing another
   session's run UUID on POST returns `409` without returning its contents.

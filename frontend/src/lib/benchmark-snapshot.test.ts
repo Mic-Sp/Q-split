@@ -1,3 +1,4 @@
+import { apiRequest, SESSION_A, SESSION_B, SESSION_C } from "./test-support/api";
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { PATCH, DELETE } from "@/app/api/runs/[id]/route";
@@ -25,9 +26,9 @@ const fixture = (): CompletedRun => ({ id, completedAt: "2026-10-27T12:00:00.000
   } },
 });
 const context = (runId = id) => ({ params: Promise.resolve({ id: runId }) });
-const patch = (body: unknown) => new Request(`http://localhost/api/runs/${id}`, { method: "PATCH", body: JSON.stringify(body) });
-const remove = () => new Request(`http://localhost/api/runs/${id}`, { method: "DELETE" });
-const record = () => ({ ...createRunRecord(fixture()), sessionId: null, createdAt: new Date(), snapshotName: null, isSnapshot: false, snapshotUpdatedAt: null }) as SimulationRun;
+const patch = (body: unknown) => apiRequest(`http://localhost/api/runs/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+const remove = () => apiRequest(`http://localhost/api/runs/${id}`, { method: "DELETE" });
+const record = () => ({ ...createRunRecord(fixture()), sessionId: SESSION_A, createdAt: new Date(), snapshotName: null, isSnapshot: false, snapshotUpdatedAt: null }) as SimulationRun;
 
 function repository(t: TestContext) {
   const global = globalThis as unknown as { qSplitDatabase?: { url: string; client: PrismaClient; schemaVersion?: string } };
@@ -98,7 +99,7 @@ test("PATCH names and renames only metadata; ordinary POST retries preserve the 
   assert.equal(first.snapshotName, "N21 Capacity Ceiling"); assert.equal(first.isSnapshot, true); assert.ok(first.snapshotUpdatedAt);
   assert.deepEqual(rows.get(id)!.telemetry, original.telemetry);
   assert.deepEqual(rows.get(id)!.requestPayload, original.requestPayload);
-  await POST(new Request("http://localhost/api/runs", { method: "POST", body: JSON.stringify({ ...fixture(), snapshotName: "must be ignored", isSnapshot: false }) }));
+  await POST(apiRequest("http://localhost/api/runs", { method: "POST", body: JSON.stringify({ ...fixture(), snapshotName: "must be ignored", isSnapshot: false }) }));
   assert.equal(rows.get(id)!.snapshotName, "N21 Capacity Ceiling");
   const renamed = await PATCH(patch({ snapshotName: "RSA comparison reference" }), context());
   assert.equal((await renamed.json()).run.snapshotName, "RSA comparison reference");
@@ -112,7 +113,7 @@ test("history returns old pinned snapshots separately from the bounded recent wi
   for (let i = 0; i < 25; i++) {
     const row = record(); row.id = `c367fe2e-f083-4996-8cbd-${String(i).padStart(12, "0")}`; row.completedAt = new Date(Date.UTC(2026, 9, 28, 12, i)); rows.set(row.id, row);
   }
-  const body = await (await GET(new Request("http://localhost/api/runs?limit=20"))).json();
+  const body = await (await GET(apiRequest("http://localhost/api/runs?limit=20"))).json();
   assert.equal(body.runs.length, 20); assert.equal(body.snapshots.length, 1); assert.equal(body.snapshots[0].id, id);
   const merged = mergeRuns([], [...body.runs, ...body.snapshots]);
   assert.equal(merged.length, 21); assert.equal(merged.find(row => row.id === id)?.snapshotName, "Old pinned baseline");
@@ -159,7 +160,7 @@ test("invalid IDs and patch payloads fail before database writes", async t => {
   assert.equal((await PATCH(patch({ snapshotName: "Valid" }), context("invalid-id"))).status, 400);
   assert.equal((await DELETE(remove(), context("invalid-id"))).status, 400);
   assert.equal((await PATCH(patch({ snapshotName: "bad\nname" }), context())).status, 400);
-  assert.equal((await PATCH(new Request(`http://localhost/api/runs/${id}`, { method: "PATCH", body: "{" }), context())).status, 400);
+  assert.equal((await PATCH(apiRequest(`http://localhost/api/runs/${id}`, { method: "PATCH", body: "{" }), context())).status, 400);
   assert.equal((await PATCH(patch({ snapshotName: "x".repeat(2049) }), context())).status, 413);
   assert.equal(stats.writes, 0);
 });
@@ -178,13 +179,13 @@ test("workload queries keep twenty own recent runs and only own pinned snapshots
         input.telemetry.workload_name = "Quantum-MIPS"; input.telemetry.scale_label = "M = 1,024";
         Object.assign(input.telemetry.stages.stage_2_quantum_kernel.metrics, { available_qubits: 23, qubits_allocated: 14, qubits_required: 14, parallelization_tier: "Sequential Minimum" });
       }
-      rows.set(input.id, { ...createRunRecord(input), sessionId: null, createdAt: new Date(input.completedAt), snapshotName: i === 0 ? `${workload} old pin` : null,
+      rows.set(input.id, { ...createRunRecord(input), sessionId: SESSION_A, createdAt: new Date(input.completedAt), snapshotName: i === 0 ? `${workload} old pin` : null,
         isSnapshot: i === 0, snapshotUpdatedAt: null } as SimulationRun);
     }
   }
   for (const workload of ["shors_crypto", "quantum_mips", "shors_factoring"]) {
     const canonical = workload === "shors_factoring" ? "shors_crypto" : workload;
-    const response = await GET(new Request(`http://localhost/api/runs?limit=20&workload=${workload}`));
+    const response = await GET(apiRequest(`http://localhost/api/runs?limit=20&workload=${workload}`));
     assert.equal(response.status, 200);
     const result = await response.json();
     assert.equal(result.runs.length, 20);
@@ -193,17 +194,17 @@ test("workload queries keep twenty own recent runs and only own pinned snapshots
     assert.ok(result.snapshots.every((run: { workloadId: string }) => run.workloadId === canonical));
   }
   const reads = stats.reads;
-  for (const workload of ["unknown", "", "__proto__"]) assert.equal((await GET(new Request(`http://localhost/api/runs?workload=${workload}`))).status, 400);
+  for (const workload of ["unknown", "", "__proto__"]) assert.equal((await GET(apiRequest(`http://localhost/api/runs?workload=${workload}`))).status, 400);
   assert.equal(stats.reads, reads, "Invalid filters fail before database access");
-  const recent = await (await GET(new Request("http://localhost/api/runs?workload=quantum_mips"))).json();
+  const recent = await (await GET(apiRequest("http://localhost/api/runs?workload=quantum_mips"))).json();
   const chosen = recent.runs[0];
-  const renamed = await PATCH(new Request(`http://localhost/api/runs/${chosen.id}`, { method: "PATCH", body: JSON.stringify({ snapshotName: "MIPS custom register" }) }), context(chosen.id));
+  const renamed = await PATCH(apiRequest(`http://localhost/api/runs/${chosen.id}`, { method: "PATCH", body: JSON.stringify({ snapshotName: "MIPS custom register" }) }), context(chosen.id));
   const saved = (await renamed.json()).run;
   assert.equal(saved.snapshotName, "MIPS custom register");
   assert.deepEqual(restoredConfiguration(saved), { ...chosen.request, available_qubits: 23 });
   assert.equal(saved.request.workload_id, "quantum_mips");
   assert.equal(rows.get(id)!.snapshotName, "Shor pinned baseline");
-  const removed = await DELETE(new Request(`http://localhost/api/runs/${chosen.id}`, { method: "DELETE" }), context(chosen.id));
+  const removed = await DELETE(apiRequest(`http://localhost/api/runs/${chosen.id}`, { method: "DELETE" }), context(chosen.id));
   assert.equal(removed.status, 200); assert.ok(!rows.has(chosen.id)); assert.ok(rows.has(id));
 });
 
@@ -216,29 +217,30 @@ function sessionRequest(path: string, method: string, sessionId: string | null, 
 
 test("sessions isolate recent runs, pinned snapshots, retries, renames, and deletes from other sessions and legacy callers", async t => {
   const { rows } = repository(t);
+  rows.get(id)!.sessionId = null;
   const a = { ...fixture(), id: "c367fe2e-f083-4996-8cbd-c895d7a26b8a" };
   const b = { ...fixture(), id: "c367fe2e-f083-4996-8cbd-c895d7a26b8b", completedAt: "2026-10-28T12:00:00.000Z" };
-  for (const [input, session] of [[a, "session-a"], [b, "session-b"]] as const) {
+  for (const [input, session] of [[a, SESSION_A], [b, SESSION_B]] as const) {
     assert.equal((await POST(sessionRequest("", "POST", session, { ...input, sessionId: "payload-cannot-change-owner" }))).status, 201);
     assert.equal(rows.get(input.id)!.sessionId, session);
     assert.equal((await PATCH(sessionRequest(`/${input.id}`, "PATCH", session, { snapshotName: session }), context(input.id))).status, 200);
     assert.equal((await POST(sessionRequest("", "POST", session, input))).status, 201);
     assert.equal(rows.get(input.id)!.snapshotName, session, "Retries preserve pins");
   }
-  for (const [session, expectedId] of [["session-a", a.id], ["session-b", b.id], [null, id]] as const) {
+  for (const [session, expectedId] of [[SESSION_A, a.id], [SESSION_B, b.id]] as const) {
     for (const query of ["?limit=1", "?limit=1&workload=shors_crypto", "?limit=1&workload=shors_factoring"]) {
       const response = await GET(sessionRequest(query, "GET", session));
       assert.equal(response.status, 200);
       const result = await response.json();
       assert.deepEqual(result.runs.map((run: { id: string }) => run.id), [expectedId]);
-      assert.deepEqual(result.snapshots.map((run: { id: string }) => run.id), session === null ? [] : [expectedId]);
+      assert.deepEqual(result.snapshots.map((run: { id: string }) => run.id), [expectedId]);
       assert.equal(response.headers.get("Cache-Control"), "no-store");
     }
     const otherWorkload = await (await GET(sessionRequest("?workload=quantum_mips", "GET", session))).json();
     assert.deepEqual(otherWorkload.runs, []); assert.deepEqual(otherWorkload.snapshots, []);
   }
   const original = structuredClone(rows.get(a.id)!);
-  for (const outsider of ["session-b", null]) {
+  for (const outsider of [SESSION_B, SESSION_C]) {
     for (const metadata of [{ snapshotName: "Hijacked" }, { isSnapshot: false }]) {
       assert.equal((await PATCH(sessionRequest(`/${a.id}`, "PATCH", outsider, metadata), context(a.id))).status, 404);
     }
@@ -249,29 +251,30 @@ test("sessions isolate recent runs, pinned snapshots, retries, renames, and dele
     assert.ok(!(await conflict.text()).includes("private"));
     assert.deepEqual(rows.get(a.id), original, "Foreign writes and UUID collisions cannot alter or return a run");
   }
-  assert.equal((await PATCH(sessionRequest(`/${id}`, "PATCH", "session-a", { snapshotName: "Claim legacy" }), context())).status, 404);
-  assert.equal((await DELETE(sessionRequest(`/${id}`, "DELETE", "session-a"), context())).status, 200);
+  assert.equal((await PATCH(sessionRequest(`/${id}`, "PATCH", SESSION_A, { snapshotName: "Claim legacy" }), context())).status, 404);
+  assert.equal((await DELETE(sessionRequest(`/${id}`, "DELETE", SESSION_A), context())).status, 200);
   assert.ok(rows.has(id));
-  assert.equal((await PATCH(sessionRequest(`/${a.id}`, "PATCH", "session-a", { snapshotName: "Renamed" }), context(a.id))).status, 200);
+  assert.equal((await PATCH(sessionRequest(`/${a.id}`, "PATCH", SESSION_A, { snapshotName: "Renamed" }), context(a.id))).status, 200);
   assert.equal(rows.get(a.id)!.snapshotName, "Renamed");
-  assert.equal((await DELETE(sessionRequest(`/${a.id}`, "DELETE", "session-a"), context(a.id))).status, 200);
+  assert.equal((await DELETE(sessionRequest(`/${a.id}`, "DELETE", SESSION_A), context(a.id))).status, 200);
   assert.ok(!rows.has(a.id)); assert.ok(rows.has(b.id)); assert.ok(rows.has(id));
 });
 
 test("invalid session headers fail closed before reads or writes", async t => {
   const { stats } = repository(t);
-  for (const session of ["", "bad token", "a,b", "x".repeat(129)]) {
+  for (const session of [null, "", "bad token", "a,b", "x".repeat(129), "existing_session-1", SESSION_A.replace("-4996-", "-1996-"), SESSION_A.replace("-8cbd-", "-7cbd-"), "00000000-0000-0000-0000-000000000000", `{${SESSION_A}}`, `${SESSION_A},${SESSION_B}`]) {
     assert.equal((await GET(sessionRequest("", "GET", session))).status, 400);
     assert.equal((await POST(sessionRequest("", "POST", session, fixture()))).status, 400);
     assert.equal((await PATCH(sessionRequest(`/${id}`, "PATCH", session, { snapshotName: "Valid" }), context())).status, 400);
     assert.equal((await DELETE(sessionRequest(`/${id}`, "DELETE", session), context())).status, 400);
   }
-  assert.equal((await PATCH(sessionRequest(`/${id}`, "PATCH", null, { snapshotName: "Valid", sessionId: "session-a" }), context())).status, 400);
+  assert.equal((await PATCH(sessionRequest(`/${id}`, "PATCH", null, { snapshotName: "Valid", sessionId: SESSION_A }), context())).status, 400);
   assert.equal(stats.reads, 0); assert.equal(stats.writes, 0);
 });
 
 test("automatic browser sessions scope API history, snapshots, comparisons, exports, and deletion across reloads", async t => {
   const { rows } = repository(t);
+  rows.get(id)!.sessionId = null;
   const stored = new Map<string, string>();
   const browser = { sessionStorage: { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => { stored.set(key, value); } } };
   const a = createSessionClient(() => browser);
@@ -329,59 +332,61 @@ function retentionRecord(index: number, sessionId: string | null): SimulationRun
 
 test("a twenty-first unpinned save prunes only its session's oldest run across workloads and protects named or pinned snapshots", async t => {
   const { rows } = repository(t);
-  const oldest = retentionRecord(0, "session-a");
-  for (let i = 0; i < 20; i++) { const row = retentionRecord(i, "session-a"); rows.set(row.id, row); }
+  rows.get(id)!.sessionId = null;
+  const oldest = retentionRecord(0, SESSION_A);
+  for (let i = 0; i < 20; i++) { const row = retentionRecord(i, SESSION_A); rows.set(row.id, row); }
   // Deliberately independent protection flags cover older/inconsistent metadata too.
-  const named = { ...retentionRecord(100, "session-a"), createdAt: new Date("2019-01-01"), snapshotName: "Keep named forever" };
-  const pinned = { ...retentionRecord(101, "session-a"), createdAt: new Date("2019-01-01"), isSnapshot: true };
+  const named = { ...retentionRecord(100, SESSION_A), createdAt: new Date("2019-01-01"), snapshotName: "Keep named forever" };
+  const pinned = { ...retentionRecord(101, SESSION_A), createdAt: new Date("2019-01-01"), isSnapshot: true };
   rows.set(named.id, named); rows.set(pinned.id, pinned);
-  for (let i = 200; i < 225; i++) { const row = retentionRecord(i, "session-b"); rows.set(row.id, row); }
-  const protectedRows = structuredClone([...rows.values()].filter(row => row.sessionId !== "session-a" || row.snapshotName !== null || row.isSnapshot));
+  for (let i = 200; i < 225; i++) { const row = retentionRecord(i, SESSION_B); rows.set(row.id, row); }
+  const protectedRows = structuredClone([...rows.values()].filter(row => row.sessionId !== SESSION_A || row.snapshotName !== null || row.isSnapshot));
   const fresh = { ...fixture(), completedAt: "2000-01-01T00:00:00.000Z" };
   // A backdated completion must still use its server insertion time for FIFO.
   fresh.id = "c367fe2e-f083-4996-8cbd-000000000021";
-  const saved = await POST(sessionRequest("", "POST", "session-a", fresh));
+  const saved = await POST(sessionRequest("", "POST", SESSION_A, fresh));
   assert.equal(saved.status, 201);
   assert.ok(!rows.has(oldest.id)); assert.ok(rows.has(fresh.id));
-  assert.equal([...rows.values()].filter(row => row.sessionId === "session-a" && !row.isSnapshot && row.snapshotName === null).length, 20);
-  for (let i = 1; i < 20; i++) assert.ok(rows.has(retentionRecord(i, "session-a").id));
+  assert.equal([...rows.values()].filter(row => row.sessionId === SESSION_A && !row.isSnapshot && row.snapshotName === null).length, 20);
+  for (let i = 1; i < 20; i++) assert.ok(rows.has(retentionRecord(i, SESSION_A).id));
   for (const row of protectedRows) assert.deepEqual(rows.get(row.id), row, "Pruning cannot change named/pinned snapshots, other sessions, or legacy rows");
   const createdAt = rows.get(fresh.id)!.createdAt;
-  assert.equal((await POST(sessionRequest("", "POST", "session-a", fresh))).status, 201);
+  assert.equal((await POST(sessionRequest("", "POST", SESSION_A, fresh))).status, 201);
   assert.deepEqual(rows.get(fresh.id)!.createdAt, createdAt, "Retries never refresh FIFO age");
-  assert.equal([...rows.values()].filter(row => row.sessionId === "session-a").length, 22, "Snapshots do not count against the twenty-run cap");
+  assert.equal([...rows.values()].filter(row => row.sessionId === SESSION_A).length, 22, "Snapshots do not count against the twenty-run cap");
 });
 
-test("one save clears an existing legacy backlog with deterministic timestamp ties without pruning another session", async t => {
+test("one save clears an existing session backlog with deterministic timestamp ties without pruning another session", async t => {
   const { rows } = repository(t); rows.clear();
   for (let i = 0; i < 25; i++) {
-    const row = { ...retentionRecord(i, null), createdAt: new Date("2020-01-01") }; rows.set(row.id, row);
+    const row = { ...retentionRecord(i, SESSION_A), createdAt: new Date("2020-01-01") }; rows.set(row.id, row);
   }
-  const pinned = { ...retentionRecord(100, null), isSnapshot: true, snapshotName: "Legacy baseline" };
-  const foreign = retentionRecord(200, "session-a"); rows.set(pinned.id, pinned); rows.set(foreign.id, foreign);
-  assert.equal((await POST(sessionRequest("", "POST", null, fixture()))).status, 201);
-  assert.equal([...rows.values()].filter(row => row.sessionId === null && !row.isSnapshot && row.snapshotName === null).length, 20);
-  for (let i = 0; i < 25; i++) assert.equal(rows.has(retentionRecord(i, null).id), i >= 6, "Equal server timestamps use UUID descending as the tie-breaker");
+  const pinned = { ...retentionRecord(100, SESSION_A), isSnapshot: true, snapshotName: "Pinned baseline" };
+  const foreign = retentionRecord(200, null); rows.set(pinned.id, pinned); rows.set(foreign.id, foreign);
+  assert.equal((await POST(sessionRequest("", "POST", SESSION_A, fixture()))).status, 201);
+  assert.equal([...rows.values()].filter(row => row.sessionId === SESSION_A && !row.isSnapshot && row.snapshotName === null).length, 20);
+  for (let i = 0; i < 25; i++) assert.equal(rows.has(retentionRecord(i, SESSION_A).id), i >= 6, "Equal server timestamps use UUID descending as the tie-breaker");
   assert.deepEqual(rows.get(pinned.id), pinned); assert.deepEqual(rows.get(foreign.id), foreign);
 });
 
 test("prune failures roll back the save, and serialization conflicts retry atomically with a bounded failure path", async t => {
   const { rows, stats } = repository(t);
-  for (let i = 0; i < 20; i++) { const row = retentionRecord(i, "session-a"); rows.set(row.id, row); }
+  rows.get(id)!.sessionId = null;
+  for (let i = 0; i < 20; i++) { const row = retentionRecord(i, SESSION_A); rows.set(row.id, row); }
   const before = structuredClone(rows), fresh = { ...fixture(), id: "c367fe2e-f083-4996-8cbd-000000000021" };
   stats.failPrune = true;
-  const failed = await POST(sessionRequest("", "POST", "session-a", fresh));
+  const failed = await POST(sessionRequest("", "POST", SESSION_A, fresh));
   assert.equal(failed.status, 503); assert.ok(!(await failed.text()).includes("secret-password"));
   assert.deepEqual(rows, before, "A failed prune must not leave a twenty-first run committed");
   stats.failPrune = false; stats.conflicts = 1;
   const attempts = stats.transactions;
-  assert.equal((await POST(sessionRequest("", "POST", "session-a", fresh))).status, 201);
+  assert.equal((await POST(sessionRequest("", "POST", SESSION_A, fresh))).status, 201);
   assert.equal(stats.transactions - attempts, 2);
-  assert.ok(!rows.has(retentionRecord(0, "session-a").id)); assert.ok(rows.has(fresh.id));
-  assert.equal([...rows.values()].filter(row => row.sessionId === "session-a").length, 20);
+  assert.ok(!rows.has(retentionRecord(0, SESSION_A).id)); assert.ok(rows.has(fresh.id));
+  assert.equal([...rows.values()].filter(row => row.sessionId === SESSION_A).length, 20);
   const after = structuredClone(rows), priorAttempts = stats.transactions;
   stats.conflicts = 3;
-  const exhausted = await POST(sessionRequest("", "POST", "session-a", { ...fresh, id: "c367fe2e-f083-4996-8cbd-000000000022" }));
+  const exhausted = await POST(sessionRequest("", "POST", SESSION_A, { ...fresh, id: "c367fe2e-f083-4996-8cbd-000000000022" }));
   assert.equal(exhausted.status, 503); assert.ok(!(await exhausted.text()).includes("private conflict"));
   assert.equal(stats.transactions - priorAttempts, 3); assert.deepEqual(rows, after);
 });

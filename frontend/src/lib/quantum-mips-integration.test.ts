@@ -1,3 +1,4 @@
+import { apiRequest, parseAdvisorPrompt } from "./test-support/api";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { existsSync } from "node:fs";
@@ -96,7 +97,7 @@ test("Quantum-MIPS advisor alias preserves trusted model facts and returns a zer
   try {
     for (const scale of WORKLOADS.quantum_mips.scales) {
       const run = mipsRun(scale);
-      const response = await advisorProxy(new Request("http://localhost/api/analyze-telemetry", { method: "POST", body: JSON.stringify({ current: run }) }));
+      const response = await advisorProxy(apiRequest("http://localhost/api/analyze-telemetry", { method: "POST", body: JSON.stringify({ current: run }) }));
       assert.equal(response.status, 200);
       const body = await response.json();
       assert.equal(body.insight.source, "fallback");
@@ -144,7 +145,7 @@ test("live advisor requests include Quantum-MIPS policy and scale-specific sugge
     assert.match(policy, /Multi-Oracle Ceiling 4k\+16/);
     assert.match(policy, /selected ancilla tier/);
     assert.match(policy, /not actual inner products/);
-    const context = JSON.parse(body.contents[0].parts[0].text);
+    const context = parseAdvisorPrompt(body.contents[0].parts[0].text);
     assert.equal(context.current.request.workload_id, "quantum_mips");
     assert.match(context.suggestedNextExperiment, /GPU → QPU → GPU.*0.12×.*0.10×/);
     return Response.json({ candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify({
@@ -154,7 +155,7 @@ test("live advisor requests include Quantum-MIPS policy and scale-specific sugge
     }) }] } }], usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 40, totalTokenCount: 140 } });
   });
   try {
-    const response = await advisorProxy(new Request("http://localhost/api/analyze-telemetry", { method: "POST", body: JSON.stringify({ current: mipsRun(1024) }) }));
+    const response = await advisorProxy(apiRequest("http://localhost/api/analyze-telemetry", { method: "POST", body: JSON.stringify({ current: mipsRun(1024) }) }));
     assert.equal(response.status, 200);
     const result = await response.json();
     assert.equal(result.insight.source, "gemini");
