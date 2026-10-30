@@ -132,9 +132,10 @@ test("CSV flattens system metrics consistently with KPI math and round-trips Uni
   assert.equal(rows.length, 2); assert.equal(rows[1].length, rows[0].length);
   const record = Object.fromEntries(rows[0].map((key, index) => [key, rows[1][index]]));
   assert.equal(record["Snapshot Name"], run.snapshotName);
-  assert.equal(record.Timestamp, run.completedAt);
+  assert.equal(record["Timestamp (UTC)"], run.completedAt);
+  assert.equal(record.Workload, "Shor's Algorithm");
   assert.equal(record["Pure Compute ms"], "2.75");
-  assert.equal(record["Interconnect Overhead ms"], "1.75");
+  assert.equal(record["Interconnect & State-Prep Overhead ms"], "1.75");
   assert.equal(record["Total Latency ms"], "4.5");
   assert.equal(record["Circuit Depth"], "38654705664");
   assert.equal(record["Available Qubits"], "28"); assert.equal(record["Allocated Qubits"], "12");
@@ -169,6 +170,7 @@ test("JSON export preserves complete payloads, snapshot metadata, token usage, a
     sections: { routingDiagnosis: "Bus", spaceTimeTradeOff: "Qubits", optimizationRecommendation: "Route" },
     usage: { inputTokens: 123, outputTokens: 45, totalTokens: 168, tokenSource: "provider", estimatedCostUsd: 0.00004545 } };
   const before = structuredClone(run);
+  benchmarkCsv([run]);
   const text = benchmarkJson([run]);
   assert.deepEqual(JSON.parse(text), [run]);
   assert.match(text, /\n  \{/); assert.ok(text.endsWith("\n"));

@@ -1,10 +1,11 @@
 import { ADVISOR_HEADINGS } from "@/types/advisor";
 import { benchmarkMetrics } from "@/lib/benchmark-comparison";
+import { WORKLOADS } from "@/lib/workloads";
 import type { SavedSimulationRun } from "@/types/run-history";
 
 export const BENCHMARK_CSV_HEADERS = [
-  "Snapshot Name", "Timestamp", "Workload", "Scale", "Hardware Profile", "Available Qubits", "Allocated Qubits", "Parallel Tier",
-  "Stage 1 Node", "Stage 2 Node", "Stage 3 Node", "Pure Compute ms", "Interconnect Overhead ms", "Total Latency ms", "Circuit Depth",
+  "Snapshot Name", "Timestamp (UTC)", "Workload", "Scale", "Hardware Profile", "Available Qubits", "Allocated Qubits", "Parallel Tier",
+  "Stage 1 Node", "Stage 2 Node", "Stage 3 Node", "Pure Compute ms", "Interconnect & State-Prep Overhead ms", "Total Latency ms", "Circuit Depth",
   "Coherence Survival %", "Coherence Budget Status", "Primary Bottleneck", "AI Diagnostic Summary", "Bottleneck Status", "Run ID",
 ];
 
@@ -31,7 +32,8 @@ export function benchmarkCsv(runs: SavedSimulationRun[]) {
     const insight = run.advisorInsight;
     const summary = insight ? (Object.keys(ADVISOR_HEADINGS) as (keyof typeof ADVISOR_HEADINGS)[])
       .map(key => `${ADVISOR_HEADINGS[key]}: ${insight.sections[key]}`).join("\n\n") : null;
-    return [run.snapshotName, run.completedAt, run.workloadName, run.scaleLabel, run.hardwareProfile,
+    const workloadLabel = run.workloadId === "shors_crypto" ? WORKLOADS.shors_crypto.label : run.workloadName;
+    return [run.snapshotName, run.completedAt, workloadLabel, run.scaleLabel, run.hardwareProfile,
       metrics.availableQubits, metrics.allocatedQubits, metrics.parallelTier,
       run.stage1Node, run.stage2Node, run.stage3Node, metrics.computeMs, metrics.overheadMs, metrics.totalMs, metrics.circuitDepth,
       metrics.coherenceSurvival, metrics.coherenceStatus, run.primaryBottleneck, summary, run.bottleneckStatus, run.id];

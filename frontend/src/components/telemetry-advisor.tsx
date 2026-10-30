@@ -103,7 +103,7 @@ export function TelemetryAdvisor({ snapshot, previous: previousCandidate, onInsi
       {loading && <p role="status" className="flex items-center gap-2 text-xs text-cyan-800 dark:text-cyan-200"><LoaderCircle size={14} className="animate-spin" />Analyzing routing, qubit budget, and telemetry. Simulations remain available.</p>}
       {!insight && !loading && <p className="py-3 text-sm leading-6 text-slate-600 dark:text-slate-400">{snapshot ? "Generate a diagnostic to explain this run’s bottlenecks and choose the next configuration to try." : "Run a simulation to enable the advisor."}</p>}
       {insight && <>
-        <AdvisorTelemetryBar insight={insight} />
+        <AdvisorTelemetryBar insight={insight} reused={available === savedInsight} />
         <p className="text-[10px] font-semibold uppercase tracking-wider text-cyan-700 dark:text-cyan-300">{insight.source !== "fallback" ? `Gemini · ${insight.model}` : "Local deterministic diagnostic"}{insight.previousRunId ? " · includes previous-run comparison" : ""}</p>
         {insight.notice && <div role="status" className="flex gap-2 rounded-lg border border-amber-700/20 dark:border-amber-400/20 bg-amber-700/5 dark:bg-amber-400/5 p-3 text-xs leading-6 text-amber-800 dark:text-amber-200"><CircleAlert size={15} className="mt-1 shrink-0" /><p>{insight.notice}</p></div>}
         <AdvisorDiagnostic insight={insight} />

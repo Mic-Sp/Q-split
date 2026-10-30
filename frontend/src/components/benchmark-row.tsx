@@ -63,7 +63,7 @@ export function BenchmarkRow({ run, busy, selected, selectionDisabled, onSelect,
       </div></td>
     </tr>
     {expanded && <tr><td colSpan={10} className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/50 p-3"><div className="space-y-3">
-      {run.advisorInsight && <div aria-label="Saved advisor insight" className="space-y-3"><AdvisorTelemetryBar insight={cachedInsight(run.advisorInsight)} />{run.advisorInsight.notice && <p className="text-xs text-amber-800 dark:text-amber-200">{run.advisorInsight.notice}</p>}<AdvisorDiagnostic insight={run.advisorInsight} /></div>}
+      {run.advisorInsight && <div aria-label="Saved advisor insight" className="space-y-3"><AdvisorTelemetryBar insight={cachedInsight(run.advisorInsight)} reused />{run.advisorInsight.notice && <p className="text-xs text-amber-800 dark:text-amber-200">{run.advisorInsight.notice}</p>}<AdvisorDiagnostic insight={run.advisorInsight} /></div>}
       <p className="text-[10px] font-semibold text-slate-600 dark:text-slate-400">Complete saved configuration and telemetry</p>
       <pre tabIndex={0} aria-label="Saved telemetry payload" className="max-h-80 overflow-auto rounded border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 p-3 text-[10px] leading-5 text-slate-600 dark:text-slate-400">{JSON.stringify({ request: run.request, telemetry: run.telemetry }, null, 2)}</pre>
     </div></td></tr>}

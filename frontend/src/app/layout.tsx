@@ -13,9 +13,28 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const title = "Q-Split | Hybrid Workload Simulator";
+const description = "Explore quantum-classical workload pipelines, hardware limitations, and simulation telemetry.";
+const canonicalUrl = "https://github.com/Mic-Sp/Q-split";
+
 export const metadata: Metadata = {
-  title: "Q-Split | Hybrid Workload Simulator",
-  description: "Explore quantum-classical workload pipelines, hardware limitations, and simulation telemetry.",
+  metadataBase: new URL(canonicalUrl),
+  title,
+  description,
+  alternates: { canonical: canonicalUrl },
+  openGraph: {
+    type: "website",
+    url: canonicalUrl,
+    siteName: "Q-Split",
+    title,
+    description,
+    locale: "en_US",
+  },
+  twitter: {
+    card: "summary",
+    title,
+    description,
+  },
 };
 
 /**

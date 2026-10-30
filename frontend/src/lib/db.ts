@@ -9,7 +9,7 @@ const globalDatabase = globalThis as unknown as {
 // Invalidate the development singleton after regenerating a changed Prisma schema.
 export const DATABASE_CLIENT_SCHEMA = "simulation-run-sessions-global-advisor-v3";
 
-export const DATABASE_NOT_CONFIGURED = "Persistent history is not configured. Add your Neon DATABASE_URL to frontend/.env.local and restart the app. Simulations still work normally.";
+export const DATABASE_NOT_CONFIGURED = "History is not configured. Your current results remain available; the app administrator can enable persistence.";
 
 /**
  * Lazily obtain a server-only Neon-backed Prisma client or an unconfigured null.
@@ -46,9 +46,9 @@ export function getDatabase(): PrismaClient | null {
 export function databaseNotice(error: unknown): string {
   // Never return driver error messages: they can contain connection credentials.
   if (error && typeof error === "object" && "code" in error && ["P2021", "P2022"].includes(String(error.code))) {
-    return "The history database schema is not ready. Apply the prepared migration after confirming the Neon connection. Simulations are unaffected.";
+    return "History database setup is incomplete. Your current results remain available; contact the app administrator.";
   }
-  return "Persistent history is temporarily unavailable. Your simulation still completed; retry saving when the database is reachable.";
+  return "History is temporarily unavailable. Your current results remain available; retry the action when the database is reachable.";
 }
 
 /**

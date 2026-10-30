@@ -55,7 +55,7 @@ print(json.dumps(runs))
     const validated = validateAdvisorRequest({ current: run }).current;
     assert.equal(validated.request.workload_id, "quantum_mips");
     assert.match(validated.telemetry.scale_label, /^M =/);
-    assert.match(validated.telemetry.stages.stage_2_quantum_kernel.name, /Grover-Max/);
+    assert.match(validated.telemetry.stages.stage_2_quantum_kernel.name, /Grover’s search \/ amplitude amplification/);
     const insight = deterministicInsight(validated, undefined, "missing_key");
     assert.doesNotMatch(Object.values(insight.sections).join(" "), /RSA-|Carry-Lookahead|period finding|2n \+ 3/);
     assert.match(insight.sections.spaceTimeTradeOff, /Multi-Oracle/);

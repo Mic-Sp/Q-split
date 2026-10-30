@@ -314,7 +314,7 @@ export default function Home() {
               <div className="relative">
                 <select id="workload" value={workload} onChange={(e) => selectWorkload(e.target.value as WorkloadId)} className="min-h-9 w-full appearance-none rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 py-2 pl-3 pr-8 text-xs text-slate-800 dark:text-slate-200">
                   <option value="shors_crypto">{WORKLOADS.shors_crypto.label}</option>
-                  <option value="quantum_mips">Quantum-MIPS (LLM Vector Retrieval)</option>
+                  <option value="quantum_mips">{WORKLOADS.quantum_mips.label}</option>
                 </select>
                 <ChevronDown className="pointer-events-none absolute right-3 top-2.5 text-slate-600 dark:text-slate-400" size={14} />
               </div>

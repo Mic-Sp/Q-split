@@ -2,10 +2,10 @@ import type { SimulationRequest, WorkloadId } from "@/types/telemetry";
 import { isHardwareProfile } from "@/lib/hardware-profiles";
 
 export const WORKLOADS = {
-  shors_crypto: { label: "Shor’s Algorithm", scales: [15, 21, 35, 512, 2048],
+  shors_crypto: { label: "Shor's Algorithm", scales: [15, 21, 35, 512, 2048],
     stages: ["Classical preprocessing", "Quantum kernel", "Classical postprocessing"] },
-  quantum_mips: { label: "Quantum-MIPS (LLM Vector Retrieval)", scales: [64, 1024, 32768, 131072, 1048576],
-    stages: ["LSH Bucket Pruning", "Quantum Inner-Product & Grover-Max Amplification", "Exact FP16 Dot-Product Reranking"] },
+  quantum_mips: { label: "Quantum-MIPS (Maximum Inner Product Search)", scales: [64, 1024, 32768, 131072, 1048576],
+    stages: ["LSH Bucket Pruning", "Grover’s search / amplitude amplification", "Exact FP16 Dot-Product Reranking"] },
 } satisfies Record<WorkloadId, { label: string; scales: number[]; stages: string[] }>;
 
 const MIPS_LABELS: Record<number, string> = {
@@ -21,11 +21,11 @@ export const SCALE_DESCRIPTIONS: Record<WorkloadId, Record<number, string>> = {
     2048: "2,048-bit production cryptographic standard (4,099–11,264 logical qubits). Demonstrates extreme sequential circuit depth (~38.6B gates) and multi-hour modeled QPU execution horizons.",
   },
   quantum_mips: {
-    64: "6-bit Toy KV-Cache Block (64 candidate vectors). The sequential tier executes a live 10-qubit Qiskit Aer Grover amplitude amplification circuit; small enough that CPU beats GPU on classical host stages due to 0.30ms PCIe transfer overhead.",
+    64: "6-bit Toy KV-Cache Block (64 candidate vectors). The sequential tier executes a 10-qubit Qiskit Aer marked-state reference for Grover’s search / amplitude amplification; it does not execute vector loading or adaptive maximum finding. CPU host stages avoid the modeled 0.30 ms GPU PCIe transfer overhead at this scale.",
     1024: "10-bit HNSW Subgraph (1,024 candidate vectors). Analytical crossover scale where GPU tensor cores overtake CPU on Stage 1 LSH pruning and Stage 3 FP16 reranking.",
-    32768: "15-bit Long-Context KV-Cache (32,768 attention tokens). Models sub-linear quantum attention key lookup across a 32k LLM context window (~142 Grover oracle iterations).",
-    131072: "17-bit LLM Vocabulary Unembedding (131,072 tokens). Models final-layer logit search over a modern Llama/GPT-scale vocabulary (~285 Grover iterations).",
-    1048576: "20-bit Enterprise RAG Vector Index (1,048,576 embeddings). Models million-scale document retrieval where O(sqrt(M)) Grover depth hits severe NISQ decoherence without Multi-Oracle parallel registers.",
+    32768: "15-bit Long-Context KV-Cache (32,768 attention tokens). Models sublinear quantum attention key lookup across a 32k LLM context window (~142 iterations of Grover’s search / amplitude amplification).",
+    131072: "17-bit LLM Vocabulary Unembedding (131,072 tokens). Models final-layer logit search over a modern Llama/GPT-scale vocabulary (~284 iterations of Grover’s search / amplitude amplification).",
+    1048576: "20-bit Enterprise RAG Vector Index (1,048,576 embeddings). Models million-scale document retrieval where O(√M) iterations of Grover’s search / amplitude amplification can exhaust NISQ coherence; Multi-Oracle registers reduce modeled depth.",
   },
 };
 

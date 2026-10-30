@@ -22,7 +22,7 @@ from qiskit_aer import AerSimulator
 
 app = FastAPI(
     title="Q-Split Hybrid Partitioning Engine",
-    description="Hybrid Quantum-Classical Workload Profiler (Shor's Cryptography & Quantum-MIPS AI)",
+    description="Hybrid Quantum-Classical Workload Profiler (Shor's Algorithm & Quantum-MIPS AI)",
     version="2.0.0"
 )
 
@@ -495,7 +495,7 @@ def _run_default_shors_pipeline(
 
         return HybridTelemetryResponse(
             workload_id="shors_crypto",
-            workload_name="Shor's Factoring Pipeline (Hybrid Cryptography)",
+            workload_name="Shor's Algorithm",
             scale_label=scale_label,
             execution_mode="LIVE_QISKIT_AER",
             primary_bottleneck="NONE (Fits Within NISQ Coherence Window)",
@@ -572,7 +572,7 @@ def _run_default_shors_pipeline(
 
     return HybridTelemetryResponse(
         workload_id="shors_crypto",
-        workload_name="Shor's Factoring Pipeline (Hybrid Cryptography)",
+        workload_name="Shor's Algorithm",
         scale_label=scale_label,
         execution_mode="NISQ_ANALYTICAL_PROFILER",
         primary_bottleneck=bottleneck,

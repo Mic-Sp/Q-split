@@ -65,7 +65,7 @@ export function PersistentRunHistory({ history, onRestore, workload }: { workloa
           {filters.map(({ value, label, count }) => <button key={value} type="button" aria-pressed={filter === value} aria-controls={listId} onClick={() => { setFilter(value); setShowAll(false); setDownloadMessage(null); }} className={`min-h-8 rounded-md px-3 py-1 text-[11px] ${filter === value ? "bg-cyan-700/10 dark:bg-cyan-400/10 text-cyan-800 dark:text-cyan-200" : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"}`}>{label} ({count})</button>)}
         </div>
         <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-600 dark:text-slate-400">
-          <span role="status" aria-label="Benchmark selection status">{selectedRuns.length} / {MAX_COMPARISON_RUNS} selected · Exporting {selectedRuns.length ? `${selectedRuns.length} selected runs (including hidden rows)` : `${visibleRuns.length} displayed rows`}</span>
+          <span role="status" aria-label="Benchmark selection status">{selectedRuns.length} / {MAX_COMPARISON_RUNS} selected · Exporting {selectedRuns.length ? `${selectedRuns.length} selected ${selectedRuns.length === 1 ? "run" : "runs"} (including hidden rows)` : `${visibleRuns.length} displayed ${visibleRuns.length === 1 ? "row" : "rows"}`}</span>
           {selectedRuns.length > 0 && <button type="button" onClick={() => { setSelectedIds([]); setDownloadMessage(null); }} className="rounded border border-slate-300 dark:border-slate-700 px-2 py-1 text-slate-700 dark:text-slate-300 hover:border-cyan-700/50 dark:hover:border-cyan-400/50">Clear selection</button>}
         </div>
       </div>
@@ -77,7 +77,7 @@ export function PersistentRunHistory({ history, onRestore, workload }: { workloa
         {history.availability === "loading" && <p className="flex items-center gap-2 py-4 text-xs text-slate-600 dark:text-slate-400"><LoaderCircle size={14} className="animate-spin" />Loading saved runs…</p>}
         {history.availability === "ready" && runs.length === 0 && <p className="py-6 text-center text-sm text-slate-600 dark:text-slate-400">No saved {workloadLabel} runs yet. Completed simulations for this workload will appear here automatically.</p>}
       </div>}
-      {filter !== "all" && runs.length > 0 && candidates.length === 0 && <p className="p-4 text-xs text-slate-600 dark:text-slate-400">{filter === "pinned" ? `No pinned or named ${workloadLabel} snapshots yet. Capture a completed run or name a recent run.` : `No loaded ${workloadLabel} runs have a NOMINAL coherence status.`}</p>}
+      {filter !== "all" && runs.length > 0 && candidates.length === 0 && <p className="p-4 text-xs text-slate-600 dark:text-slate-400">{filter === "pinned" ? `No pinned or named ${workloadLabel} snapshots yet. Capture a completed run or name a recent run.` : `No loaded ${workloadLabel} runs have a NOMINAL coherence status.`} Try selecting All Runs.</p>}
       <BenchmarkComparison runs={selectedRuns} onRemove={toggleSelection} />
       <div id={listId} role="region" aria-label="Benchmark Comparison Table" tabIndex={0} className="overflow-x-auto">
         <table className="w-full min-w-[1280px] table-fixed text-left">

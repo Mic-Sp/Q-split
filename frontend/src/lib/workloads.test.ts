@@ -19,7 +19,8 @@ test("Quantum-MIPS controls expose all scales, index-width thresholds, and ideal
   assert.deepEqual(qubitThresholds(15), { minimum: 8, windowed: 12, ceiling: 22 });
   assert.equal(hardwareDefaultQubits("ideal_sim", 512), 2816);
   assert.equal(workloadScaleLabel(2048), "RSA-2048");
-  assert.match(WORKLOADS.quantum_mips.stages.join(" "), /LSH.*Grover-Max.*FP16/);
+  assert.match(WORKLOADS.quantum_mips.label, /Quantum-MIPS.*Maximum Inner Product Search/);
+  assert.match(WORKLOADS.quantum_mips.stages.join(" "), /LSH.*Grover’s search \/ amplitude amplification.*FP16/);
   assert.match(mipsRoutingContext(64), /CPU → QPU → CPU.*0.30 ms/);
   assert.match(mipsRoutingContext(1024), /GPU → QPU → GPU.*0.12×.*0.10×/);
 });
@@ -59,9 +60,9 @@ test("every supported target scale has workload-specific context without promisi
   }
   assert.match(SCALE_DESCRIPTIONS.shors_crypto[15], /sequential tier.*live 8-qubit Qiskit Aer/);
   assert.match(SCALE_DESCRIPTIONS.shors_crypto[2048], /4,099–11,264.*38.6B.*multi-hour/);
-  assert.match(SCALE_DESCRIPTIONS.quantum_mips[64], /sequential tier.*live 10-qubit.*0.30ms/);
+  assert.match(SCALE_DESCRIPTIONS.quantum_mips[64], /sequential tier.*10-qubit Qiskit Aer marked-state reference.*0.30 ms/);
   assert.match(SCALE_DESCRIPTIONS.quantum_mips[1024], /Stage 1 LSH.*Stage 3 FP16/);
-  assert.match(SCALE_DESCRIPTIONS.quantum_mips[32768], /32,768.*142 Grover/);
-  assert.match(SCALE_DESCRIPTIONS.quantum_mips[131072], /131,072.*285 Grover/);
+  assert.match(SCALE_DESCRIPTIONS.quantum_mips[32768], /32,768.*142 iterations of Grover’s search/);
+  assert.match(SCALE_DESCRIPTIONS.quantum_mips[131072], /131,072.*284 iterations of Grover’s search/);
   assert.match(SCALE_DESCRIPTIONS.quantum_mips[1048576], /1,048,576.*Multi-Oracle/);
 });

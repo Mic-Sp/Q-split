@@ -95,7 +95,7 @@ test("history routes handle configuration, validation, saves, ordering, and fail
     assert.equal(response.headers.get("Cache-Control"), "no-store");
     fail = "P2021";
     response = await GET(new Request("http://localhost/api/runs"));
-    assert.equal(response.status, 503); assert.match((await response.json()).message, /schema is not ready/);
+    assert.equal(response.status, 503); assert.match((await response.json()).message, /database setup is incomplete.*current results remain available/);
     fail = "P1001";
     response = await POST(postRequest(fixture()));
     assert.equal(response.status, 503);

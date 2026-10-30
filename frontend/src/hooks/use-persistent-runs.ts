@@ -51,7 +51,7 @@ export function usePersistentRuns(workload: WorkloadId) {
     } catch {
       if (!mounted.current || signal?.aborted || version !== refreshVersion.current) return;
       setAvailability("unavailable");
-      setMessage("Persistent history could not be reached. Simulations still work normally; refresh history to retry.");
+      setMessage("History is temporarily unavailable. Your current results remain available; select Refresh history to retry.");
     } finally {
       if (mounted.current && !signal?.aborted && version === refreshVersion.current) setRefreshing(false);
     }
@@ -87,7 +87,7 @@ export function usePersistentRuns(workload: WorkloadId) {
     } catch {
       if (mounted.current) {
         setAvailability("unavailable");
-        setMessage("This run could not be saved. Your simulation result is available below; retry saving when history is reachable.");
+        setMessage("History is temporarily unavailable. Your current results remain available; retry the action when history is reachable.");
       }
     }
     return null;
@@ -134,15 +134,15 @@ export function usePersistentRuns(workload: WorkloadId) {
       if (run) {
         const candidate = pending.current.get(id) ?? run;
         pending.current.set(id, candidate); setPendingCount(pending.current.size);
-        if (!await persist(candidate)) throw new Error("The completed run has not reached the database. Keep the label and retry capture when history is available.");
+        if (!await persist(candidate)) throw new Error("The history action could not be completed. Your current results and snapshot name remain available; retry when history is available.");
       } else if (inFlight.current.has(id)) await inFlight.current.get(id);
       const response = await sessionFetch(`/api/runs/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(metadata), signal: AbortSignal.timeout(8_000) });
       const result = await response.json();
-      if (!response.ok || result.status !== "saved" || result.run?.id !== id) throw new Error(result.message || "Snapshot naming failed. Keep the label and retry.");
+      if (!response.ok || result.status !== "saved" || result.run?.id !== id) throw new Error(result.message || "The history action could not be completed. Keep the snapshot name and retry.");
       if (mounted.current) setRuns(current => mergeRuns(current, [result.run]).filter(row => !deleted.current.has(row.id)));
       return true;
     } catch (error) {
-      if (mounted.current) setMutationMessage(error instanceof Error && error.name !== "TypeError" && error.name !== "TimeoutError" ? error.message : "Snapshot could not be saved. Your run and label are still available; retry when connected.");
+      if (mounted.current) setMutationMessage(error instanceof Error && error.name !== "TypeError" && error.name !== "TimeoutError" ? error.message : "History is temporarily unavailable. Your run and snapshot name remain available; retry the action when connected.");
       return false;
     } finally { endMutation(id); }
   };
@@ -157,13 +157,13 @@ export function usePersistentRuns(workload: WorkloadId) {
       await inFlight.current.get(id);
       const response = await sessionFetch(`/api/runs/${id}`, { method: "DELETE", signal: AbortSignal.timeout(8_000) });
       const result = await response.json();
-      if (!response.ok || result.status !== "deleted" || result.id !== id) throw new Error(result.message || "Run deletion failed. The table entry has been retained.");
+      if (!response.ok || result.status !== "deleted" || result.id !== id) throw new Error(result.message || "The history action could not be completed. The displayed entry has been retained; retry the action.");
       // Install the tombstone only after success; late refreshes or advisor saves must not resurrect this UUID.
       deleted.current.add(id); pending.current.delete(id);
       if (mounted.current) { setRuns(current => current.filter(run => run.id !== id)); setPendingCount(pending.current.size); }
       return true;
     } catch (error) {
-      if (mounted.current) setMutationMessage(error instanceof Error && error.name !== "TypeError" && error.name !== "TimeoutError" ? error.message : "Run could not be deleted. It remains in the table; retry when connected.");
+      if (mounted.current) setMutationMessage(error instanceof Error && error.name !== "TypeError" && error.name !== "TimeoutError" ? error.message : "History is temporarily unavailable. The displayed entry remains available; retry the action when connected.");
       return false;
     } finally {
       deleting.current.delete(id); endMutation(id);
