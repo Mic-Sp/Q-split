@@ -1,4 +1,5 @@
 # ⚡ Q-Split
+
 ### Hybrid Quantum-Classical Workload Profiler & Heterogeneous Orchestrator
 
 **Live Cockpit:** https://q-split.vercel.app/  
@@ -7,59 +8,108 @@
 ---
 
 ## 🎯 Overview
-**Q-Split** is a full-stack co-design observatory built to evaluate when quantum sub-routines outperform classical CPU/GPU baselines. By orchestrating a 3-stage execution pipeline across heterogeneous hardware, Q-Split tracks the exact tipping points where quantum advantage survives against PCIe bus transfer latency, circuit depth, and NISQ decoherence (T1/T2).
+
+**Q-Split** is a full-stack simulator and co-design profiler for exploring quantum-classical workload placement. Its 3-stage pipeline compares modeled CPU/GPU execution and QPU offload while accounting for illustrative launch/transfer overhead, circuit depth, statevector memory limits, and NISQ decoherence. Results are simulation estimates, not physical-device benchmarks or proof of practical quantum advantage.
 
 ---
 
 ## 🛠️ System Architecture & Dual Engine
-* Frontend & API: Next.js 15 (React 19, TypeScript, Tailwind CSS) with Zod validation and Prisma ORM backed by Neon Serverless PostgreSQL.
-* Backend Engine: Containerized Python FastAPI executing real circuits via Qiskit Aer alongside an analytical hardware profiler.
+
+* Frontend & API: Next.js 16 (React 19, TypeScript, Tailwind CSS) with custom parser validation and Prisma ORM backed by Neon Serverless PostgreSQL. FastAPI uses Pydantic for backend request validation.
+* Backend Engine: Containerized Python FastAPI simulating reference circuits with Qiskit Aer alongside an analytical hardware profiler. CPU/GPU/QPU routing selects cost models; no physical QPU connection is used.
 * Dual Simulation Modes:
-  1. Live Qiskit Aer Statevector Engine: Executes real 8-to-10 qubit quantum circuits for base scales (N=15 Shor's, M=64 Quantum-MIPS) with custom noise models and transpiler coupling maps.
-  2. Analytical Co-Design Profiler: Closed-form systems modeling for intractable scales (N >= 21 through RSA-2048, M >= 1k through 1M vectors), tracking statevector RAM limits (16 * 2^n bytes), gate depth, and exponential coherence decay.
+  1. Qiskit Aer Statevector References: N = 15 and M = 64 sequential references execute in Qiskit Aer; other tiers and larger scales use analytical projections. The references use 8 qubits for Shor's Algorithm and 10 for the Quantum-MIPS marked-state demonstration. The latter does not execute vector loading or adaptive maximum finding; its measured CPU simulator timings are separate from projected GPU/QPU timings and coherence.
+  2. Analytical Co-Design Profiler: Closed-form models for other tiers and larger scales (Shor N >= 21 through RSA-2048; Quantum-MIPS M >= 1,024 through 1,048,576), tracking statevector RAM limits (`16 × 2^q` bytes for `q` emulated qubits), gate depth, and exponential coherence decay.
 
 ---
 
 ## 🎛️ Supported Workloads & Hardware Profiles
 
-* Shor's Cryptography (N = 15, 21, 35, RSA-512, RSA-2048): CPU wins Stages 01 & 03 (scalar math; GPU PCIe launch overhead slows it down). QPU must survive deep modular exponentiation.
-* Quantum-MIPS (LLM Vector Retrieval) (M = 64, 1k, 32k, 128k, 1M): GPU wins Stages 01 & 03 at scale (M >= 1k) via tensor-core LSH hashing & FP16 reranking. Grover search achieves sqrt(M) scaling.
+* Shor's Algorithm (N = 15, 21, 35, RSA-512, RSA-2048): Models factoring pipelines, with CPU preferred for scalar host stages in this calibration. RSA-scale runs project resource requirements; they do not factor real RSA keys. The QPU model accounts for modular-exponentiation depth and coherence limits.
+* Quantum-MIPS (Maximum Inner Product Search; LLM Vector Retrieval) (M = 64, 1,024, 32k, 128k, 1M): Models LSH pruning and FP16 reranking, with GPU hosts preferred at M >= 1,024. Grover's search / amplitude amplification uses O(√M) iterations in the reference model. This is not a measured end-to-end vector retrieval speedup.
 
 ### Hardware Profiles
-* IBM Heron NISQ: 133-qubit Heavy-Hex superconducting lattice (sparse connectivity, higher SWAP routing depth).
-* Google Weber 2D: 72-qubit 2D Square Grid superconducting transmon (denser connectivity, ultra-fast 20ns gates).
-* IonQ Forte Ion: 36-qubit All-to-All Trapped-Ion (zero routing SWAP overhead and long coherence, but slower acoustic gate speeds).
-* Ideal Noise-Free: Theoretical noise-free reference (100% coherence).
+
+* IBM Heron NISQ: 133-qubit r1 reference with Heavy-Hex superconducting connectivity and modeled SWAP routing overhead.
+* Google Weber (2D Grid): An exploratory 72-qubit grid preset inspired by square-lattice superconducting hardware. Google's published Weber device has 53 active qubits; 72 is a model capacity, not its physical-device specification.
+* IonQ Forte (Trapped Ion): 36-qubit reference with all-to-all connectivity, high gate fidelity, and long coherence. The model removes SWAP routing layers but uses slower laser-driven gate execution; high fidelity does not mean noise-free execution.
+* Ideal Noise-Free: Theoretical reference with 100% modeled coherence for feasible execution. Capacity and routing limits still apply.
+
+Profile depth, latency, and coherence factors are comparative modeling assumptions. Available QPU qubits can be overridden independently of the profile's reference capacity; overrides beyond that reference are exploratory.
+
+---
+
+## Interface and saved runs
+
+* Themes: Use the header's Sun/Moon button to switch light and dark modes, or the monitor button to follow the system preference. System mode is the default; your theme choice persists across browser reloads.
+* Quick history filters: **All Runs**, **Nominal Only**, and **Pinned Only** show matching counts for the active workload's loaded runs. Filtering happens in memory, without additional API calls or database queries. Nominal matches the `NOMINAL` coherence budget status; pinned includes pinned or named snapshots. The table initially displays the latest five matching rows; **Show all** expands the loaded matches.
+* Restore and export: **Restore to Simulator** loads a saved run from the active browser session into the controls; click **Run simulation** to execute it. Select up to three runs for comparison. CSV/JSON export uses selected runs, including hidden selections, or the displayed rows when nothing is selected.
+* Retention: History retains at most 20 unpinned, unnamed runs per session across workloads. Named or pinned snapshots are protected. See the persistence and TTL sections below for the 48-hour cleanup policy.
 
 ---
 
 ## 🤖 AI Telemetry Advisor & Unit Economics
+
 * Powered by Google Gemini AI with strict system instruction grounding and a Hardware Control Constraint Guardrail.
-* Neon PostgreSQL Read-Through Caching: Repeat runs fetch instantly with 0 API tokens / $0.000000 cost.
-* Live UI Telemetry Strip: Displays execution source (LIVE GEMINI vs. NEON CACHE HIT), token counts, estimated USD cost, and latency.
+* Neon PostgreSQL Read-Through Caching: Matching diagnostics can be reused with zero new model tokens or estimated inference cost. Cache keys include configuration, telemetry, comparison context, model, and policy.
+* Live UI Telemetry Strip: Distinguishes **Live AI**, **Cached DB Hit**, **Reused diagnostic**, and **Deterministic Fallback**, with token counts, estimated USD cost, and lookup latency. Reusing a saved diagnostic does not imply a new database cache lookup.
 
 ---
 
 ## 🚀 Quickstart & Local Development
 
-1. Clone & Install Dependencies:
-   git clone https://github.com/your-username/q-split.git
-   cd q-split
+1. Clone the repository and install the frontend dependencies:
+
+   ```sh
+   git clone https://github.com/Mic-Sp/Q-split.git q-split
+   cd q-split/frontend
    npm install
-   cd backend && pip install -r requirements.txt
+   cp .env.example .env.local
+   ```
 
-2. Configure Environment Variables (.env):
-   DATABASE_URL="postgresql://..."
-   DIRECT_URL="postgresql://..."
-   GEMINI_API_KEY="..."
+2. Edit `frontend/.env.local`. The engine URL is a server-side runtime setting; database and Gemini credentials are optional:
 
-3. Run Services:
-   - Backend: cd backend && uvicorn main:app --reload --port 8000
-   - Frontend: npm run dev (opens on http://localhost:3000)
+   ```dotenv
+   SIMULATION_API_URL=http://localhost:8000
+   DATABASE_URL=
+   DATABASE_URL_UNPOOLED=
+   GEMINI_API_KEY=
+   ```
 
-4. Run Test Suites:
-   - Backend: pytest
-   - Frontend: npm test (includes the 1,620-configuration integration matrix)
+   Set `DATABASE_URL` to the Neon connection for persistent history and advisor caching. `DATABASE_URL_UNPOOLED` supplies a direct connection for Prisma migrations and maintenance; it falls back to `DATABASE_URL` when blank. Without database credentials, simulations still work; without a Gemini key, the advisor supplies deterministic local diagnostics.
+
+3. In a separate terminal, create the Python environment and start the backend **from the repository root**:
+
+   ```sh
+   python3 -m venv backend/venv
+   backend/venv/bin/python -m pip install -r backend/requirements.txt
+   backend/venv/bin/python -m uvicorn backend.main:app --reload --port 8000
+   ```
+
+4. Start the frontend **from `frontend/`**:
+
+   ```sh
+   npm run dev
+   ```
+
+   Open http://localhost:3000. If database credentials are configured, apply the migrations described below before using persistent history.
+
+5. Run the test suites:
+
+   From the repository root:
+
+   ```sh
+   backend/venv/bin/python -m unittest discover -s backend/tests -v
+   ```
+
+   From `frontend/`:
+
+   ```sh
+   npx tsc --noEmit
+   npm test
+   ```
+
+   The frontend tests include the 1,620-configuration backend integration matrix and use the Python environment installed above.
 
 ## Run persistence and session API
 
@@ -114,7 +164,7 @@ npm run db:migrate
 npm run db:cleanup
 ```
 
-`db:cleanup` executes [purge-expired-runs.sql](prisma/maintenance/purge-expired-runs.sql)
+`db:cleanup` executes [purge-expired-runs.sql](frontend/prisma/maintenance/purge-expired-runs.sql)
 using `prisma.config.ts`, which loads `.env.local` and prefers
 `DATABASE_URL_UNPOOLED` over `DATABASE_URL`. For manual execution in the Neon SQL
 Editor, select the intended database/branch and run that file's SQL directly.
