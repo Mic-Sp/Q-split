@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-labelledby="q-split-title">
+  <title id="q-split-title">Q-Split</title>
+  <rect x="1" y="1" width="62" height="62" rx="14" fill="#0f172a" stroke="#155e75" stroke-width="2" />
+  <path d="M26 32h4c8 0 4-16 12-16M30 32c8 0 4 16 12 16" fill="none" stroke="#22d3ee" stroke-width="4" stroke-linecap="round" />
+  <circle cx="18" cy="32" r="8" fill="#22d3ee" />
+  <circle cx="18" cy="32" r="3" fill="#0f172a" />
+  <rect x="42" y="10" width="12" height="12" rx="3" fill="#0f172a" stroke="#67e8f9" stroke-width="4" />
+  <rect x="42" y="42" width="12" height="12" rx="3" fill="#22d3ee" />
+</svg>

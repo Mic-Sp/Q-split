@@ -21,6 +21,20 @@
   1. Qiskit Aer Statevector References: N = 15 and M = 64 sequential references execute in Qiskit Aer; other tiers and larger scales use analytical projections. The references use 8 qubits for Shor's Algorithm and 10 for the Quantum-MIPS marked-state demonstration. The latter does not execute vector loading or adaptive maximum finding; its measured CPU simulator timings are separate from projected GPU/QPU timings and coherence.
   2. Analytical Co-Design Profiler: Closed-form models for other tiers and larger scales (Shor N >= 21 through RSA-2048; Quantum-MIPS M >= 1,024 through 1,048,576), tracking statevector RAM limits (`16 × 2^q` bytes for `q` emulated qubits), gate depth, and exponential coherence decay.
 
+The hosted backend on Render may take 30–50 seconds or longer to spin up after inactivity. Keep the page open while the initial request completes; [Render documents free-service startup as taking about a minute](https://render.com/docs/free#spinning-down-on-idle).
+
+### Verdict taxonomy
+
+These statuses describe distinct layers of the simulation:
+
+| Layer | Internal values | Meaning |
+| --- | --- | --- |
+| Overall Pipeline Offload State | `optimal` \| `warning` \| `blocked` | The derived offload verdict considers execution feasibility, coherence, interconnect costs, and available CPU comparisons. |
+| Per-Stage Bottleneck Severity | `OPTIMAL` \| `WARNING` \| `CRITICAL_BOTTLENECK` | Each pipeline stage reports its own execution status; this vocabulary also appears in persisted bottleneck summaries. |
+| Coherence Status | `NOMINAL` \| `DEGRADED` \| `EXCEEDED` | The coherence budget uses survival thresholds of 70% and 35%; a blocked QPU route overrides survival to `EXCEEDED`. |
+
+These vocabularies are intentionally separate: a `NOMINAL` coherence budget alone does not establish an `optimal` offload verdict. All internal enums and status values remain unchanged, as do API and database contracts.
+
 ---
 
 ## 🎛️ Supported Workloads & Hardware Profiles
