@@ -68,6 +68,12 @@ Profile depth, latency, and coherence factors are comparative modeling assumptio
 * Neon PostgreSQL Read-Through Caching: Matching diagnostics can be reused with zero new model tokens or estimated inference cost. Cache keys include configuration, telemetry, comparison context, model, and policy.
 * Live UI Telemetry Strip: Distinguishes **Live AI**, **Cached DB Hit**, **Reused diagnostic**, and **Deterministic Fallback**, with token counts, estimated USD cost, and lookup latency. Reusing a saved diagnostic does not imply a new database cache lookup.
 
+Advisor provider requests use two 60-second sliding windows: at most **5 live attempts per browser session** and **8 per connecting IP**. Valid persistent-cache hits and coalesced followers consume no tokens; missing provider credentials also consume none. Limits are checked atomically immediately before the outbound request, so failed provider attempts count. When a limit is reached, both advisor endpoint names return the usual HTTP 200 deterministic fallback with a cooldown notice and zero new model usage.
+
+On Vercel, IP identification uses the platform-controlled `x-vercel-forwarded-for` header, falling back to `x-real-ip` only when that header is absent. Arbitrary forwarding chains are ignored. Missing sessions share a legacy quota; missing, invalid, or untrusted IP headers share a conservative unknown-IP quota, including on non-Vercel hosts. See [Vercel's request-header documentation](https://vercel.com/docs/headers/request-headers#x-vercel-forwarded-for) for the forwarding trust boundary.
+
+The zero-dependency limiter is **process-local**: quotas survive warm-process/module reuse but are not coordinated across server instances or cold starts. Expired keys are automatically swept, and a 10,000-key cap rejects new identities instead of evicting active quotas. Strict deployment-wide provider budgets require a shared limiter or platform-level controls.
+
 ---
 
 ## 🚀 Quickstart & Local Development

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { beforeEach, test } from "node:test";
 import { POST } from "@/app/api/advisor/route";
 import { deterministicInsight, parseAdvisorInsight } from "./advisor";
 import { createRunRecord, serializeRun } from "./run-record";
@@ -7,6 +7,9 @@ import type { CompletedRun } from "@/types/run-history";
 import type { SimulationRun } from "@/generated/prisma/client";
 import { ADVISOR_BODY_LIMIT, advisorDigest, validateAdvisorRequest } from "./advisor-input";
 import { ADVISOR_OUTPUT_TOKENS, ADVISOR_RESPONSE_SCHEMA, ADVISOR_TEMPERATURE, ADVISOR_TIMEOUT_MS } from "./advisor-output";
+import { advisorRateLimiter } from "./advisor-rate-limit";
+
+beforeEach(() => advisorRateLimiter.clear());
 
 const fixture = (): CompletedRun => ({
   id: "4d9c09fa-7843-4c63-9d2b-556f74c4e5ab", completedAt: "2026-10-26T16:00:00.000Z",
@@ -83,6 +86,7 @@ test("advisor route handles Gemini success, missing keys, limits, timeouts, and 
     process.env.GEMINI_API_KEY = "test-server-secret";
     process.env.GEMINI_MODEL = "gemini-3.5-flash-lite";
     for (const [mode, expected] of [["success", null], ["429", "rate_limited"], ["503", "provider_error"], ["timeout", "timeout"], ["network", "network_error"], ["truncated", "invalid_response"], ["malformed", "invalid_response"]]) {
+      advisorRateLimiter.clear(); // Each provider outcome starts with an independent quota.
       behavior = mode!;
       response = await POST(request({ current: fixture(), previous: fixture() }));
       assert.equal(response.status, 200);
@@ -130,6 +134,7 @@ test("output validation failures return the local diagnostic with explicit fallb
       { ...valid, extraField: "not allowed" },
       { ...valid, routingDiagnosis: "This is the first sentence. This is the second. This is the third. This is the fourth. This is the fifth." },
     ]) {
+      advisorRateLimiter.clear(); // Exercise output validation independently of rate limits.
       const response = await POST(request(input));
       assert.equal(response.status, 200);
       const insight = (await response.json()).insight;
@@ -140,6 +145,7 @@ test("output validation failures return the local diagnostic with explicit fallb
       assert.deepEqual(insight.sections, expected.sections);
       assert.equal(insight.previousRunId, input.previous!.id);
     }
+    advisorRateLimiter.clear();
     returned = valid;
     const insight = (await (await POST(request(input))).json()).insight;
     assert.equal(insight.source, "gemini");

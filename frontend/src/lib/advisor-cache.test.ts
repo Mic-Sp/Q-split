@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test, type TestContext } from "node:test";
+import { beforeEach, test, type TestContext } from "node:test";
 import { POST } from "@/app/api/advisor/route";
 import { POST as analyzeTelemetry } from "@/app/api/analyze-telemetry/route";
 import { advisorCacheKey, adviseWithCache } from "@/lib/advisor-cache";
@@ -12,6 +12,9 @@ import type { PrismaClient } from "@/generated/prisma/client";
 import type { AdvisorInsight } from "@/types/advisor";
 import { createSessionClient } from "./client-session";
 import { readRunSession, RUN_SESSION_HEADER } from "./run-session";
+import { advisorRateLimiter } from "./advisor-rate-limit";
+
+beforeEach(() => advisorRateLimiter.clear());
 
 const fixture = () => ({ current: {
   id: "4d9c09fa-7843-4c63-9d2b-556f74c4e5ab", completedAt: "2026-10-26T16:00:00.000Z",
@@ -32,7 +35,7 @@ const response = () => Response.json({ candidates: [{ finishReason: "STOP", cont
 function repository(t: TestContext) {
   const global = globalThis as unknown as { qSplitDatabase?: { url: string; client: PrismaClient; schemaVersion?: string } };
   const original = global.qSplitDatabase;
-  const env = { DATABASE_URL: process.env.DATABASE_URL, GEMINI_API_KEY: process.env.GEMINI_API_KEY, GEMINI_MODEL: process.env.GEMINI_MODEL };
+  const env = { DATABASE_URL: process.env.DATABASE_URL, GEMINI_API_KEY: process.env.GEMINI_API_KEY, GEMINI_MODEL: process.env.GEMINI_MODEL, VERCEL: process.env.VERCEL };
   const url = "postgresql://test:test@cache-test.invalid/test";
   const rows = new Map<string, { advisorInsight: AdvisorInsight | null; sessionId: string | null }>([[fixture().current.id, { advisorInsight: null, sessionId: null }]]);
   const entries = new Map<string, { runId: string; advisorInsight: AdvisorInsight }>();
@@ -97,6 +100,103 @@ test("validated Neon cache hits bypass Gemini, including when its API key is abs
   assert.equal(stats.writes, 2, "Each response persists its own lookup accounting");
 });
 
+function rateRequest(index: number, sessionId: string, ip = "203.0.113.1") {
+  const input = fixture();
+  input.current.telemetry.stages.stage_2_quantum_kernel.metrics.circuit_depth += index;
+  const wire = request(input, sessionId);
+  wire.headers.set("x-vercel-forwarded-for", ip);
+  wire.headers.set("x-forwarded-for", `198.51.100.${index + 1}`);
+  return wire;
+}
+
+test("five session provider attempts exhaust the quota while persistent cache hits bypass the limiter entirely", async t => {
+  const { stats } = repository(t);
+  process.env.VERCEL = "1";
+  let calls = 0;
+  const gate = t.mock.method(advisorRateLimiter, "consume", advisorRateLimiter.consume.bind(advisorRateLimiter));
+  t.mock.method(globalThis, "fetch", async () => { calls++; return response(); });
+  for (let index = 0; index < 5; index++) {
+    const result = await (await POST(rateRequest(index, "limited-session"))).json();
+    assert.equal(result.insight.source, "gemini");
+  }
+  const limited = await POST(rateRequest(5, "limited-session"));
+  const body = await limited.json();
+  assert.equal(limited.status, 200, "Local limits preserve the deterministic-fallback response contract");
+  assert.equal(body.insight.source, "fallback");
+  assert.equal(body.insight.fallbackReason, "rate_limited");
+  assert.match(body.insight.notice, /Live AI request limit reached.*Try again in \d+ seconds.*cached insights remain available/);
+  assert.deepEqual([body.insight.telemetry.totalTokens, body.insight.telemetry.estimatedCostUsd], [0, 0]);
+  assert.equal(calls, 5);
+  const checks = gate.mock.callCount(), reads = stats.reads;
+  for (let index = 0; index < 10; index++) {
+    const cached = await (await POST(rateRequest(0, "limited-session"))).json();
+    assert.equal(cached.insight.source, "cached");
+    assert.equal(cached.insight.telemetry.totalTokens, 0);
+  }
+  assert.equal(stats.reads, reads + 10, "Each cache hit is resolved from the persistent cache");
+  assert.equal(gate.mock.callCount(), checks, "Cache hits neither check nor consume a rate-limit token");
+  assert.equal(calls, 5);
+  assert.equal(stats.cacheWrites, 5, "A local rate-limit fallback cannot populate the advisor cache");
+});
+
+test("eight concurrent provider attempts across sessions exhaust the trusted IP quota across both API aliases", async t => {
+  repository(t);
+  process.env.VERCEL = "1";
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => { calls++; return response(); });
+  const replies = await Promise.all(Array.from({ length: 9 }, (_, index) =>
+    (index % 2 ? analyzeTelemetry : POST)(rateRequest(index, `ip-session-${index}`))));
+  const results = await Promise.all(replies.map(reply => reply.json()));
+  assert.equal(results.filter(result => result.insight.source === "gemini").length, 8);
+  const denied = results.findIndex(result => result.insight.fallbackReason === "rate_limited");
+  assert.notEqual(denied, -1);
+  assert.match(results[denied].insight.notice, /Live AI request limit reached.*Try again in/);
+  assert.equal(calls, 8, "Rotating sessions and generic forwarding headers cannot bypass the connecting-IP quota");
+  const cached = await (await POST(rateRequest(0, "new-cached-session"))).json();
+  assert.equal(cached.insight.source, "cached", "An exhausted IP can still read valid cached insights");
+  for (let index = 0; index < 5; index++) {
+    const otherIp = await (await POST(rateRequest(20 + index, `ip-session-${denied}`, "203.0.113.2"))).json();
+    assert.equal(otherIp.insight.source, "gemini", "An IP rejection never spends the rejected caller's session quota");
+  }
+  assert.equal(calls, 13);
+});
+
+test("coalesced diagnostics consume only the leader's provider token", async t => {
+  repository(t);
+  process.env.VERCEL = "1";
+  const gate = t.mock.method(advisorRateLimiter, "consume", advisorRateLimiter.consume.bind(advisorRateLimiter));
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => { calls++; return response(); });
+  const replies = await Promise.all(Array.from({ length: 12 }, (_, index) => POST(rateRequest(0, `shared-session-${index}`))));
+  const results = await Promise.all(replies.map(reply => reply.json()));
+  assert.ok(results.every(result => result.insight.source === "gemini"));
+  assert.equal(calls, 1);
+  assert.equal(gate.mock.callCount(), 1);
+  assert.equal(results.filter(result => result.insight.telemetry.shared).length, 11);
+});
+
+test("missing provider credentials consume no quota and failed outbound attempts remain limited", async t => {
+  repository(t);
+  const gate = t.mock.method(advisorRateLimiter, "consume", advisorRateLimiter.consume.bind(advisorRateLimiter));
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => { calls++; return Response.json({}, { status: 503 }); });
+  delete process.env.GEMINI_API_KEY;
+  for (let index = 0; index < 10; index++) {
+    const result = await (await POST(request(fixture(), "offline-session"))).json();
+    assert.equal(result.insight.fallbackReason, "missing_key");
+  }
+  assert.equal(gate.mock.callCount(), 0);
+  assert.equal(calls, 0);
+  process.env.GEMINI_API_KEY = "test-key";
+  for (let index = 0; index < 5; index++) {
+    const result = await (await POST(request(fixture(), "offline-session"))).json();
+    assert.equal(result.insight.fallbackReason, "provider_error");
+  }
+  const limited = await (await POST(request(fixture(), "offline-session"))).json();
+  assert.equal(limited.insight.fallbackReason, "rate_limited");
+  assert.equal(calls, 5, "Unsuccessful provider attempts still count toward the live-call budget");
+});
+
 test("fingerprints include telemetry, comparison state, model and policy but ignore run identity and display metadata", () => {
   const input = validateAdvisorRequest(fixture());
   const key = advisorCacheKey(input, "gemini-test", "policy-v1");
@@ -129,6 +229,7 @@ test("changed comparisons and invalid, legacy, or fallback diagnostics are cache
     { ...deterministicInsight(validateAdvisorRequest(fixture()).current, undefined, "missing_key"), cacheKey: first.cacheKey },
   ];
   for (const invalid of variants) {
+    advisorRateLimiter.clear(); // Isolate each malformed-cache scenario from provider quotas.
     entries.set(first.cacheKey!, { runId: first.runId, advisorInsight: invalid });
     assert.equal((await (await POST(request(fixture()))).json()).insight.source, "gemini");
   }

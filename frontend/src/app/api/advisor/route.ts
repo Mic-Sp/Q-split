@@ -5,6 +5,7 @@ import type { AdvisorInsight, AdvisorRequest } from "@/types/advisor";
 import { adviseWithCache } from "@/lib/advisor-cache";
 import { geminiUsage, withLookupTelemetry } from "@/lib/advisor-telemetry";
 import { readRunSession } from "@/lib/run-session";
+import { advisorRateLimiter, readTrustedClientIp } from "@/lib/advisor-rate-limit";
 
 const headers = { "Cache-Control": "no-store" };
 const SYSTEM_INSTRUCTION = `You are a Principal Quantum-Classical Systems Architect diagnosing Q-Split simulations.
@@ -20,7 +21,8 @@ For n-bit Shor: minimum 2n+3 logical qubits (8 for N=15). Less capacity blocks a
  * Prune input before any database/provider access. Generate bounded structured JSON
  * only on a cache miss, verify the provider's STOP finish reason and output policy,
  * then retain original usage separately from current lookup costs. Both advisor
- * endpoint names share this handler; provider failures return explicit local diagnostics.
+ * endpoint names share this handler; provider failures and local rate limits return
+ * explicit local diagnostics. Only outbound provider attempts debit both quotas.
  */
 export async function POST(request: Request) {
   const started = performance.now();
@@ -44,6 +46,11 @@ export async function POST(request: Request) {
       suggestedNextExperiment: deterministicInsight(input.current, input.previous, "missing_key").sections.optimizationRecommendation,
     });
     try {
+      const limit = advisorRateLimiter.consume(sessionId, readTrustedClientIp(request.headers));
+      if (!limit.allowed) return {
+        ...fallback("rate_limited"),
+        notice: `Live AI request limit reached. Try again in ${limit.retryAfterSeconds} ${limit.retryAfterSeconds === 1 ? "second" : "seconds"}. Showing a deterministic local diagnostic; cached insights remain available.`,
+      };
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
         // Shared generation outlives any single caller; the provider deadline
         // still bounds it when a tab navigates away or cancels its request.
