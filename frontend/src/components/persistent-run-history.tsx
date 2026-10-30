@@ -9,6 +9,7 @@ import { BenchmarkComparison } from "@/components/benchmark-comparison";
 import { benchmarkExportRuns, MAX_COMPARISON_RUNS, selectedBenchmarkRuns, toggleBenchmarkSelection } from "@/lib/benchmark-comparison";
 import { runsForWorkload } from "@/lib/run-history";
 import { coherenceBudget } from "@/lib/kpi-metrics";
+import { WORKLOADS } from "@/lib/workloads";
 import type { WorkloadId } from "@/types/telemetry";
 import { downloadBenchmark } from "@/lib/benchmark-export";
 
@@ -34,7 +35,7 @@ export function PersistentRunHistory({ history, onRestore, workload }: { workloa
     { value: "nominal", label: "Nominal Only", count: nominalRuns.length },
     { value: "pinned", label: "Pinned Only", count: pinnedRuns.length },
   ] as const;
-  const workloadLabel = workload === "shors_crypto" ? "Shor’s Cryptography" : "Quantum-MIPS";
+  const workloadLabel = workload === "shors_crypto" ? WORKLOADS.shors_crypto.label : "Quantum-MIPS";
   // Resolve UUIDs against the active family before deriving either the matrix or the download pool.
   const selectedRuns = selectedBenchmarkRuns(runs, selectedIds);
   const exportRuns = benchmarkExportRuns(runs, visibleRuns, selectedIds);

@@ -2,7 +2,7 @@ import type { SimulationRequest, WorkloadId } from "@/types/telemetry";
 import { isHardwareProfile } from "@/lib/hardware-profiles";
 
 export const WORKLOADS = {
-  shors_crypto: { label: "Shor’s cryptography", scales: [15, 21, 35, 512, 2048],
+  shors_crypto: { label: "Shor’s Algorithm", scales: [15, 21, 35, 512, 2048],
     stages: ["Classical preprocessing", "Quantum kernel", "Classical postprocessing"] },
   quantum_mips: { label: "Quantum-MIPS (LLM Vector Retrieval)", scales: [64, 1024, 32768, 131072, 1048576],
     stages: ["LSH Bucket Pruning", "Quantum Inner-Product & Grover-Max Amplification", "Exact FP16 Dot-Product Reranking"] },

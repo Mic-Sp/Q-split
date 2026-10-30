@@ -9,6 +9,7 @@ import { SNAPSHOT_NAME_LIMIT } from "@/lib/benchmark-snapshot";
 import { coherenceBudget, pipelineTiming } from "@/lib/kpi-metrics";
 import { formatDuration, formatRawMilliseconds } from "@/lib/duration";
 import { hardwareLabel } from "@/lib/hardware-profiles";
+import { WORKLOADS } from "@/lib/workloads";
 import { DEFAULT_AVAILABLE_QUBITS, formatValue } from "@/lib/telemetry";
 import type { SavedSimulationRun } from "@/types/run-history";
 
@@ -45,7 +46,7 @@ export function BenchmarkRow({ run, busy, selected, selectionDisabled, onSelect,
         {editing ? <form aria-label="Rename benchmark snapshot" className="space-y-1" onSubmit={async event => { event.preventDefault(); if (await onName(run.id, name)) setEditing(false); }}>
           <input aria-label="Snapshot name" autoFocus value={name} maxLength={SNAPSHOT_NAME_LIMIT} disabled={busy} onChange={event => setName(event.target.value)} className="w-full rounded border border-slate-400 dark:border-slate-600 bg-slate-50 dark:bg-slate-950 px-2 py-1 text-xs" />
           <div className="flex gap-1"><button type="submit" disabled={busy || !name.trim()} className={button}>{busy ? "Saving…" : "Save name"}</button><button type="button" disabled={busy} onClick={() => setEditing(false)} className={button}>Cancel</button></div>
-        </form> : <><p className="flex items-start gap-1 font-semibold text-cyan-900 dark:text-cyan-100 [overflow-wrap:anywhere]">{run.isSnapshot && <Pin size={12} aria-label="Pinned Benchmark Snapshot" className="mt-0.5 shrink-0 text-cyan-700 dark:text-cyan-400" />}{run.snapshotName ?? "Unnamed run"}</p><p className="mt-0.5 text-[9px] text-slate-600 dark:text-slate-400">{run.workloadName}</p></>}
+        </form> : <><p className="flex items-start gap-1 font-semibold text-cyan-900 dark:text-cyan-100 [overflow-wrap:anywhere]">{run.isSnapshot && <Pin size={12} aria-label="Pinned Benchmark Snapshot" className="mt-0.5 shrink-0 text-cyan-700 dark:text-cyan-400" />}{run.snapshotName ?? "Unnamed run"}</p><p className="mt-0.5 text-[9px] text-slate-600 dark:text-slate-400">{run.workloadId === "shors_crypto" ? WORKLOADS.shors_crypto.label : run.workloadName}</p></>}
         <time dateTime={run.completedAt} className="mt-1 block text-[9px] text-slate-600 dark:text-slate-400">{timeFormatter.format(new Date(run.completedAt))}</time>
       </td>
       <td className="p-2"><p>{run.scaleLabel}</p><p className="mt-1 text-[9px] text-slate-600 dark:text-slate-400">{hardwareLabel(run.hardwareProfile)}</p></td>
