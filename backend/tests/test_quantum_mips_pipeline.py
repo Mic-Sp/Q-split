@@ -88,7 +88,7 @@ class QuantumMipsPipelineTests(unittest.TestCase):
                 self.assertEqual(result.metrics["grover_iterations"], 6)
                 self.assertIn("separate projections", result.output_summary)
                 self.assertIn("101101", result.output_summary)
-        self.assertEqual(self.live.call_count, 4)
+        self.assertEqual(self.live.call_count, len(HARDWARE_PROFILES))
 
     def test_parallel_and_large_qpu_models_apply_tier_and_topology_exactly_once(self):
         with patch("backend.main.execute_live_quantum_mips_64", side_effect=AssertionError("Analytical models must not execute Aer")):

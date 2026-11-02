@@ -72,7 +72,7 @@ def test_validation_cli_helper_rejects_invalid_shots(shots):
         list(validation_rows(shots))
 
 
-def test_cli_runs_real_native_circuits_for_all_three_profiles_without_importing_fastapi():
+def test_cli_runs_real_native_circuits_for_all_nonideal_profiles_without_importing_fastapi():
     root = Path(__file__).resolve().parents[2]
     result = subprocess.run([
         sys.executable, "-c",
@@ -84,7 +84,7 @@ def test_cli_runs_real_native_circuits_for_all_three_profiles_without_importing_
     assert "not no-error survival" in result.stdout
     assert "topology routing" in result.stdout
     lines = [line.split() for line in result.stdout.splitlines() if line.startswith(("N=15 ", "MIPS-64 "))]
-    assert len(lines) == 6
+    assert len(lines) == 2 * (len(HARDWARE_PROFILES) - 1)
     assert {fields[1] for fields in lines} == set(HARDWARE_PROFILES) - {"ideal_sim"}
     for fields in lines:
         # The four probabilities are the final columns; formatting retains tiny bounds.

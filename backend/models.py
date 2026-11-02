@@ -65,7 +65,9 @@ class CircuitSpec(BaseModel):
 class QPUProfile(BaseModel):
     """Representative physics, not a live device calibration.
 
-    None for capacity means unbounded; None for T1/T2 denotes the ideal reference.
+    None for capacity means unbounded. None for T1/T2 disables separate memory
+    decay: the ideal reference or active-QEC memory errors folded into logical
+    operation errors. Profile provenance must distinguish those assumptions.
     topology_factor models routing; native_2q_per_cx converts CX-basis resources
     to native entanglers. Their product multiplies depth and two-qubit count once.
     t_2q_ns and err_2q describe the same native gate.

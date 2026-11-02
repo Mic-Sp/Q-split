@@ -12,6 +12,8 @@ IBM_PROCESSORS = "https://quantum.cloud.ibm.com/docs/en/guides/processor-types"
 WEBER_DATASHEET = "https://quantumai.google/hardware/datasheet/weber.pdf"
 FORTE_SPECS = "https://www.ionq.com/quantum-systems/forte"
 FORTE_PAPER = "https://arxiv.org/html/2308.05071v2"
+GIDNEY_2025_RSA = "https://arxiv.org/abs/2505.15917"
+GOOGLE_WILLOW_QEC = "https://arxiv.org/abs/2408.13687"
 
 
 def _provenance(source_url, sources, published, notes, *, retrieval_date=RETRIEVED_ON, statistics=None):
@@ -70,6 +72,64 @@ HARDWARE_PROFILES = {
             "110 us 1Q and 900 us 2Q timings are from the 30-qubit Forte paper, approximated "
             "for this 36-qubit preset. Vendor SPAM error proxies measurement error. Readout/reset "
             "times are assumptions. All-to-all connectivity uses no routing expansion.")),
+    "ftqc_surface_code": QPUProfile(
+        id="ftqc_surface_code",
+        name="FTQC Surface-Code Logical QPU (1 µs cycle, d≈27 target; representative)",
+        n_qubits_max=1024,
+        t1_us=None, t2_us=None,
+        t_1q_ns=1_000.0, t_2q_ns=27_000.0,
+        t_meas_ns=27_000.0, t_reset_ns=1_000.0,
+        err_1q=1e-10, err_2q=1e-9, err_meas=1e-9,
+        topology_factor=1.0, native_2q_per_cx=1.0,
+        provenance=_provenance(GIDNEY_2025_RSA, [GIDNEY_2025_RSA, GOOGLE_WILLOW_QEC],
+            {"t_1q_ns"},
+            "Representative logical QPU, not a demonstrated device. Gidney 2025 assumes a 1 us "
+            "surface-code cycle and 0.1% physical gate error. Willow reports 1.1 us cycles and "
+            "Lambda=2.14 +/- 0.02 suppression per distance increase of two, not per unit distance. "
+            "The d=27 target, 1024 logical workspace qubits and roughly 1,000 physical superconducting "
+            "qubits per logical qubit are coarse model assumptions; actual patch, routing, factory "
+            "and decoder resources are not counted. Logical 2Q lattice surgery and measurement "
+            "cost d * 1 us = 27 us, orders of magnitude slower than the representative Heron 68 ns "
+            "physical entangler. Initialization assumes one code cycle. T1/T2=None is a model "
+            "assumption: under active surface-code syndrome extraction, idle logical memory error "
+            "per cycle is folded into the logical operation error rates (err_1q=1e-10, err_2q=1e-9). "
+            "Separate unmitigated physical T1/T2 relaxation is disabled to avoid double-counting "
+            "against approximately 243 qubit-seconds of lattice-surgery exposure at M=1M in the "
+            "Multi-Oracle tier. This does not assert infinite physical coherence; residual memory "
+            "errors are assumed covered by the per-operation targets, without a separate idle schedule. "
+            "Logical operation error targets assume sub-threshold 0.1% physical errors "
+            "and Lambda approximately 2 suppression per distance step of two. The 1e-10/1e-9 targets "
+            "are optimistic model assumptions, not measured Willow errors or a quantitative d=27 "
+            "extrapolation from its distance-7 memory. Logical routing is absorbed into bus timing; "
+            "magic-state factories, decoding and feed-forward stalls are not separately scheduled.",
+            retrieval_date="2026-11-02", statistics={
+                "n_qubits_max": {"statistic_type": "model_assumption: logical workspace capacity",
+                    "source_url": GIDNEY_2025_RSA,
+                    "note": "1024 logical qubits; ~1,000 physical qubits per logical qubit at d≈27 is a coarse footprint assumption, excluding supporting resources."},
+                "t1_us": {"statistic_type": "model_assumption: active-QEC memory errors included in logical operation errors",
+                    "source_url": GOOGLE_WILLOW_QEC, "note": "None disables a separate T1 penalty to avoid double-counting; not a measured or infinite physical lifetime."},
+                "t2_us": {"statistic_type": "model_assumption: active-QEC memory errors included in logical operation errors",
+                    "source_url": GOOGLE_WILLOW_QEC, "note": "None disables a separate T2 penalty to avoid double-counting; not a measured or infinite physical lifetime."},
+                "t_1q_ns": {"statistic_type": "literature resource-estimation assumption: syndrome cycle duration",
+                    "source_url": GIDNEY_2025_RSA,
+                    "note": "1 us in Gidney 2025; Willow benchmarks report 1.1 us. One cycle proxies logical 1Q timing."},
+                "t_2q_ns": {"statistic_type": "model_assumption: derived lattice-surgery latency",
+                    "source_url": GIDNEY_2025_RSA, "note": "d * cycle = 27 * 1 us; logical suppression trades against slower gates."},
+                "t_meas_ns": {"statistic_type": "model_assumption: logical measurement latency",
+                    "source_url": GIDNEY_2025_RSA, "note": "d=27 rounds of 1 us syndrome extraction."},
+                "t_reset_ns": {"statistic_type": "model_assumption: logical initialization latency",
+                    "source_url": GIDNEY_2025_RSA, "note": "One 1 us code cycle; simplified initialization proxy."},
+                "err_1q": {"statistic_type": "model_assumption: logical 1Q error probability per operation",
+                    "source_url": GOOGLE_WILLOW_QEC, "note": "1e-10 target at d≈27; not an experimental result or direct Lambda extrapolation."},
+                "err_2q": {"statistic_type": "model_assumption: logical lattice-surgery error probability per operation",
+                    "source_url": GOOGLE_WILLOW_QEC, "note": "1e-9 target; 0.1% physical error and Lambda≈2 per distance increase of two are context, not a derivation."},
+                "err_meas": {"statistic_type": "model_assumption: logical measurement error probability per operation",
+                    "source_url": GOOGLE_WILLOW_QEC, "note": "1e-9 target after d rounds; not measured Willow readout fidelity."},
+                "topology_factor": {"statistic_type": "model_assumption: logical routing multiplier",
+                    "source_url": GIDNEY_2025_RSA, "note": "1.0; logical routing absorbed into lattice-surgery bus timing."},
+                "native_2q_per_cx": {"statistic_type": "model_assumption: logical entanglers per CX",
+                    "source_url": GIDNEY_2025_RSA, "note": "1.0 logical lattice-surgery operation per modeled CX."},
+            })),
     "ideal_sim": QPUProfile(
         id="ideal_sim", name="Ideal noise-free reference", n_qubits_max=None,
         t1_us=None, t2_us=None, t_1q_ns=32, t_2q_ns=250, t_meas_ns=1500, t_reset_ns=0,
@@ -80,6 +140,7 @@ HARDWARE_PROFILES = {
 }
 
 TOPOLOGIES = {"ibm_heron_nisq": "Heavy-Hex", "google_weber_grid": "2D Square Grid",
+              "ftqc_surface_code": "2D Surface-Code Lattice Surgery",
               "ionq_forte_trapped_ion": "All-to-All Ion Trap", "ideal_sim": "Noise-free reference"}
 
 

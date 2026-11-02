@@ -1,7 +1,7 @@
 import { HARDWARE_PROFILE_IDS, type HardwareProfile } from "@/types/telemetry";
 
 // Published reference capacities and exploratory choices, including legacy 72-qubit runs.
-export const QUBIT_CAPACITY_PRESETS = [16, 36, 53, 72, 133, 1121, 2048, 4096, 16384];
+export const QUBIT_CAPACITY_PRESETS = [16, 36, 53, 72, 133, 1024, 1121, 2048, 4096, 16384];
 
 export const HARDWARE_PROFILES = {
   ibm_heron_nisq: { label: "IBM Heron (133-qubit cap, r3-era timing; representative)", topology: "Heavy-Hex", referenceQubits: 133, depthMultiplier: 1, gateTimeMultiplier: 1, prepMs: 0.15, decayScale: 1200,
@@ -12,6 +12,11 @@ export const HARDWARE_PROFILES = {
     description: "Trapped-ion optical/hyperfine qubits · all-to-all connectivity · 36-qubit reference. Removing SWAP routing layers models 0.55× depth. Laser-driven shared vibrational-mode gates cost 180× gate time, with 0.85 ms combined prep/readout; long coherence uses decay scale 8500." },
   ideal_sim: { label: "Ideal Noise-Free", topology: "Noise-free reference", referenceQubits: null, depthMultiplier: 1, gateTimeMultiplier: 1, prepMs: 0.15, decayScale: null,
     description: "Noise-free reference with 100% coherence; baseline depth and gate time. Capacity is controlled separately; this profile does not imply unlimited qubits or error-corrected hardware. Analytical prep is 0.15 ms; N=15 sequential Aer retains 0.05 ms setup." },
+  // Compatibility display fields derive from the logical timings. New runs use
+  // RESOURCE_QPU_PROFILES; no legacy exponential-depth survival is calibrated.
+  ftqc_surface_code: { label: "FTQC Surface-Code Logical QPU (1 µs cycle, d≈27 target; representative)", topology: "2D Surface-Code Lattice Surgery", referenceQubits: 1024,
+    depthMultiplier: 1, gateTimeMultiplier: 27000 / 250, prepMs: (27000 + 1000) / 1e6, decayScale: null,
+    description: "Representative logical QPU · 1,024 logical workspace qubits · d≈27 target. A 1 µs syndrome cycle gives 27 µs lattice-surgery 2Q gates and measurements, versus Heron's representative 68 ns physical gate. Roughly 1,000 physical superconducting qubits per logical qubit is a coarse assumption; supporting resources are excluded. Logical error targets of 1e-10 / 1e-9 and active-QEC memory errors folded into logical operation errors are assumptions, not demonstrated performance. Separate T1/T2 decay is disabled to avoid double-counting; logical error suppression does not guarantee speedup. See exported profile provenance for Gidney 2025 and Willow QEC sources." },
 } satisfies Record<HardwareProfile, { label: string; topology: string; referenceQubits: number | null; depthMultiplier: number; gateTimeMultiplier: number; prepMs: number; decayScale: number | null; description: string }>;
 
 // Versioned resource-model constants. Legacy timing constants above remain for
@@ -26,6 +31,8 @@ export const RESOURCE_QPU_PROFILES = {
     measurementNs: 250000, resetNs: 1000000, error1q: 0.0002, error2q: 0.004, errorMeasurement: 0.005, native2qPerCx: 1 },
   ideal_sim: { referenceQubits: null, depthMultiplier: 1, t1Us: null, t2Us: null, t1qNs: 32, t2qNs: 250,
     measurementNs: 1500, resetNs: 0, error1q: 0, error2q: 0, errorMeasurement: 0, native2qPerCx: 1 },
+  ftqc_surface_code: { referenceQubits: 1024, depthMultiplier: 1, t1Us: null, t2Us: null, t1qNs: 1000, t2qNs: 27000,
+    measurementNs: 27000, resetNs: 1000, error1q: 1e-10, error2q: 1e-9, errorMeasurement: 1e-9, native2qPerCx: 1 },
 } satisfies Record<HardwareProfile, object>;
 
 /**
@@ -46,6 +53,7 @@ export function hardwareLabel(value: string) {
  * Explain topology savings separately from gate-time/coherence assumptions for nonbaseline profiles.
  */
 export function architectureTradeOff(profile: HardwareProfile, resourceVersion?: unknown) {
+  if (profile === "ftqc_surface_code") return "2D Surface-Code Lattice Surgery: d≈27 × 1 µs syndrome cycle = 27 µs logical 2Q/measurement latency, versus Heron's representative 68 ns physical entangler. Logical operation errors are assumed at 1e-10 / 1e-9 including active-QEC memory errors; separate T1/T2 decay is disabled to avoid double-counting. Batch latency includes shots, measurement/reset and launch; compare logical survival separately from gate time and native classical baselines. Capacity counts logical qubits; roughly 1,000 physical qubits per logical qubit and routing absorbed into bus timing are assumptions.";
   if (resourceVersion === 1 || resourceVersion === 2) {
     const physics = RESOURCE_QPU_PROFILES[profile];
     return `${HARDWARE_PROFILES[profile].topology}: ${physics.depthMultiplier}× routing depth; ${physics.t2qNs} ns representative native entangler; ${physics.native2qPerCx} native 2Q gates per CX (assumed, applied to depth and 2Q count). Batch timing includes shots, measurement/reset and launch. Survival combines gate errors and all-qubit T1 decay; routing and native conversion are approximations.`;

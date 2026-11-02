@@ -33,14 +33,15 @@ function fixture(profile: HardwareProfile): CompletedRun {
     } } };
 }
 
-test("hardware registry exposes exactly four profiles and explicit comparative assumptions", () => {
-  assert.equal(HARDWARE_PROFILE_IDS.length, 4);
+test("hardware registry exposes five profiles and explicit comparative assumptions", () => {
+  assert.equal(HARDWARE_PROFILE_IDS.length, 5);
   assert.deepEqual(HARDWARE_PROFILE_IDS.map(id => { const arch = HARDWARE_PROFILES[id]; return [arch.referenceQubits, arch.depthMultiplier, arch.gateTimeMultiplier, arch.prepMs, arch.decayScale]; }), [
-    [133, 1, 1, 0.15, 1200], [53, 0.78, 0.45, 0.12, 850], [36, 0.55, 180, 0.85, 8500], [null, 1, 1, 0.15, null],
+    [133, 1, 1, 0.15, 1200], [53, 0.78, 0.45, 0.12, 850], [36, 0.55, 180, 0.85, 8500], [1024, 1, 108, 0.028, null], [null, 1, 1, 0.15, null],
   ]);
   assert.match(HARDWARE_PROFILES.google_weber_grid.description, /53-qubit reference.*32 ns.*0\.9%/);
   assert.ok(QUBIT_CAPACITY_PRESETS.includes(53));
   assert.ok(QUBIT_CAPACITY_PRESETS.includes(72));
+  assert.ok(QUBIT_CAPACITY_PRESETS.includes(1024));
   assert.equal(hardwareLabel("ionq_forte_trapped_ion"), "IonQ Forte (Trapped Ion)");
   for (const value of ["unknown", "google", "__proto__", null, true]) assert.equal(isHardwareProfile(value), false);
 });
@@ -50,6 +51,7 @@ test("profile selection defaults to native capacity or the current scale's full 
     assert.equal(hardwareDefaultQubits("ibm_heron_nisq", scale), 133);
     assert.equal(hardwareDefaultQubits("google_weber_grid", scale), 53);
     assert.equal(hardwareDefaultQubits("ionq_forte_trapped_ion", scale), 36);
+    assert.equal(hardwareDefaultQubits("ftqc_surface_code", scale), 1024);
     assert.equal(hardwareDefaultQubits("ideal_sim", scale), ceiling);
     assert.ok(hardwareDefaultQubits("ideal_sim", scale) >= qubitThresholds(scale).minimum);
   }

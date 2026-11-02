@@ -17,12 +17,13 @@ import { parseTelemetry, describeChanges } from "./telemetry";
 import { WORKLOADS, workloadThresholds } from "./workloads";
 import type { CompletedRun, SavedSimulationRun } from "@/types/run-history";
 import type { SimulationRun } from "@/generated/prisma/client";
+import { HARDWARE_PROFILE_IDS } from "@/types/telemetry";
 
 const python = resolve("../backend/venv/bin/python");
 
 // Integrates the actual backend model with the Next proxy, advisor trust boundary,
 // benchmark serialization/restore, and numeric exports. No network or database.
-test("actual Quantum-MIPS backend payloads survive frontend proxy/advisor/history across 1,620 configurations", { skip: !existsSync(python) }, async t => {
+test("actual Quantum-MIPS backend payloads survive frontend proxy/advisor/history across every profile, scale, tier and route", { skip: !existsSync(python) }, async t => {
   const generated = spawnSync(python, ["-c", `
 import itertools, json
 from functools import lru_cache
@@ -40,7 +41,7 @@ print(json.dumps(runs))
 `], { cwd: resolve(".."), encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
   assert.equal(generated.status, 0, generated.stderr);
   const fixtures = JSON.parse(generated.stdout) as Pick<CompletedRun, "request" | "telemetry">[];
-  assert.equal(fixtures.length, 1620);
+  assert.equal(fixtures.length, 5 * HARDWARE_PROFILE_IDS.length * 3 * 27);
   let expected: typeof fixtures[number];
   t.mock.method(globalThis, "fetch", async (_url: Parameters<typeof fetch>[0], init?: RequestInit) => {
     assert.deepEqual(JSON.parse(String(init?.body)), expected.request);
@@ -77,7 +78,7 @@ print(json.dumps(runs))
       assert.equal(verdict.title, "Classical Memory Wall");
       assert.match(verdict.message, /Select the Sequential tier/);
     }
-    if (index % 324 === 0) representatives.push(saved);
+    if (index % (HARDWARE_PROFILE_IDS.length * 3 * 27) === 0) representatives.push(saved);
   }
   const json = JSON.parse(benchmarkJson(representatives)) as SavedSimulationRun[];
   assert.deepEqual(json.map(run => run.request.workload_id), Array(5).fill("quantum_mips"));

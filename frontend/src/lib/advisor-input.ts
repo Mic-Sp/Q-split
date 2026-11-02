@@ -146,7 +146,7 @@ function metrics(value: unknown, inheritedVersion?: 1 | 2): StageTelemetry["metr
   if (Object.hasOwn(source, "parallelization_tier")) result.parallelization_tier = choice(source.parallelization_tier, TIERS);
   if (Object.hasOwn(source, "depth_complexity")) result.depth_complexity = choice(source.depth_complexity, DEPTHS);
   if (Object.hasOwn(source, "hardware_architecture")) result.hardware_architecture = choice(source.hardware_architecture, HARDWARE_PROFILE_IDS);
-  if (Object.hasOwn(source, "connectivity_topology")) result.connectivity_topology = choice(source.connectivity_topology, ["Heavy-Hex", "2D Square Grid", "All-to-All Ion Trap", "Noise-free reference"]);
+  if (Object.hasOwn(source, "connectivity_topology")) result.connectivity_topology = choice(source.connectivity_topology, Object.values(HARDWARE_PROFILES).map(profile => profile.topology));
   return result;
 }
 

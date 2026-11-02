@@ -35,7 +35,7 @@ const request = (current: CompletedRun) => apiRequest("http://localhost/api/advi
 
 const python = resolve("../backend/venv/bin/python");
 
-test("actual backend tiny, underflowed and blocked survival telemetry passes both advisor routes", { skip: !existsSync(python) }, async t => {
+test("actual backend tiny, underflowed, blocked and FTQC survival telemetry passes both advisor routes", { skip: !existsSync(python) }, async t => {
   setEnv(t, "GEMINI_API_KEY", ""); setEnv(t, "DATABASE_URL", "");
   const generated = spawnSync(python, ["-c", `
 import json
@@ -44,6 +44,8 @@ cases = [("shors_crypto", 21, "ibm_heron_nisq", 133), ("shors_crypto", 15, "goog
          ("shors_crypto", 35, "ionq_forte_trapped_ion", 36), ("shors_crypto", 2048, "ionq_forte_trapped_ion", 4099),
          ("quantum_mips", 64, "ibm_heron_nisq", 10), ("quantum_mips", 1024, "google_weber_grid", 53),
          ("quantum_mips", 1048576, "ionq_forte_trapped_ion", 36), ("shors_crypto", 21, "ibm_heron_nisq", 1)]
+cases += [("shors_crypto", scale, "ftqc_surface_code", 1024) for scale in (15, 21, 35)]
+cases += [("quantum_mips", scale, "ftqc_surface_code", 1024) for scale in (64, 1024, 32768, 131072, 1048576)]
 print(json.dumps([{"request": {"workload_id": workload, "scale_param": scale, "hardware_profile": profile, "available_qubits": capacity},
                    "telemetry": (run_shors_pipeline if workload == "shors_crypto" else run_quantum_mips_pipeline)(scale, profile, available_qubits=capacity).model_dump()}
                   for workload, scale, profile, capacity in cases]))
@@ -57,6 +59,13 @@ print(json.dumps([{"request": {"workload_id": workload, "scale_param": scale, "h
     assert.equal(normalized.coherence_survival_pct, original.coherence_survival_pct);
     assert.equal(normalized.coherence_log_survival, original.coherence_log_survival);
     assert.deepEqual(normalized.log_survival_terms, original.log_survival_terms);
+    if (run.request.hardware_profile === "ftqc_surface_code") {
+      assert.ok(Number(original.coherence_survival_pct) > 99.9);
+      const architecture = advisorDigest(run).architecture;
+      assert.equal(architecture.referenceQubits, 1024);
+      assert.ok("t1Us" in architecture && architecture.t1Us === null);
+      assert.ok("t2qNs" in architecture && architecture.t2qNs === 27000);
+    }
     sawTiny ||= typeof original.coherence_survival_pct === "number" && original.coherence_survival_pct > 0 && original.coherence_survival_pct < 0.005;
     sawUnderflow ||= original.coherence_survival_pct === 0 && typeof original.coherence_log_survival === "number";
     sawUnavailable ||= original.coherence_log_survival === null;

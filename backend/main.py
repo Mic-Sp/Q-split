@@ -91,7 +91,7 @@ async def require_engine_secret(secret: Optional[str] = Security(engine_secret_h
 # ==========================================
 StageNode = Literal["CPU", "GPU", "QPU"]
 WorkloadId = Literal["shors_crypto", "quantum_mips"]
-HardwareProfile = Literal["ibm_heron_nisq", "google_weber_grid", "ionq_forte_trapped_ion", "ideal_sim"]
+HardwareProfile = Literal["ibm_heron_nisq", "google_weber_grid", "ionq_forte_trapped_ion", "ftqc_surface_code", "ideal_sim"]
 
 SHOR_SCALES = (15, 21, 35, 512, 2048)
 

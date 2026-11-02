@@ -1,5 +1,5 @@
 export type StageStatus = "OPTIMAL" | "WARNING" | "CRITICAL_BOTTLENECK";
-export const HARDWARE_PROFILE_IDS = ["ibm_heron_nisq", "google_weber_grid", "ionq_forte_trapped_ion", "ideal_sim"] as const;
+export const HARDWARE_PROFILE_IDS = ["ibm_heron_nisq", "google_weber_grid", "ionq_forte_trapped_ion", "ftqc_surface_code", "ideal_sim"] as const;
 export type HardwareProfile = typeof HARDWARE_PROFILE_IDS[number];
 export type WorkloadId = "shors_crypto" | "quantum_mips";
 export type StageNode = "CPU" | "GPU" | "QPU";

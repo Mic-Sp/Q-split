@@ -10,6 +10,7 @@ import socket
 import threading
 import time
 import unittest
+from decimal import Decimal
 from unittest.mock import patch
 import uvicorn
 
@@ -373,9 +374,11 @@ class RoutingTests(unittest.TestCase):
                     self.assertEqual(kernel.metrics["io_state_prep_ms"], 0)
                     self.assertEqual(kernel.metrics["qubits_allocated"], plan["qubits_allocated"])
                     spec = kernel.metrics["circuit_spec"]
-                    survival = ((1 - architecture.err_1q)**spec["n_1q"] *
-                                (1 - architecture.err_2q)**math.ceil(spec["n_2q"] * architecture.topology_factor * architecture.native_2q_per_cx) *
-                                (1 - architecture.err_meas)**spec["n_meas"])
+                    # Decimal keeps the independent probability-product oracle
+                    # accurate for tiny logical errors raised to RSA-scale counts.
+                    survival = float((1 - Decimal(str(architecture.err_1q)))**spec["n_1q"] *
+                                     (1 - Decimal(str(architecture.err_2q)))**math.ceil(spec["n_2q"] * architecture.topology_factor * architecture.native_2q_per_cx) *
+                                     (1 - Decimal(str(architecture.err_meas)))**spec["n_meas"])
                     if architecture.t1_us is not None:
                         survival *= math.exp(-spec["n_qubits"] * depth * architecture.t_2q_ns / 1000 / architecture.t1_us)
                     self.assertAlmostEqual(kernel.metrics["coherence_survival_pct"], 100 * survival, delta=max(1e-300, 100 * survival * 1e-12))

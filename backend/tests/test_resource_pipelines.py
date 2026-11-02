@@ -40,7 +40,7 @@ def test_same_workload_constructs_identical_spec_for_every_hardware_profile(pipe
     stages = [pipeline(scale, profile, available_qubits=capacity).stages[STAGE_KEYS[1]] for profile in HARDWARE_PROFILES]
     assert all(stage.metrics["circuit_spec"] == stages[0].metrics["circuit_spec"] for stage in stages)
     assert all(stage.metrics["classical_baselines"] == stages[0].metrics["classical_baselines"] for stage in stages)
-    assert len({stage.latency_ms for stage in stages}) == 4
+    assert len({stage.latency_ms for stage in stages}) == len(HARDWARE_PROFILES)
     for stage in stages:
         assert stage.metrics["resource_model_version"] == 2
         assert stage.metrics["qpu_io_included_in_latency"]

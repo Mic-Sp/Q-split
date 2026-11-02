@@ -32,6 +32,12 @@ import {
   type Snapshot, type Transition,
 } from "@/lib/telemetry";
 import type { HardwareProfile, RoutingConfig, SimulationRequest, StageNode, StageStatus, StageTelemetry, WorkloadId } from "@/types/telemetry";
+const HARDWARE_SELECTION_LABELS: Partial<Record<HardwareProfile, string>> = {
+  ftqc_surface_code: "FTQC Surface-Code Logical QPU",
+  ibm_heron_nisq: "IBM Heron",
+  google_weber_grid: "Google Weber",
+  ionq_forte_trapped_ion: "IonQ Forte",
+};
 const summaryValue = (value: unknown) => typeof value === "number" && Math.abs(value) >= 1_000_000
   ? new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 2 }).format(value)
   : formatValue(value);
@@ -333,7 +339,7 @@ export default function Home() {
               <div className="grid grid-cols-2 gap-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 p-1">
                 {HARDWARE_PROFILE_IDS.map((value) => (
                   <div key={value} className={`flex min-w-0 items-center rounded-md ${hardware === value ? "bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-sm" : "text-slate-600 dark:text-slate-400"}`}>
-                    <button type="button" aria-pressed={hardware === value} onClick={() => selectHardware(value)} className="min-h-7 min-w-0 flex-1 px-2 py-1.5 text-left text-[10px] transition-colors hover:text-cyan-800 dark:hover:text-cyan-200">{hardwareLabel(value)}</button>
+                    <button type="button" aria-pressed={hardware === value} onClick={() => selectHardware(value)} className="min-h-7 min-w-0 flex-1 px-2 py-1.5 text-left text-[10px] transition-colors hover:text-cyan-800 dark:hover:text-cyan-200">{HARDWARE_SELECTION_LABELS[value] ?? hardwareLabel(value)}</button>
                     <InfoPopover label={`About ${hardwareLabel(value)}`}><p className="font-semibold text-cyan-800 dark:text-cyan-200">{hardwareLabel(value)}</p><p className="mt-2">{HARDWARE_PROFILES[value].description}</p><p className="mt-2 text-[10px] text-slate-600 dark:text-slate-400">Selecting a profile sets its reference capacity; Ideal Noise-Free selects this workload’s parallelization ceiling. You can then override capacity manually or with presets and tiers. Restoring a snapshot preserves its saved capacity. Architecture assumptions are not device benchmarks.</p></InfoPopover>
                   </div>
                 ))}
@@ -349,7 +355,7 @@ export default function Home() {
               <InfoPopover label="About QPU capacity">
                 <p className="font-semibold text-cyan-800 dark:text-cyan-200">Available QPU capacity</p>
                 <p className="mt-2">Per QPU stage. Select a tier threshold to explore the trade-off; changes apply on Run simulation.</p>
-                <p className="mt-2">36 references Forte; 53 references Weber. 133 is the Heron capacity cap with representative r3-era timing; 1,121 references the Condor milestone. 72 and capacities above a device’s reference are exploratory overrides. These are modeled usable qubits; physical error-correction overhead is excluded. Extra capacity above the workload’s parallelization ceiling stays idle.</p>
+                <p className="mt-2">36 references Forte; 53 references Weber. 133 is the Heron capacity cap with representative r3-era timing; 1,121 references the Condor milestone. FTQC uses 1,024 logical workspace qubits, each assumed to require roughly 1,000 physical superconducting qubits at d≈27; supporting resources are excluded. 72 and capacities above a profile’s reference are exploratory overrides. Extra capacity above the workload’s parallelization ceiling stays idle.</p>
                 <p className="mt-2">Shor N = 15 and Quantum-MIPS M = 64 in sequential mode run Qiskit Aer reference circuits. Parallel tiers and larger scales use an analytical hardware model. Quantum-MIPS emulation uses the selected ancilla tier and is limited by CPU/GPU RAM.</p>
               </InfoPopover>
             </div>
