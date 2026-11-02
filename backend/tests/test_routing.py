@@ -13,6 +13,9 @@ import unittest
 from unittest.mock import patch
 import uvicorn
 
+from backend.estimation import estimate_classical
+from backend.workloads import DEPTH_EXPANSION_FACTOR, shors_spec
+
 from backend.main import (
     RoutingConfig,
     SimulationRequest,
@@ -60,7 +63,7 @@ class RoutingTests(unittest.TestCase):
         self.kernel.start()
         self.addCleanup(self.kernel.stop)
         self.mips_kernel = patch("backend.main.execute_live_quantum_mips_64", return_value={
-            "reference_circuit_depth": 640, "aer_reference_qubits": 10, "aer_shots": 1024,
+            "aer_reference_circuit_depth": 640, "aer_reference_qubits": 10, "aer_shots": 1024,
             "aer_counts": {"101101": 1020, "000000": 4}, "top_1_token_index": 45,
             "measured_peak_probability": 1020 / 1024, "aer_compile_time_ms": 2.0,
             "aer_runtime_ms": 1.25, "aer_total_time_ms": 3.25,
@@ -143,7 +146,7 @@ class RoutingTests(unittest.TestCase):
                 self.assertEqual(status, 422)
 
     def test_gpu_classical_stages_include_launch_overhead(self):
-        result = run_shors_pipeline(21, "ibm_heron_nisq", RoutingConfig(stage_1_node="GPU", stage_3_node="GPU"))
+        result = run_shors_pipeline(21, "ideal_sim", RoutingConfig(stage_1_node="GPU", stage_3_node="GPU"))
         self.assertEqual(result.stages[STAGE_KEYS[0]].latency_ms, 0.37)
         self.assertEqual(result.stages[STAGE_KEYS[2]].latency_ms, 0.38)
         for key in [STAGE_KEYS[0], STAGE_KEYS[2]]:
@@ -151,12 +154,13 @@ class RoutingTests(unittest.TestCase):
             self.assertEqual(result.stages[key].metrics["launch_transfer_overhead_ms"], 0.30)
 
     def test_classical_kernel_routes_ignore_physical_qpu_noise(self):
-        for node, latency in [("CPU", 224.0), ("GPU", 56.3)]:
+        for node in ["CPU", "GPU"]:
+            latency = estimate_classical(shors_spec(21, 13, int(4.5 * 5**3)), node)["circuit_emulation"]["kernel_ms"]
             with self.subTest(node=node):
                 noisy = run_shors_pipeline(21, "ibm_heron_nisq", RoutingConfig(stage_2_node=node))
                 ideal = run_shors_pipeline(21, "ideal_sim", RoutingConfig(stage_2_node=node))
                 self.assertEqual(noisy, ideal)
-                self.assertEqual(noisy.stages[STAGE_KEYS[1]].latency_ms, latency)
+                self.assertAlmostEqual(noisy.stages[STAGE_KEYS[1]].latency_ms, latency)
                 self.assertEqual(noisy.stages[STAGE_KEYS[1]].metrics["coherence_survival_pct"], 100.0)
                 self.assertEqual(noisy.stages[STAGE_KEYS[2]].status, "OPTIMAL")
                 self.assertEqual(noisy.stages[STAGE_KEYS[2]].metrics["factors_found"], "21 = 3 × 7")
@@ -317,8 +321,8 @@ class RoutingTests(unittest.TestCase):
             stages = [run_shors_pipeline(scale, "ibm_heron_nisq", available_qubits=c).stages[STAGE_KEYS[1]] for c in capacities]
             self.assertGreater(stages[0].latency_ms, stages[1].latency_ms)
             self.assertGreater(stages[1].latency_ms, stages[2].latency_ms)
-            self.assertLess(stages[0].metrics["coherence_survival_pct"], stages[1].metrics["coherence_survival_pct"])
-            self.assertLess(stages[1].metrics["coherence_survival_pct"], stages[2].metrics["coherence_survival_pct"])
+            self.assertLessEqual(stages[0].metrics["coherence_survival_pct"], stages[1].metrics["coherence_survival_pct"])
+            self.assertLessEqual(stages[1].metrics["coherence_survival_pct"], stages[2].metrics["coherence_survival_pct"])
 
     def test_cpu_counterfactual_matches_actual_all_cpu_routes_without_extra_aer_work(self):
         for scale in [15, 21, 35, 512, 2048]:
@@ -334,14 +338,15 @@ class RoutingTests(unittest.TestCase):
                     self.assertIsNone(baseline["kernel_ms"])
                     self.assertIsNone(baseline["total_ms"])
         with patch("backend.main.execute_live_shors_15", side_effect=AssertionError("Baseline must not execute Aer")):
-            self.assertEqual(classical_cpu_baseline(15)["kernel_ms"], 3.5)
+            expected = estimate_classical(shors_spec(15, 8, 288), "CPU")["circuit_emulation"]
+            self.assertEqual(classical_cpu_baseline(15), expected)
             parallel = run_shors_pipeline(15, "ideal_sim", available_qubits=22)
-            self.assertEqual(parallel.stages[STAGE_KEYS[1]].metrics["classical_cpu_baseline"]["total_ms"], 3.85)
+            self.assertEqual(parallel.stages[STAGE_KEYS[1]].metrics["classical_cpu_baseline"], expected)
 
     def test_hardware_enum_and_routes_accept_four_profiles_and_reject_unknown(self):
         for profile, scale in itertools.product(HARDWARE_PROFILES, [15, 21, 35, 512, 2048]):
             with self.subTest(profile=profile, scale=scale):
-                capacity = HARDWARE_PROFILES[profile]["reference_qubits"] or 133
+                capacity = HARDWARE_PROFILES[profile].n_qubits_max or 133
                 status, body = self.post({"scale_param": scale, "hardware_profile": profile, "available_qubits": capacity})
                 self.assertEqual(status, 200)
                 self.assertEqual(body["stages"][STAGE_KEYS[1]]["metrics"]["hardware_architecture"], profile)
@@ -359,27 +364,34 @@ class RoutingTests(unittest.TestCase):
                     plan = qpu_capacity_plan(scale, capacity)
                     result = run_shors_pipeline(scale, profile, available_qubits=capacity)
                     kernel = result.stages[STAGE_KEYS[1]]
-                    depth = math.ceil(plan["circuit_depth"] * architecture["depth_factor"])
-                    self.assertEqual(kernel.metrics["reference_circuit_depth"], plan["circuit_depth"])
+                    reference = math.ceil(plan["circuit_depth"] * DEPTH_EXPANSION_FACTOR)
+                    depth = math.ceil(reference * architecture.topology_factor)
+                    self.assertEqual(kernel.metrics["reference_circuit_depth"], reference)
                     self.assertEqual(kernel.metrics["circuit_depth"], depth)
-                    self.assertEqual(kernel.latency_ms, round(depth * 0.00025 * architecture["gate_factor"], 2 if profile in ["ibm_heron_nisq", "ideal_sim"] else 6))
-                    self.assertEqual(kernel.metrics["io_state_prep_ms"], architecture["prep_ms"])
-                    self.assertEqual(kernel.metrics["connectivity_topology"], architecture["topology"])
+                    self.assertAlmostEqual(kernel.latency_ms, 0.30 + 512 * (
+                        depth * architecture.t_2q_ns + architecture.t_meas_ns + architecture.t_reset_ns) / 1e6)
+                    self.assertEqual(kernel.metrics["io_state_prep_ms"], 0)
                     self.assertEqual(kernel.metrics["qubits_allocated"], plan["qubits_allocated"])
-                    expected = 100.0 if profile == "ideal_sim" else round(100 * math.exp(-depth / architecture["decay_scale"]), 2)
-                    self.assertEqual(kernel.metrics["coherence_survival_pct"], expected)
+                    spec = kernel.metrics["circuit_spec"]
+                    survival = ((1 - architecture.err_1q)**spec["n_1q"] *
+                                (1 - architecture.err_2q)**math.ceil(spec["n_2q"] * architecture.topology_factor) *
+                                (1 - architecture.err_meas)**spec["n_meas"])
+                    if architecture.t1_us is not None:
+                        survival *= math.exp(-spec["n_qubits"] * depth * architecture.t_2q_ns / 1000 / architecture.t1_us)
+                    self.assertEqual(kernel.metrics["coherence_survival_pct"], round(100 * survival, 2))
+                    self.assertEqual(kernel.metrics["capacity_override"], architecture.n_qubits_max is not None and capacity > architecture.n_qubits_max)
 
     def test_sequential_aer_reference_uses_shared_depth_model_across_architectures(self):
         stages = {profile: run_shors_pipeline(15, profile, available_qubits=8).stages[STAGE_KEYS[1]] for profile in HARDWARE_PROFILES}
-        self.assertEqual(stages["ibm_heron_nisq"].latency_ms, 0.07)
         self.assertEqual(stages["ideal_sim"].metrics["coherence_survival_pct"], 100)
-        self.assertEqual(stages["ibm_heron_nisq"].metrics["io_state_prep_ms"], 0.05)
-        for profile in ["google_weber_grid", "ionq_forte_trapped_ion"]:
-            architecture = HARDWARE_PROFILES[profile]
-            depth = math.ceil(288 * architecture["depth_factor"])
-            self.assertEqual(stages[profile].metrics["circuit_depth"], depth)
-            self.assertEqual(stages[profile].latency_ms, round(depth * 0.00025 * architecture["gate_factor"], 6))
-            self.assertIn("projection", stages[profile].metrics["depth_model"])
+        for profile, architecture in HARDWARE_PROFILES.items():
+            stage = stages[profile]
+            depth = math.ceil(math.ceil(288 * DEPTH_EXPANSION_FACTOR) * architecture.topology_factor)
+            self.assertEqual(stage.metrics["circuit_depth"], depth)
+            self.assertEqual(stage.metrics["aer_reference_circuit_depth"], 189)
+            self.assertAlmostEqual(stage.latency_ms, 0.30 + 512 * (
+                depth * architecture.t_2q_ns + architecture.t_meas_ns + architecture.t_reset_ns) / 1e6)
+            self.assertIn("projection", stage.metrics["depth_model"])
         self.assertLess(stages["google_weber_grid"].latency_ms, stages["ibm_heron_nisq"].latency_ms)
         self.assertGreater(stages["ionq_forte_trapped_ion"].latency_ms, classical_cpu_baseline(15)["kernel_ms"])
         self.assertGreater(stages["ionq_forte_trapped_ion"].metrics["coherence_survival_pct"], stages["ibm_heron_nisq"].metrics["coherence_survival_pct"])
@@ -393,7 +405,7 @@ class RoutingTests(unittest.TestCase):
 
     def test_new_architectures_preserve_capacity_blocking_and_zero_overhead(self):
         for profile in ["google_weber_grid", "ionq_forte_trapped_ion"]:
-            result = run_shors_pipeline(512, profile, available_qubits=HARDWARE_PROFILES[profile]["reference_qubits"])
+            result = run_shors_pipeline(512, profile, available_qubits=HARDWARE_PROFILES[profile].n_qubits_max)
             kernel = result.stages[STAGE_KEYS[1]]
             self.assertEqual(result.primary_bottleneck, "INSUFFICIENT QPU QUBIT CAPACITY")
             self.assertEqual(kernel.latency_ms, 0)

@@ -2,7 +2,8 @@
 
 All stage latencies are milliseconds. CPU/GPU/QPU labels describe comparative
 placement costs; Aer runs on the classical host and never dispatches a physical
-QPU/GPU. Coherence is a depth-based proxy, not an injected calibrated noise model.
+QPU/GPU. Survival combines independent gate errors and all-qubit T1 decay;
+it is a resource estimate, not an injected calibrated Aer noise model.
 Next.js owns database persistence, AI diagnostics, and provider/cache economics.
 """
 
@@ -18,9 +19,27 @@ import os
 from secrets import compare_digest
 from time import perf_counter
 from fractions import Fraction
-from qiskit import QuantumCircuit, transpile
-from qiskit.circuit.library import QFTGate
 from qiskit_aer import AerSimulator
+
+# Support both `uvicorn backend.main:app` and the container's `uvicorn main:app`.
+if __package__:
+    from .models import CircuitSpec, QPUProfile
+    from .estimation import (estimate_qpu, estimate_classical, STATEVECTOR_PROFILES,
+                             CLASSICAL_GPU_COMPUTE_FACTOR, CLASSICAL_GPU_OVERHEAD_MS)
+    from .profiles import HARDWARE_PROFILES, execution_profile, profile_metrics
+    from .workloads import (QUANTUM_MIPS_CLASSICAL_PROFILES, shors_spec, mips_spec,
+                           mips_reference_depth, select_shors_base)
+    from .circuits import (NATIVE_BASIS_GATES, AER_SEED, QUANTUM_MIPS_TARGET_INDEX,
+                           c_amod15, build_shors_15_circuit, build_quantum_mips_grover_circuit, compile_reference_circuit)
+else:
+    from models import CircuitSpec, QPUProfile
+    from estimation import (estimate_qpu, estimate_classical, STATEVECTOR_PROFILES,
+                            CLASSICAL_GPU_COMPUTE_FACTOR, CLASSICAL_GPU_OVERHEAD_MS)
+    from profiles import HARDWARE_PROFILES, execution_profile, profile_metrics
+    from workloads import (QUANTUM_MIPS_CLASSICAL_PROFILES, shors_spec, mips_spec,
+                          mips_reference_depth, select_shors_base)
+    from circuits import (NATIVE_BASIS_GATES, AER_SEED, QUANTUM_MIPS_TARGET_INDEX,
+                          c_amod15, build_shors_15_circuit, build_quantum_mips_grover_circuit, compile_reference_circuit)
 
 app = FastAPI(
     title="Q-Split Hybrid Partitioning Engine",
@@ -82,21 +101,6 @@ async def validate_simulation_request(request: Request, error: RequestValidation
             and isinstance(errors[0].get("input"), str)):
         return JSONResponse(status_code=400, content={"detail": f"Unknown workload_id: {errors[0]['input']}"})
     return await request_validation_exception_handler(request, error)
-
-# Comparative architecture assumptions, not measured processor specifications.
-# The requested 72-qubit Google preset is exploratory: the published Weber
-# datasheet describes 53 active qubits. Capacity overrides remain independent.
-HARDWARE_PROFILES = {
-    "ibm_heron_nisq": {"topology": "Heavy-Hex", "reference_qubits": 133, "depth_factor": 1.0,
-                       "gate_factor": 1.0, "prep_ms": 0.15, "decay_scale": 1200.0},
-    "google_weber_grid": {"topology": "2D Square Grid", "reference_qubits": 72, "depth_factor": 0.78,
-                          "gate_factor": 0.45, "prep_ms": 0.12, "decay_scale": 850.0},
-    "ionq_forte_trapped_ion": {"topology": "All-to-All Ion Trap", "reference_qubits": 36, "depth_factor": 0.55,
-                               "gate_factor": 180.0, "prep_ms": 0.85, "decay_scale": 8500.0},
-    "ideal_sim": {"topology": "Noise-free reference", "reference_qubits": None, "depth_factor": 1.0,
-                  "gate_factor": 1.0, "prep_ms": 0.15, "decay_scale": None},
-}
-
 
 def coherence_status(survival_pct: float) -> str:
     """Classify modeled survival consistently with the frontend coherence budget."""
@@ -170,8 +174,8 @@ class SimulationRequest(BaseModel):
 class StageTelemetry(BaseModel):
     """One stage's projected execution cost and diagnostic metadata.
 
-    latency_ms includes GPU launch cost but excludes separately reported QPU
-    preparation/readout. Consumers must inspect feasibility flags before summing
+    latency_ms includes GPU launch cost and the complete QPU shot batch, including
+    measurement/reset and launch. Consumers must inspect feasibility flags before summing
     costs; metrics intentionally vary by workload, route, and blocking condition."""
     name: str
     node: StageNode
@@ -195,47 +199,14 @@ class HybridTelemetryResponse(BaseModel):
 # ==========================================
 # 2. LIVE QISKIT AER KERNEL FOR N = 15
 # ==========================================
-NATIVE_BASIS_GATES = ["cx", "rz", "sx", "x"]
-AER_SEED = 7
-
-
-def c_amod15(a: int, power: int):
-    """Build a controlled, four-work-qubit modular multiplication gate.
-
-    Args:
-        a: Base from the supported modulo-15 demonstration permutations.
-        power: Number of repeated applications, used as 2**q during phase estimation.
-
-    Returns:
-        A controlled gate implementing the selected permutation power. SWAP/X
-        decompositions are specific to this small reference, not general ModExp."""
-    U = QuantumCircuit(4)
-    for _ in range(power):
-        if a in [2, 13]:
-            U.swap(2, 3)
-            U.swap(1, 2)
-            U.swap(0, 1)
-        if a in [7, 8]:
-            U.swap(0, 1)
-            U.swap(1, 2)
-            U.swap(2, 3)
-        if a in [4, 11]:
-            U.swap(1, 3)
-            U.swap(0, 2)
-        if a in [7, 11, 13]:
-            for q in range(4):
-                U.x(q)
-    U = U.to_gate()
-    U.name = f"{a}^{power} mod 15"
-    return U.control()
-
-def execute_live_shors_15(a: int = 7, noisy: bool = True) -> Dict[str, Any]:
+def execute_live_shors_15(a: Optional[int] = None, noisy: bool = True) -> Dict[str, Any]:
     """Sample an eight-qubit N=15 phase-estimation reference with Aer.
 
     Args:
-        a: Coprime base for the modulo-15 reference circuit, normally 7.
-        noisy: Select the reported depth-decay proxy instead of 100% survival;
-            this flag does not attach an Aer thermal or depolarizing noise model.
+        a: Coprime base for the modulo-15 reference circuit; the shared selector
+            supplies 7 when omitted.
+        noisy: Retained for caller compatibility. Aer sampling remains ideal;
+            selected-device survival is supplied by the separate pure estimator.
 
     Returns:
         Native-basis compiled qubit count/depth/gate counts, seeded shot counts,
@@ -245,28 +216,13 @@ def execute_live_shors_15(a: int = 7, noisy: bool = True) -> Dict[str, Any]:
 
     The 512-shot counts come from actual simulation; projected QPU gate timing
     is supplied separately by the pipeline, not measured by this function."""
+    a = select_shors_base(15) if a is None else a
     n_count = 4
-    qc = QuantumCircuit(n_count + 4, n_count)
-
-    # 1. Initialize counting qubits in superposition |+> and work register in |1>
-    for q in range(n_count):
-        qc.h(q)
-    qc.x(n_count)
-
-    # 2. Apply controlled-U operations (Modular Exponentiation)
-    for q in range(n_count):
-        qc.append(c_amod15(a, 2**q), [q] + [i + n_count for i in range(4)])
-
-    # 3. Apply Inverse QFT to counting register (Qiskit 2.x compliant)
-    qc.append(QFTGate(n_count).inverse(), range(n_count))
-
-    # 4. Measure the counting register
-    qc.measure(range(n_count), range(n_count))
+    qc = build_shors_15_circuit(a)
 
     # Simulate in Qiskit Aer
     sim = AerSimulator(method="statevector", max_parallel_threads=1)
-    t_qc = transpile(qc, basis_gates=NATIVE_BASIS_GATES,
-                     optimization_level=1, seed_transpiler=AER_SEED)
+    t_qc = compile_reference_circuit(qc)
     counts = sim.run(t_qc, shots=512, seed_simulator=AER_SEED).result().get_counts()
 
     # Classical Continued Fractions Post-Processing
@@ -291,59 +247,11 @@ def execute_live_shors_15(a: int = 7, noisy: bool = True) -> Dict[str, Any]:
         "counts": dict(counts),
         "top_measurements": ", ".join(measured_phases[:3]),
         "period_r": extracted_r,
-        "coherence_pct": round(100.0 * math.exp(-t_qc.depth() / 1200.0), 2) if noisy else 100.0
+        "coherence_pct": 100.0,
     }
 
 
-QUANTUM_MIPS_TARGET_INDEX = 45  # |101101>: a marked-state demonstration, not a real vector search.
 QUANTUM_MIPS_AER_SHOTS = 1024
-
-
-def build_quantum_mips_grover_circuit() -> QuantumCircuit:
-    """Build the ten-qubit marked-state Grover reference for M=64.
-
-    Six index qubits represent candidates and four clean ancillas compute a
-    multi-controlled phase reflection. Each reflection uncomputes its workspace.
-    The marked index is 45; no vector dataset or adaptive maximum-finding oracle
-    is executed by this demonstration.
-
-    Returns:
-        A measured QuantumCircuit with six index classical bits and six Grover
-        iterations, floor((pi/4) * sqrt(64))."""
-    circuit = QuantumCircuit(10, 6)
-    index = list(range(6))
-    target = format(QUANTUM_MIPS_TARGET_INDEX, "06b")
-    # Qiskit qubit 0 is the least-significant bit; reverse the display bitstring.
-    zero_bits = [qubit for qubit, bit in enumerate(reversed(target)) if bit == "0"]
-
-    def reflect_all_ones():
-        """Apply a phase flip to the all-ones index state and restore clean ancillas.
-
-        The Toffoli chain stores the conjunction of the first five index bits;
-        CZ phases the sixth bit, and the reversed chain restores qubits 6 through 9."""
-        circuit.ccx(0, 1, 6)
-        circuit.ccx(6, 2, 7)
-        circuit.ccx(7, 3, 8)
-        circuit.ccx(8, 4, 9)
-        circuit.cz(9, 5)
-        circuit.ccx(8, 4, 9)
-        circuit.ccx(7, 3, 8)
-        circuit.ccx(6, 2, 7)
-        circuit.ccx(0, 1, 6)
-
-    circuit.h(index)
-    # Single-target Grover amplification uses approximately pi/4 * sqrt(M) rotations.
-    for _ in range(math.floor(math.pi / 4 * math.sqrt(64))):
-        circuit.x(zero_bits)
-        reflect_all_ones()
-        circuit.x(zero_bits)
-        circuit.h(index)
-        circuit.x(index)
-        reflect_all_ones()
-        circuit.x(index)
-        circuit.h(index)
-    circuit.measure(index, index)
-    return circuit
 
 
 def execute_live_quantum_mips_64() -> Dict[str, Any]:
@@ -359,13 +267,13 @@ def execute_live_quantum_mips_64() -> Dict[str, Any]:
     circuit = build_quantum_mips_grover_circuit()
     simulator = AerSimulator(method="statevector", max_parallel_threads=1)
     started = perf_counter()
-    compiled = transpile(circuit, basis_gates=NATIVE_BASIS_GATES,
-                         optimization_level=1, seed_transpiler=AER_SEED)
+    compiled = compile_reference_circuit(circuit)
     compiled_at = perf_counter()
     counts = simulator.run(compiled, shots=QUANTUM_MIPS_AER_SHOTS, seed_simulator=AER_SEED).result().get_counts()
     finished = perf_counter()
     peak = max(counts, key=counts.get)
-    return {"reference_circuit_depth": compiled.depth(), "aer_reference_qubits": compiled.num_qubits,
+    return {"aer_reference_circuit_depth": compiled.depth(), "aer_reference_qubits": compiled.num_qubits,
+            "aer_gate_counts": dict(compiled.count_ops()),
             "aer_shots": sum(counts.values()), "aer_counts": dict(counts),
             "top_1_token_index": int(peak, 2), "measured_peak_probability": counts[peak] / sum(counts.values()),
             "aer_compile_time_ms": (compiled_at - started) * 1000,
@@ -477,213 +385,121 @@ def qpu_capacity_plan(scale_param: int, available_qubits: int) -> Dict[str, Any]
     }
 
 
+QPU_LAUNCH_OVERHEAD_MS = 0.30  # One batch launch; explicit modeling assumption.
+SHOR_SHOTS = 512
+
+
+def _qpu_metrics(spec: CircuitSpec, profile: QPUProfile, capacity: int, shots: int) -> Dict[str, Any]:
+    """Adapt the pure batch estimate to the existing telemetry contract."""
+    estimated = estimate_qpu(spec, execution_profile(profile, capacity), shots, QPU_LAUNCH_OVERHEAD_MS)
+    return {**estimated, **profile_metrics(profile, capacity), "circuit_spec": spec.model_dump(),
+            "coherence_survival_pct": round(estimated["coherence_survival_pct"], 2),
+            "compute_latency_ms": estimated["latency_ms"],
+            # Measurement/reset and launch are already included in latency_ms.
+            "io_state_prep_ms": 0.0, "qpu_io_included_in_latency": True,
+            "physics_model": "Independent gate/readout errors and all-qubit T1 decay; per-shot survival"}
+
+
+def _classical_cost(spec: CircuitSpec, node: str) -> Dict[str, Any]:
+    """Flatten the selected emulation estimate without inventing a native baseline."""
+    estimates = estimate_classical(spec, node)
+    cost = estimates["circuit_emulation"]
+    return {"latency_ms": cost["kernel_ms"] or 0.0, "execution_feasible": cost["feasible"],
+            "compute_latency_ms": cost["compute_latency_ms"] or 0.0,
+            "launch_transfer_overhead_ms": cost["launch_transfer_overhead_ms"],
+            "statevector_qubits": spec.n_qubits,
+            "statevector_memory_required_bytes": cost["memory_required_bytes"],
+            "statevector_memory_required": f"16 × 2^{spec.n_qubits} bytes",
+            "statevector_memory_budget_bytes": cost["memory_budget_bytes"],
+            "statevector_memory_budget_gib": cost["memory_budget_gib"],
+            "classical_baselines": estimates, "circuit_spec": spec.model_dump()}
+
+
 def _run_default_shors_pipeline(
     scale_param: int, hardware_profile: str, qpu_plan: Optional[Dict[str, Any]] = None,
 ) -> HybridTelemetryResponse:
-    """Build the reference Shor stages before routing-specific cost adjustments.
+    """Build workload stages and delegate all device physics to estimate_qpu.
 
-    Args:
-        scale_param: Small modulus or RSA bit-width.
-        hardware_profile: Validated hardware registry key.
-        qpu_plan: Optional QPU tier plan; None keeps the minimum classical reference.
-
-    Returns:
-        Default CPU/QPU/CPU telemetry. N=15 Sequential (or a missing QPU plan)
-        executes Aer; other paths use analytical depth and canned factor summaries.
-
-    Hardware factors project depth/time/coherence without native topology
-    transpilation. All sizes use the same analytical depth and gate-time model;
-    compiled Aer reference depth is reported separately from modeled depth."""
-    architecture = HARDWARE_PROFILES[hardware_profile]
-    noisy = hardware_profile != "ideal_sim"
-    legacy = hardware_profile in ("ibm_heron_nisq", "ideal_sim")
-    a = 7 if scale_param != 21 else 2
-
-    # Determine bit length n
-    if scale_param in [512, 2048]:
-        n_bits = scale_param
-        scale_label = f"RSA-{scale_param} ({scale_param}-bit Cryptographic Key)"
-    else:
-        n_bits = math.ceil(math.log2(scale_param))
-        scale_label = f"N = {scale_param} ({n_bits}-bit Composite Integer)"
-
-    # --- CASE A: LIVE QISKIT EXECUTION (N = 15) ---
-    if scale_param == 15 and (qpu_plan is None or qpu_plan["parallelization_tier"] == "Space-Optimized Sequential"):
-        qpu_res = execute_live_shors_15(a=7, noisy=noisy)
-        reference_depth = qpu_plan["circuit_depth"] if qpu_plan else int(4.5 * n_bits ** 3)
-        depth = math.ceil(reference_depth * architecture["depth_factor"])
-        coherence = 100.0 if not noisy else round(100.0 * math.exp(-depth / architecture["decay_scale"]), 2)
-        status = coherence_stage_status(coherence)
-        reliable = coherence_status(coherence) != "EXCEEDED"
-        gate_ms = round(depth * 0.00025 * architecture["gate_factor"], 2 if legacy else 6)
-        r = qpu_res["period_r"]
-        p = math.gcd(a**(r // 2) - 1, 15)
-        q = math.gcd(a**(r // 2) + 1, 15)
-
-        return HybridTelemetryResponse(
-            workload_id="shors_crypto",
-            workload_name="Shor's Algorithm",
-            scale_label=scale_label,
-            execution_mode="LIVE_QISKIT_AER",
-            primary_bottleneck=("NONE (Fits Within NISQ Coherence Window)" if status == "OPTIMAL" else
-                                "NISQ TWO-QUBIT GATE NOISE (Degrading Phase Peaks)" if reliable else
-                                "CATASTROPHIC QPU DECOHERENCE"),
-            stages={
-                "stage_1_classical_pre": StageTelemetry(
-                    name="Euclidean Coprime & Base Filter",
-                    node="CPU",
-                    latency_ms=0.14,
-                    status="OPTIMAL",
-                    output_summary=f"Selected coprime base a = {a}; verified gcd({a}, 15) = 1 on CPU.",
-                    metrics={"algorithm": "Euclidean GCD", "complexity": "O(log N)", "base_a": a}
-                ),
-                "stage_2_quantum_kernel": StageTelemetry(
-                    name="Quantum Period Finding (ModExp + IQFT)",
-                    node="QPU",
-                    latency_ms=gate_ms,
-                    status=status,
-                    output_summary=f"Peaks at {qpu_res['top_measurements']} -> Extracted period r = {r}.",
-                    metrics={
-                        "qubits_required": qpu_res["qubits"],
-                        "circuit_depth": depth,
-                        "reference_circuit_depth": reference_depth,
-                        "aer_reference_circuit_depth": qpu_res["depth"],
-                        "aer_gate_counts": qpu_res["gate_counts"],
-                        "aer_counts": qpu_res["counts"],
-                        # Preserve the original Aer-reference setup for legacy profiles.
-                        # Ion prep_ms includes readout; do not add that overhead twice.
-                        "io_state_prep_ms": 0.05 if legacy else architecture["prep_ms"],
-                        "coherence_survival_pct": coherence,
-                        "coherence_status": coherence_status(coherence),
-                    }
-                ),
-                "stage_3_classical_post": StageTelemetry(
-                    name="Continued Fractions & Factor GCD",
-                    node="CPU",
-                    latency_ms=0.21,
-                    status=status,
-                    output_summary=(f"Computed gcd({a}^({r}/2) ± 1, 15) -> Successfully factored 15 = {p} × {q}." if reliable
-                                    else "STARVED: modeled QPU coherence is insufficient to extract reliable factors."),
-                    metrics={"algorithm": "Continued Fractions", "factors_found": f"{p} × {q}" if reliable else "NONE (Decohered)",
-                             "coherence_status": coherence_status(coherence)}
-                )
-            }
+    A missing plan represents minimum-register classical emulation. Live N=15
+    Aer sampling is a reference only; modeled depth/counts share the same
+    continuous arithmetic definition as larger sizes.
+    """
+    n = scale_param if scale_param in (512, 2048) else (scale_param - 1).bit_length()
+    minimum = 8 if scale_param == 15 else 2 * n + 3
+    depth = qpu_plan["circuit_depth"] if qpu_plan else int(4.5 * n**3)
+    qubits = qpu_plan["qubits_allocated"] if qpu_plan else minimum
+    spec = shors_spec(scale_param, qubits or minimum, depth)
+    estimated = (_qpu_metrics(spec, HARDWARE_PROFILES[hardware_profile], qpu_plan["available_qubits"], SHOR_SHOTS)
+                 if qpu_plan and qubits else
+                 {"latency_ms": 0.0, "circuit_depth": depth, "coherence_survival_pct": 100.0,
+                  "circuit_spec": spec.model_dump(), "io_state_prep_ms": 0.0})
+    coherence = estimated["coherence_survival_pct"]
+    if qpu_plan and not qubits:
+        estimated.update({"latency_ms": 0.0, "compute_latency_ms": 0.0,
+                          "coherence_survival_pct": 0.0, "execution_feasible": False})
+        coherence = 0.0
+    severity = coherence_stage_status(coherence)
+    reliable = coherence_status(coherence) != "EXCEEDED"
+    live = scale_param == 15 and (qpu_plan is None or qpu_plan["parallelization_tier"] == "Space-Optimized Sequential")
+    a = select_shors_base(scale_param)
+    measured = execute_live_shors_15(a=a, noisy=False) if live else None
+    if measured:
+        estimated.update({"aer_reference_circuit_depth": measured["depth"],
+                          "aer_gate_counts": measured["gate_counts"], "aer_counts": measured["counts"]})
+    factors = {15: "15 = 3 × 5", 21: "21 = 3 × 7", 35: "35 = 5 × 7",
+               512: "FAILED (Requires ~1M Physical Surface-Code Qubits)",
+               2048: "FAILED (Requires ~4M Physical Surface-Code Qubits)"}
+    factor = factors.get(scale_param, "Unresolved")
+    if live:
+        factor = "3 × 5"
+    estimated.update({"qubits_required": minimum, "reference_circuit_depth": spec.depth,
+                      "coherence_status": coherence_status(coherence),
+                      "classical_baselines": estimate_classical(spec, "CPU")})
+    bottleneck = ("NONE (Fits Within NISQ Coherence Window)" if severity == "OPTIMAL" else
+                  "NISQ TWO-QUBIT GATE NOISE (Degrading Phase Peaks)" if reliable else
+                  "CATASTROPHIC QPU DECOHERENCE")
+    kernel_summary = f"Modeled depth {estimated['circuit_depth']:,}; coherence survival {coherence}%; {SHOR_SHOTS} shots."
+    post_summary = (f"Continued Fractions output: {factor}" if reliable else
+                    "STARVED: modeled QPU coherence is insufficient to extract reliable factors.")
+    if measured:
+        hardware_projection = f"Modeled {HARDWARE_PROFILES[hardware_profile].name} survival {coherence}%"
+        kernel_summary = (
+            f"Ideal Aer reference: peaks at {measured['top_measurements']}; Extracted period r = {measured['period_r']}. "
+            f"{hardware_projection}; modeled depth {estimated['circuit_depth']:,}; {SHOR_SHOTS} shots."
         )
-
-    # --- CASE B: ANALYTICAL NISQ PROFILER (N = 21, 35, RSA-512, RSA-2048) ---
-    qubits_req = 8 if scale_param == 15 else 2 * n_bits + 3
-    reference_depth = qpu_plan["circuit_depth"] if qpu_plan else int(4.5 * (n_bits ** 3))
-    circuit_depth = math.ceil(reference_depth * architecture["depth_factor"])
-    # 0.00025 ms per modeled depth unit is a calibration constant, not device timing.
-    gate_exec_ms = round(circuit_depth * 0.00025 * architecture["gate_factor"], 2 if legacy else 6)
-
-    if not noisy:
-        coherence_pct = 100.0
-        bottleneck = "NONE (Noise-Free QPU Analytical Projection)" if qpu_plan else "CLASSICAL SIMULATION RAM WALL (2^N Statevector Limit)"
-    else:
-        # A depth-based proxy, not a calibrated T1/T2 or gate-error simulation.
-        # Slow trapped-ion gates affect time separately from their longer decay scale.
-        # exp(-D/lambda) stays in [0, 1]; lambda is measured in depth units, not T1/T2 time.
-        coherence_pct = round(max(0.0, 100.0 * math.exp(-circuit_depth / architecture["decay_scale"])), 2)
-        if coherence_status(coherence_pct) == "NOMINAL":
-            bottleneck = "NONE (Fits Within NISQ Coherence Window)"
-        elif coherence_status(coherence_pct) == "DEGRADED":
-            bottleneck = "NISQ TWO-QUBIT GATE NOISE (Degrading Phase Peaks)"
-        else:
-            bottleneck = f"CATASTROPHIC QPU DECOHERENCE ({circuit_depth:,} Gates Exceed T1/T2 Window)"
-
-    qpu_status = post_status = coherence_stage_status(coherence_pct)
-    reliable = coherence_status(coherence_pct) != "EXCEEDED"
-
-    factor_lookup = {
-        15: ("r = 4", "15 = 3 × 5"),
-        21: ("r = 6", "21 = 3 × 7"),
-        35: ("r = 12", "35 = 5 × 7"),
-        512: ("Thermal Noise", "FAILED (Requires ~1M Physical Surface-Code Qubits)"),
-        2048: ("Thermal Noise", "FAILED (Requires ~4M Physical Surface-Code Qubits)")
-    }
-    period_str, factor_str = factor_lookup.get(scale_param, ("Noise Floor", "Unresolved"))
-
+        post_summary = (
+            f"Ideal Aer reference: continued fractions yield 15 = {factor}. {hardware_projection} "
+            + ("meets the reliability threshold; hardware results remain projections." if reliable else
+               "is below the reliability threshold, so no hardware factorization is claimed.")
+        )
     return HybridTelemetryResponse(
-        workload_id="shors_crypto",
-        workload_name="Shor's Algorithm",
-        scale_label=scale_label,
-        execution_mode="NISQ_ANALYTICAL_PROFILER",
+        workload_id="shors_crypto", workload_name="Shor's Algorithm",
+        scale_label=(f"RSA-{scale_param} ({n}-bit Cryptographic Key)" if scale_param in (512, 2048)
+                     else f"N = {scale_param} ({n}-bit Composite Integer)"),
+        execution_mode="LIVE_QISKIT_AER" if live else "NISQ_ANALYTICAL_PROFILER",
         primary_bottleneck=bottleneck,
         stages={
             "stage_1_classical_pre": StageTelemetry(
-                name="Euclidean Coprime & Base Filter",
-                node="CPU",
-                latency_ms=round(0.12 * math.log2(n_bits), 2),
-                status="OPTIMAL",
-                output_summary=f"Verified coprime base a = {a} for {n_bits}-bit modulus in O(log N) time.",
-                metrics={"algorithm": "Euclidean GCD", "complexity": "O(log N)", "base_a": a}
-            ),
+                name="Euclidean Coprime & Base Filter", node="CPU", latency_ms=spec.stage1_ms, status="OPTIMAL",
+                output_summary=(
+                    f"Selected fixed base a = {a} for RSA-{scale_param} analytical preset "
+                    "(odd-modulus assumption; selector is a bit-width)."
+                    if scale_param in (512, 2048) else
+                    f"Selected coprime base a = {a} for N = {scale_param} ({n}-bit modulus) on CPU."
+                ),
+                metrics={"algorithm": "Euclidean GCD", "complexity": "O(log N)", "base_a": a}),
             "stage_2_quantum_kernel": StageTelemetry(
-                name="Quantum Period Finding (ModExp + IQFT)",
-                node="QPU",
-                latency_ms=gate_exec_ms,
-                status=qpu_status,
-                output_summary=(
-                    f"Minimum {qubits_req:,} logical qubits; circuit depth {circuit_depth:,}. "
-                    f"Coherence survival: {coherence_pct}%."
-                ),
-                metrics={
-                    "qubits_required": qubits_req,
-                    "circuit_depth": circuit_depth,
-                    "reference_circuit_depth": reference_depth,
-                    "io_state_prep_ms": architecture["prep_ms"],
-                    "coherence_survival_pct": coherence_pct,
-                    "coherence_status": coherence_status(coherence_pct),
-                }
-            ),
+                name="Quantum Period Finding (ModExp + IQFT)", node="QPU", latency_ms=estimated["latency_ms"],
+                status=severity,
+                output_summary=kernel_summary,
+                metrics=estimated),
             "stage_3_classical_post": StageTelemetry(
-                name="Continued Fractions & Factor GCD",
-                node="CPU",
-                latency_ms=round(0.25 * (n_bits / 4), 2),
-                status=post_status,
-                output_summary=(
-                    f"Continued Fractions output: {factor_str}" if reliable
-                    else f"STARVED: QPU output collapsed to uniform white noise ({period_str}). Cannot extract factors."
-                ),
-                metrics={"algorithm": "Continued Fractions", "factors_found": factor_str if reliable else "NONE (Decohered)",
-                         "coherence_status": coherence_status(coherence_pct)}
-            )
-        }
+                name="Continued Fractions & Factor GCD", node="CPU", latency_ms=spec.stage3_ms, status=severity,
+                output_summary=post_summary,
+                metrics={"algorithm": "Continued Fractions", "factors_found": factor if reliable else "NONE (Decohered)",
+                         "coherence_status": coherence_status(coherence)}),
+        },
     )
-
-# Shor routing costs below are illustrative simulation assumptions, not benchmarks.
-# Its GPU classical routines include 0.30 ms of launch/transfer overhead and a 4x
-# compute speedup. Classical statevector emulation costs scale with 2^qubits;
-# CPU/GPU kernel multipliers are 50x/12.5x the baseline gate-time estimate.
-# The modeled statevector budgets are 16 GiB on CPU and 8 GiB on GPU, with
-# complex128 amplitudes (16 bytes). No physical GPU or QPU is dispatched.
-CLASSICAL_GPU_OVERHEAD_MS = 0.30
-CLASSICAL_GPU_COMPUTE_FACTOR = 0.25
-
-# Quantum-MIPS host-stage calibration points, not measured device timings.
-# d and the verification batch K are implicit in these reference workloads;
-# no vector matches, projection output, or softmax scores are fabricated.
-QUANTUM_MIPS_CLASSICAL_PROFILES = {
-    "stage_1_classical_pre": {
-        "name": "LSH Projection & HNSW Bucket Pruning",
-        "algorithm": "LSH Random Hyperplane & HNSW Graph Filter",
-        "complexity": "O(d · log M)",
-        "gpu_compute_factor": 0.12,
-        "cpu_latency_ms": {64: 0.25, 1024: 2.40, 32768: 18.5, 131072: 64.0, 1048576: 310.0},
-        "operation": "LSH projection and HNSW bucket filtering",
-        "qpu_limitation": "Hash bucket filtering is a classical memory-bound routine",
-    },
-    "stage_3_classical_post": {
-        "name": "Exact FP16 Dot-Product Reranking & Softmax",
-        "algorithm": "Batch FP16 Cosine Reranking & Top-K Softmax",
-        "complexity": "O(K · d)",
-        "gpu_compute_factor": 0.10,
-        "cpu_latency_ms": {64: 0.18, 1024: 1.80, 32768: 12.0, 131072: 42.0, 1048576: 195.0},
-        "operation": "FP16 cosine reranking and Top-K softmax verification",
-        "qpu_limitation": "Exact reranking and softmax verification require classical vector processing",
-    },
-}
 
 
 def _quantum_mips_classical_stage(scale_param: int, node: StageNode, stage_key: str) -> StageTelemetry:
@@ -764,10 +580,6 @@ def quantum_mips_postprocessing(scale_param: int, node: StageNode = "CPU") -> St
     return _quantum_mips_classical_stage(scale_param, node, "stage_3_classical_post")
 
 
-STATEVECTOR_PROFILES = {
-    "CPU": {"max_qubits": 30, "memory_gib": 16, "latency_factor": 50.0},
-    "GPU": {"max_qubits": 29, "memory_gib": 8, "latency_factor": 12.5},
-}
 STAGE_KEYS = (
     "stage_1_classical_pre",
     "stage_2_quantum_kernel",
@@ -776,31 +588,10 @@ STAGE_KEYS = (
 
 
 def classical_cpu_baseline(scale_param: int) -> Dict[str, Any]:
-    """Compute a comparable all-CPU Shor counterfactual without additional Aer work.
-
-    Args:
-        scale_param: Small modulus or RSA bit-width.
-
-    Returns:
-        CPU RAM feasibility, minimum register width, and kernel/pipeline milliseconds;
-        infeasible times are None rather than misleading zero-duration baselines.
-
-    The sequential register and circuit model are independent of selected physical
-    QPU capacity; extra QPU ancillas must not artificially inflate baseline RAM."""
-    n_bits = scale_param if scale_param in [512, 2048] else math.ceil(math.log2(scale_param))
-    qubits = 8 if scale_param == 15 else 2 * n_bits + 3
-    profile = STATEVECTOR_PROFILES["CPU"]
-    feasible = qubits <= profile["max_qubits"]
-    kernel_ms = None
-    total_ms = None
-    if feasible:
-        gate_ms = round(int(4.5 * n_bits ** 3) * 0.00025, 2)
-        kernel_ms = round(gate_ms * 2 ** (qubits - 8) * profile["latency_factor"], 2)
-        pre_ms = 0.14 if scale_param == 15 else round(0.12 * math.log2(n_bits), 2)
-        post_ms = 0.21 if scale_param == 15 else round(0.25 * n_bits / 4, 2)
-        total_ms = round(pre_ms + kernel_ms + post_ms, 2)
-    return {"feasible": feasible, "kernel_ms": kernel_ms, "total_ms": total_ms,
-            "logical_qubits": qubits, "memory_budget_gib": profile["memory_gib"]}
+    """Minimum-register all-CPU Shor emulation, separate from native factoring."""
+    n = scale_param if scale_param in (512, 2048) else (scale_param - 1).bit_length()
+    spec = shors_spec(scale_param, 8 if scale_param == 15 else 2 * n + 3, int(4.5 * n**3))
+    return estimate_classical(spec, "CPU")["circuit_emulation"]
 
 
 def _quantum_mips_emulation_plan(scale_param: int, available_qubits: int) -> Dict[str, Any]:
@@ -818,50 +609,11 @@ def _quantum_mips_emulation_plan(scale_param: int, available_qubits: int) -> Dic
     return plan
 
 
-def _quantum_mips_statevector_cost(plan: Dict[str, Any], reference_depth: int, node: StageNode) -> Dict[str, Any]:
-    """Estimate CPU/GPU RAM and cost without allocating the exponential statevector.
-
-    Args:
-        plan: Feasible-register capacity plan with allocation and depth multiplier.
-        reference_depth: Sequential analytical or compiled-Aer reference depth.
-        node: CPU or GPU registry key.
-
-    Returns:
-        Exact byte demand (16 * 2**q), binary-GiB budget, feasibility, pure compute,
-        GPU launch overhead, and inclusive projected latency in milliseconds.
-
-    Cost scales with 2**(q-10) relative to the ten-qubit reference. Hardware-QPU
-    topology and decay factors never affect this deterministic classical path."""
-    profile = STATEVECTOR_PROFILES[node]
-    qubits = plan["qubits_allocated"]
-    # Complex128 amplitudes occupy 16 bytes each; every extra qubit doubles RAM.
-    required_bytes = 16 * 2 ** qubits
-    # GiB uses binary 2**30 bytes, so 30 CPU / 29 GPU qubits fit exactly at budget.
-    budget_bytes = profile["memory_gib"] * 2 ** 30
-    feasible = required_bytes <= budget_bytes
-    depth = math.ceil(reference_depth * plan["depth_multiplier"])
-    compute_ms = round(depth * 0.00025 * 2 ** (qubits - 10) * profile["latency_factor"], 6) if feasible else 0.0
-    overhead_ms = CLASSICAL_GPU_OVERHEAD_MS if node == "GPU" and feasible else 0.0
-    return {"statevector_qubits": qubits, "statevector_memory_required_bytes": required_bytes,
-            "statevector_memory_required": f"16 × 2^{qubits} bytes", "statevector_memory_budget_bytes": budget_bytes,
-            "statevector_memory_budget_gib": profile["memory_gib"], "execution_feasible": feasible,
-            "compute_latency_ms": compute_ms, "launch_transfer_overhead_ms": overhead_ms,
-            "latency_ms": round(compute_ms + overhead_ms, 6)}
-
-
-def _quantum_mips_cpu_baseline(scale_param: int, available_qubits: int, reference_depth: int) -> Dict[str, Any]:
-    """Build the all-CPU counterfactual using the current MIPS ancilla tier.
-
-    Reuse the caller's reference depth and calibrated host costs instead of running
-    Aer again. Unlike Shor's minimum-width baseline, MIPS emulation includes the
-    selected workspace; exceeding CPU RAM returns None times and feasible=False."""
-    cost = _quantum_mips_statevector_cost(_quantum_mips_emulation_plan(scale_param, available_qubits), reference_depth, "CPU")
-    kernel_ms = cost["latency_ms"] if cost["execution_feasible"] else None
-    total_ms = None if kernel_ms is None else round(
-        QUANTUM_MIPS_CLASSICAL_PROFILES["stage_1_classical_pre"]["cpu_latency_ms"][scale_param]
-        + kernel_ms + QUANTUM_MIPS_CLASSICAL_PROFILES["stage_3_classical_post"]["cpu_latency_ms"][scale_param], 6)
-    return {"feasible": cost["execution_feasible"], "kernel_ms": kernel_ms, "total_ms": total_ms,
-            "logical_qubits": cost["statevector_qubits"], "memory_budget_gib": 16}
+def _quantum_mips_cpu_baseline(scale_param: int, available_qubits: int) -> Dict[str, Any]:
+    """CPU emulation comparison with selected workspace; never launches extra Aer work."""
+    plan = _quantum_mips_emulation_plan(scale_param, available_qubits)
+    spec = mips_spec(scale_param, plan["qubits_allocated"], plan["depth_multiplier"])
+    return estimate_classical(spec, "CPU")["circuit_emulation"]
 
 
 def _block_quantum_mips_stage(stage: StageTelemetry, reason: str) -> StageTelemetry:
@@ -925,13 +677,17 @@ def quantum_mips_kernel(scale_param: int, hardware_profile: HardwareProfile = "i
         raise ValueError("Stage node must be CPU, GPU, or QPU.")
     plan = (quantum_mips_capacity_plan(scale_param, available_qubits) if node == "QPU"
             else _quantum_mips_emulation_plan(scale_param, available_qubits))
-    # sqrt(M) Grover iterations times log2(M) index/oracle work; coefficient is illustrative.
-    reference_depth = round(4.2 * math.sqrt(scale_param) * math.log2(scale_param))
+    # Workload resources are analytic at all scales. A live Aer reference can
+    # add cross-check telemetry later, but cannot replace these model inputs.
+    reference_depth = mips_reference_depth(scale_param)
+    spec = mips_spec(scale_param, plan["qubits_allocated"] or plan["minimum_qubits_required"],
+                     plan["depth_multiplier"] if plan["depth_multiplier"] is not None else 1.0)
     metrics = {**plan, "qubits_required": plan["minimum_qubits_required"],
                "algorithm": "Marked-State Grover / Inner-Product Oracle Projection", "complexity": "O(sqrt(M) · log M)",
                "candidate_count": scale_param, "grover_iterations": math.floor(math.pi / 4 * math.sqrt(scale_param)),
                "marked_candidate_index": QUANTUM_MIPS_TARGET_INDEX, "reference_circuit_depth": reference_depth,
-               "depth_model": "Analytical Grover/Durr-Hoyer reference: round(4.2 sqrt(M) log2(M))",
+               "depth_model": "Analytical Grover/Durr-Hoyer reference with toy-calibrated native expansion; Aer is a separate cross-check",
+               "circuit_spec": spec.model_dump(),
                "circuit_depth": 0, "compute_latency_ms": 0.0, "io_state_prep_ms": 0.0,
                "coherence_survival_pct": 0.0 if node == "QPU" else 100.0,
                "coherence_status": "EXCEEDED" if node == "QPU" else "NOMINAL",
@@ -943,17 +699,12 @@ def quantum_mips_kernel(scale_param: int, hardware_profile: HardwareProfile = "i
     metrics = stage.metrics
     architecture = HARDWARE_PROFILES[hardware_profile]
     if node == "QPU":
-        metrics.update({"hardware_architecture": hardware_profile, "connectivity_topology": architecture["topology"],
-                        "routing_depth_multiplier": architecture["depth_factor"], "gate_time_multiplier": architecture["gate_factor"]})
-        if architecture["reference_qubits"] is not None:
-            metrics["reference_qubits"] = architecture["reference_qubits"]
-        if architecture["decay_scale"] is not None:
-            metrics["coherence_decay_scale"] = architecture["decay_scale"]
+        metrics.update(profile_metrics(architecture, available_qubits))
     else:
-        cost = _quantum_mips_statevector_cost(plan, reference_depth, node)
+        cost = _classical_cost(spec, node)
         metrics.update({key: value for key, value in cost.items() if key != "latency_ms"})
         metrics["simulation_method"] = "Classical statevector emulation (illustrative timing)"
-    metrics["classical_cpu_baseline"] = _quantum_mips_cpu_baseline(scale_param, available_qubits, reference_depth)
+    metrics["classical_cpu_baseline"] = _quantum_mips_cpu_baseline(scale_param, available_qubits)
 
     if upstream_blocked_by:
         return _block_quantum_mips_stage(stage, f"STARVED: {upstream_blocked_by} did not produce usable input.")
@@ -965,25 +716,19 @@ def quantum_mips_kernel(scale_param: int, hardware_profile: HardwareProfile = "i
     live = scale_param == 64 and plan["parallelization_tier"] == "Sequential Minimum"
     if live:
         measured = execute_live_quantum_mips_64()
-        reference_depth = measured["reference_circuit_depth"]
         metrics.update(measured)
-        metrics.update({"aer_executed": True, "depth_model": "Compiled 10-qubit Aer Grover reference; architecture projection is not native-device compilation"})
-    metrics["classical_cpu_baseline"] = _quantum_mips_cpu_baseline(scale_param, available_qubits, reference_depth)
+        metrics["aer_executed"] = True
+    metrics["classical_baselines"] = estimate_classical(spec, "CPU")
     if node == "QPU":
-        # Ancilla parallelism and topology savings compose before rounding to whole depth units.
-        depth = math.ceil(reference_depth * plan["depth_multiplier"] * architecture["depth_factor"])
-        gate_ms = round(depth * 0.00025 * architecture["gate_factor"], 6)
-        # Noise-free is explicit; physical profiles use a depth proxy, independent of elapsed gate time.
-        coherence = 100.0 if architecture["decay_scale"] is None else round(100 * math.exp(-depth / architecture["decay_scale"]), 2)
-        metrics.update({"circuit_depth": depth, "compute_latency_ms": gate_ms, "io_state_prep_ms": architecture["prep_ms"],
-                        "coherence_survival_pct": coherence,
-                        "retrieval_reliable": coherence_status(coherence) != "EXCEEDED"})
-        stage.latency_ms = gate_ms  # QPU preparation/readout is exclusive, counted separately.
+        metrics.update(_qpu_metrics(spec, architecture, available_qubits, QUANTUM_MIPS_AER_SHOTS))
+        coherence = metrics["coherence_survival_pct"]
+        metrics["retrieval_reliable"] = coherence_status(coherence) != "EXCEEDED"
+        stage.latency_ms = metrics["latency_ms"]
         stage.status = coherence_stage_status(coherence)
     else:
-        cost = _quantum_mips_statevector_cost(plan, reference_depth, node)
+        cost = _classical_cost(spec, node)
         metrics.update({key: value for key, value in cost.items() if key != "latency_ms"})
-        metrics.update({"circuit_depth": math.ceil(reference_depth * plan["depth_multiplier"]),
+        metrics.update({"circuit_depth": spec.depth,
                         "coherence_survival_pct": 100.0, "retrieval_reliable": True})
         stage.latency_ms = cost["latency_ms"]  # GPU launch/transfer is inclusive.
         stage.status = "WARNING"
@@ -1106,14 +851,7 @@ def run_shors_pipeline(
 
         if target == "QPU":
             architecture = HARDWARE_PROFILES[hardware_profile]
-            stage.metrics.update({"hardware_architecture": hardware_profile,
-                                  "connectivity_topology": architecture["topology"],
-                                  "routing_depth_multiplier": architecture["depth_factor"],
-                                  "gate_time_multiplier": architecture["gate_factor"]})
-            if architecture["reference_qubits"] is not None:
-                stage.metrics["reference_qubits"] = architecture["reference_qubits"]
-            if architecture["decay_scale"] is not None:
-                stage.metrics["coherence_decay_scale"] = architecture["decay_scale"]
+            stage.metrics.update(profile_metrics(architecture, available_qubits))
             # Only the quantum kernel has an implemented QPU algorithm. Other
             # QPU routes still get capacity validation before route validation.
             capacity = {k: v for k, v in plan.items() if k != "circuit_depth"}
@@ -1136,36 +874,33 @@ def run_shors_pipeline(
                     f"{plan['idle_qubits']:,} qubits idle."
                 )
                 stage.metrics["depth_model"] = (
-                    "Illustrative analytical projection (4.5 coefficient, log base 2); "
+                    "Illustrative analytical projection (4.5 coefficient, log base 2) with toy-calibrated native expansion; "
                     "compiled Aer reference depth reported separately when executed"
                 )
 
         if key == "stage_2_quantum_kernel":
             if target == "QPU":
                 continue
-            profile = STATEVECTOR_PROFILES[target]
-            qubits = stage.metrics["qubits_required"]
+            spec = CircuitSpec.model_validate(stage.metrics["circuit_spec"])
+            cost = _classical_cost(spec, target)
+            stage.metrics.update({key: value for key, value in cost.items() if key != "latency_ms"})
+            qubits = spec.n_qubits
             stage.metrics.update({
                 "simulation_method": "Classical statevector emulation",
-                "statevector_memory_required": f"2^{qubits + 4} bytes",
-                "statevector_memory_budget_gib": profile["memory_gib"],
                 "coherence_survival_pct": 100.0,
-                "io_state_prep_ms": CLASSICAL_GPU_OVERHEAD_MS if target == "GPU" else 0.0,
+                "circuit_depth": spec.depth, "io_state_prep_ms": 0.0,
             })
-            if qubits > profile["max_qubits"]:
+            stage.latency_ms = cost["latency_ms"]
+            if not cost["execution_feasible"]:
                 stage.latency_ms = 0.0
                 stage.status = "CRITICAL_BOTTLENECK"
                 stage.metrics["execution_feasible"] = False
                 stage.output_summary = (
                     f"BLOCKED: {qubits:,}-qubit statevector requires 2^{qubits + 4} "
-                    f"bytes, exceeding the modeled {profile['memory_gib']} GiB {target} budget."
+                    f"bytes, exceeding the modeled {cost['statevector_memory_budget_gib']} GiB {target} budget."
                 )
-                reasons[key] = f"{target} STATEVECTOR MEMORY LIMIT ({profile['memory_gib']} GiB Modeled Budget)"
+                reasons[key] = f"{target} STATEVECTOR MEMORY LIMIT ({cost['statevector_memory_budget_gib']} GiB Modeled Budget)"
             else:
-                overhead = CLASSICAL_GPU_OVERHEAD_MS if target == "GPU" else 0.0
-                stage.latency_ms = round(
-                    stage.latency_ms * (2 ** (qubits - 8)) * profile["latency_factor"] + overhead, 2
-                )
                 stage.status = "WARNING"
                 stage.output_summary += (
                     f" Quantum kernel emulated on modeled {target}; latency is an "

@@ -11,6 +11,19 @@ export const HARDWARE_PROFILES = {
     description: "Noise-free reference with 100% coherence; baseline depth and gate time. Capacity is controlled separately; this profile does not imply unlimited qubits or error-corrected hardware. Analytical prep is 0.15 ms; N=15 sequential Aer retains 0.05 ms setup." },
 } satisfies Record<HardwareProfile, { label: string; topology: string; referenceQubits: number | null; depthMultiplier: number; gateTimeMultiplier: number; prepMs: number; decayScale: number | null; description: string }>;
 
+// Versioned resource-model constants. Keep the registry above for historical
+// unversioned runs; backend integration tests verify this new trust-boundary map.
+export const RESOURCE_QPU_PROFILES = {
+  ibm_heron_nisq: { referenceQubits: 133, depthMultiplier: 1.5, t1Us: 200, t2Us: 150, t1qNs: 32, t2qNs: 68,
+    measurementNs: 1500, resetNs: 200000, error1q: 0.0003, error2q: 0.003, errorMeasurement: 0.01 },
+  google_weber_grid: { referenceQubits: 53, depthMultiplier: 1.2, t1Us: 15, t2Us: 20, t1qNs: 25, t2qNs: 12,
+    measurementNs: 4000, resetNs: 200000, error1q: 0.001, error2q: 0.009, errorMeasurement: 0.04 },
+  ionq_forte_trapped_ion: { referenceQubits: 36, depthMultiplier: 1, t1Us: 100000000, t2Us: 1000000, t1qNs: 110000, t2qNs: 900000,
+    measurementNs: 250000, resetNs: 1000000, error1q: 0.0002, error2q: 0.004, errorMeasurement: 0.005 },
+  ideal_sim: { referenceQubits: null, depthMultiplier: 1, t1Us: null, t2Us: null, t1qNs: 32, t2qNs: 250,
+    measurementNs: 1500, resetNs: 0, error1q: 0, error2q: 0, errorMeasurement: 0 },
+} satisfies Record<HardwareProfile, object>;
+
 /**
  * Narrow untrusted values to known comparative architecture registry keys.
  */
@@ -28,7 +41,11 @@ export function hardwareLabel(value: string) {
 /**
  * Explain topology savings separately from gate-time/coherence assumptions for nonbaseline profiles.
  */
-export function architectureTradeOff(profile: HardwareProfile) {
+export function architectureTradeOff(profile: HardwareProfile, resourceVersion?: unknown) {
+  if (resourceVersion === 1) {
+    const physics = RESOURCE_QPU_PROFILES[profile];
+    return `${HARDWARE_PROFILES[profile].topology}: ${physics.depthMultiplier}× routing depth; ${physics.t2qNs} ns representative entangler. Batch timing includes shots, measurement/reset and launch. Survival combines gate errors and all-qubit T1 decay; topology and timing are approximations.`;
+  }
   if (profile === "google_weber_grid") return "Square-grid connectivity reduces modeled SWAP routing to 0.78× Heavy-Hex depth with 0.45× gate time, while its coherence decay window is shorter (850).";
   if (profile === "ionq_forte_trapped_ion") return "All-to-all ion connectivity removes SWAP layers (0.55× depth), but laser-driven shared vibrational-mode gates cost 180× gate time with 0.85 ms prep/readout; the decay scale is 8500.";
   return "";

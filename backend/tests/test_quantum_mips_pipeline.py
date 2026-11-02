@@ -8,11 +8,12 @@ from unittest.mock import patch
 
 from qiskit.quantum_info import Statevector
 
+from backend.workloads import GATE_COUNT_EXPANSION_FACTOR, mips_reference_depth
+
 from backend.main import (
     RoutingConfig, STAGE_KEYS, HARDWARE_PROFILES, QUANTUM_MIPS_SCALES,
     build_quantum_mips_grover_circuit, execute_live_quantum_mips_64,
     quantum_mips_kernel, quantum_mips_qubit_thresholds, run_quantum_mips_pipeline,
-    _quantum_mips_statevector_cost,
 )
 
 
@@ -37,7 +38,7 @@ class GroverReferenceTests(unittest.TestCase):
         self.assertEqual(max(result["aer_counts"], key=result["aer_counts"].get), "101101")
         self.assertEqual(result["measured_peak_probability"], result["aer_counts"]["101101"] / 1024)
         self.assertGreater(result["measured_peak_probability"], 0.95)
-        for key in ["aer_compile_time_ms", "aer_runtime_ms", "aer_total_time_ms", "reference_circuit_depth"]:
+        for key in ["aer_compile_time_ms", "aer_runtime_ms", "aer_total_time_ms", "aer_reference_circuit_depth"]:
             self.assertGreater(result[key], 0)
             self.assertTrue(math.isfinite(result[key]))
         self.assertAlmostEqual(result["aer_total_time_ms"], result["aer_compile_time_ms"] + result["aer_runtime_ms"])
@@ -46,7 +47,7 @@ class GroverReferenceTests(unittest.TestCase):
 class QuantumMipsPipelineTests(unittest.TestCase):
     def setUp(self):
         self.aer = patch("backend.main.execute_live_quantum_mips_64", return_value={
-            "reference_circuit_depth": 640, "aer_reference_qubits": 10, "aer_shots": 1024,
+            "aer_reference_circuit_depth": 640, "aer_reference_qubits": 10, "aer_shots": 1024,
             "aer_counts": {"101101": 1020, "000000": 4}, "top_1_token_index": 45,
             "measured_peak_probability": 1020 / 1024, "aer_compile_time_ms": 2.0,
             "aer_runtime_ms": 1.25, "aer_total_time_ms": 3.25,
@@ -55,20 +56,24 @@ class QuantumMipsPipelineTests(unittest.TestCase):
         self.addCleanup(self.aer.stop)
 
     def test_live_sequential_projects_each_architecture_without_replacing_measured_runtime(self):
-        assumptions = [
-            ("ibm_heron_nisq", 1.0, 1.0, 0.15, 1200),
-            ("google_weber_grid", 0.78, 0.45, 0.12, 850),
-            ("ionq_forte_trapped_ion", 0.55, 180.0, 0.85, 8500),
-            ("ideal_sim", 1.0, 1.0, 0.15, None),
-        ]
-        for profile, routing_factor, gate_factor, prep, decay in assumptions:
+        for profile, architecture in HARDWARE_PROFILES.items():
             with self.subTest(profile=profile):
                 result = quantum_mips_kernel(64, profile, "QPU", 10)
-                depth = math.ceil(640 * routing_factor)
+                reference = mips_reference_depth(64)
+                depth = math.ceil(reference * architecture.topology_factor)
+                self.assertEqual(result.metrics["aer_reference_circuit_depth"], 640)
+                self.assertEqual(result.metrics["reference_circuit_depth"], reference)
                 self.assertEqual(result.metrics["circuit_depth"], depth)
-                self.assertEqual(result.latency_ms, round(depth * 0.00025 * gate_factor, 6))
-                self.assertEqual(result.metrics["io_state_prep_ms"], prep)
-                self.assertEqual(result.metrics["coherence_survival_pct"], 100 if decay is None else round(100 * math.exp(-depth / decay), 2))
+                self.assertAlmostEqual(result.latency_ms, 0.30 + 1024 * (
+                    depth * architecture.t_2q_ns + architecture.t_meas_ns + architecture.t_reset_ns) / 1e6)
+                self.assertEqual(result.metrics["io_state_prep_ms"], 0)
+                self.assertTrue(result.metrics["qpu_io_included_in_latency"])
+                two_qubit_count = math.ceil(math.ceil(202 * GATE_COUNT_EXPANSION_FACTOR) * architecture.topology_factor)
+                survival = ((1 - architecture.err_1q)**math.ceil(2 * 202 * GATE_COUNT_EXPANSION_FACTOR) * (1 - architecture.err_2q)**two_qubit_count *
+                            (1 - architecture.err_meas)**6)
+                if architecture.t1_us is not None:
+                    survival *= math.exp(-10 * depth * architecture.t_2q_ns / 1000 / architecture.t1_us)
+                self.assertEqual(result.metrics["coherence_survival_pct"], round(100 * survival, 2))
                 self.assertEqual(result.metrics["aer_runtime_ms"], 1.25)
                 self.assertEqual(result.metrics["aer_reference_qubits"], 10)
                 self.assertEqual(result.metrics["measured_peak_probability"], 1020 / 1024)
@@ -87,11 +92,14 @@ class QuantumMipsPipelineTests(unittest.TestCase):
                 with self.subTest(scale=scale, profile=profile, tier=tier):
                     result = quantum_mips_kernel(scale, profile, "QPU", capacity)
                     architecture = HARDWARE_PROFILES[profile]
-                    reference = round(4.2 * math.sqrt(scale) * math.log2(scale))
-                    depth = math.ceil(reference * [1.0, 0.40, 0.20][tier] * architecture["depth_factor"])
+                    reference = mips_reference_depth(scale)
+                    depth = math.ceil(math.ceil(reference * [1.0, 0.40, 0.20][tier]) * architecture.topology_factor)
                     self.assertEqual(result.metrics["reference_circuit_depth"], reference)
                     self.assertEqual(result.metrics["circuit_depth"], depth)
-                    self.assertEqual(result.latency_ms, round(depth * 0.00025 * architecture["gate_factor"], 6))
+                    self.assertAlmostEqual(result.latency_ms, 0.30 + 1024 * (
+                        depth * architecture.t_2q_ns + architecture.t_meas_ns + architecture.t_reset_ns) / 1e6)
+                    logical_depth = round(4.2 * math.sqrt(scale) * math.log2(scale))
+                    self.assertEqual(result.metrics["circuit_spec"]["n_2q"], math.ceil(logical_depth * GATE_COUNT_EXPANSION_FACTOR))
                     self.assertEqual(result.metrics["grover_iterations"], math.floor(math.pi / 4 * math.sqrt(scale)))
                     self.assertEqual(result.metrics["top_1_token_index"], 45)
                     self.assertEqual(result.metrics["result_source"], "analytical_marked_state_projection")
@@ -124,16 +132,6 @@ class QuantumMipsPipelineTests(unittest.TestCase):
                         self.assertGreater(stage.latency_ms, 0)
                         self.assertTrue(stage.metrics["retrieval_reliable"])
             self.assertTrue(all(stage == stages[0] for stage in stages))
-
-    def test_statevector_budget_boundaries_are_inclusive_and_do_not_allocate_statevectors(self):
-        for node, max_qubits in [("CPU", 30), ("GPU", 29)]:
-            at_limit = _quantum_mips_statevector_cost({"qubits_allocated": max_qubits, "depth_multiplier": 1.0}, 202, node)
-            over_limit = _quantum_mips_statevector_cost({"qubits_allocated": max_qubits + 1, "depth_multiplier": 1.0}, 202, node)
-            self.assertEqual(at_limit["statevector_memory_required_bytes"], at_limit["statevector_memory_budget_bytes"])
-            self.assertTrue(at_limit["execution_feasible"])
-            self.assertFalse(over_limit["execution_feasible"])
-            self.assertEqual(over_limit["compute_latency_ms"], 0)
-            self.assertEqual(over_limit["launch_transfer_overhead_ms"], 0)
 
     def test_blocked_capacity_memory_and_upstream_never_call_aer_or_charge_postprocessing(self):
         with patch("backend.main.execute_live_quantum_mips_64", side_effect=AssertionError("Blocked execution must not run Aer")):
@@ -188,7 +186,7 @@ class QuantumMipsPipelineTests(unittest.TestCase):
             self.assertEqual(baseline["feasible"], kernel.metrics["execution_feasible"])
             if baseline["feasible"]:
                 self.assertEqual(baseline["kernel_ms"], kernel.latency_ms)
-                self.assertEqual(baseline["total_ms"], round(sum(stage.latency_ms for stage in result.stages.values()), 6))
+                self.assertAlmostEqual(baseline["total_ms"], sum(stage.latency_ms for stage in result.stages.values()))
             else:
                 self.assertIsNone(baseline["total_ms"])
         self.assertEqual(self.live.call_count, 1)

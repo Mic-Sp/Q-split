@@ -20,7 +20,8 @@ export const SIGNIFICANT_OFFLOAD_SPEEDUP = 2;
  */
 export function offloadVerdict(data: HybridTelemetryResponse, request: SimulationRequest): OffloadVerdict {
   const verdict = baseOffloadVerdict(data, request);
-  const context = data.stages.stage_2_quantum_kernel.node === "QPU" ? architectureTradeOff(request.hardware_profile) : "";
+  const kernel = data.stages.stage_2_quantum_kernel;
+  const context = kernel.node === "QPU" ? architectureTradeOff(request.hardware_profile, kernel.metrics.resource_model_version) : "";
   const mips = request.workload_id === "quantum_mips"
     ? `${mipsRoutingContext(request.scale_param)} Grover O(√M) iterations rapidly consume NISQ coherence at large M; Multi-Oracle tiers reduce depth and long-coherence hardware improves survival, with its gate-time trade-off.` : "";
   return { ...verdict, message: [verdict.message, context, mips].filter(Boolean).join(" ") };
