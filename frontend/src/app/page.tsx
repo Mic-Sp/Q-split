@@ -11,6 +11,7 @@ import { LatencyProportion } from "@/components/latency-proportion";
 import { OffloadVerdictStrip } from "@/components/offload-verdict";
 import { InfoPopover } from "@/components/info-popover";
 import { CaptureBenchmark } from "@/components/capture-benchmark";
+import { CoherenceRangeNote } from "@/components/coherence-range-note";
 import { recordCompletedRun, sessionForWorkload, type SimulationSession } from "@/lib/simulation-session";
 import { restoredConfiguration } from "@/lib/benchmark-snapshot";
 import type { SavedSimulationRun } from "@/types/run-history";
@@ -57,6 +58,7 @@ const CAPACITY_PANEL_METRICS = new Set([
   "hardware_architecture", "connectivity_topology", "reference_qubits", "reference_circuit_depth",
   "routing_depth_multiplier", "gate_time_multiplier", "coherence_decay_scale",
 ]);
+const COHERENCE_RANGE_METRICS = new Set(["coherence_survival_best", "coherence_survival_worst", "log_survival_terms"]);
 
 interface DashboardState extends SimulationSession {
   loading: boolean;
@@ -158,10 +160,10 @@ function PipelineCard({ index, stage, selectedNode, onNodeChange, pending, workl
         </div>
       )}
       <dl className="mb-2 grid grid-cols-2 gap-1 xl:grid-cols-3">
-        {stage ? Object.entries(stage.metrics).filter(([key]) => !CAPACITY_PANEL_METRICS.has(key) && key !== "classical_cpu_baseline").map(([key, value]) => (
+        {stage ? Object.entries(stage.metrics).filter(([key]) => !CAPACITY_PANEL_METRICS.has(key) && !COHERENCE_RANGE_METRICS.has(key) && key !== "classical_cpu_baseline").map(([key, value]) => (
           <div key={key} className="min-w-0 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 px-2 py-1">
             <dt className="text-[9px] leading-3 text-slate-600 dark:text-slate-400 [overflow-wrap:anywhere]">{metricLabels[key] ?? key.replace(/_ms$/, "").replaceAll("_", " ")}</dt>
-            <dd title={key.endsWith("_ms") ? formatRawMilliseconds(value) : formatValue(value)} className={["mt-0.5 font-mono text-[10px] leading-4 [overflow-wrap:anywhere]", key === "coherence_survival_pct" ? style?.text : "text-slate-800 dark:text-slate-200"].join(" ")}>{key.endsWith("_ms") ? formatDuration(value) : key === "routing_model" ? "Modeled" : key === "depth_model" ? String(value).startsWith("Compiled") ? "Aer reference" : "Analytical" : typeof value === "boolean" ? value ? "Yes" : "No" : formatValue(value)}</dd>
+            <dd title={key.endsWith("_ms") ? formatRawMilliseconds(value) : formatValue(value)} className={["mt-0.5 font-mono text-[10px] leading-4 [overflow-wrap:anywhere]", key === "coherence_survival_pct" ? style?.text : "text-slate-800 dark:text-slate-200"].join(" ")}>{key.endsWith("_ms") ? formatDuration(value) : key === "routing_model" ? "Modeled" : key === "depth_model" ? String(value).startsWith("Compiled") ? "Aer reference" : "Analytical" : typeof value === "boolean" ? value ? "Yes" : "No" : formatValue(value)}{key === "coherence_survival_pct" && <CoherenceRangeNote stage={stage} />}</dd>
           </div>
         )) : <div className={["col-span-full h-12 rounded-lg bg-slate-100 dark:bg-slate-800/40", pending ? "animate-pulse" : ""].join(" ")} aria-hidden="true" />}
       </dl>
@@ -414,6 +416,7 @@ export default function Home() {
                 {label === "Coherence survival" && <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
                   <p className="text-[9px] leading-3 text-slate-600 dark:text-slate-400">{coherence?.classical ? "Deterministic Classical Emulation" : "vs. 100% deterministic classical baseline"}</p>
                   {coherence?.status && <span aria-label={`Coherence Budget Status: ${coherence.status}`} className={["inline-flex rounded border px-1.5 py-0.5 text-[8px] font-semibold tracking-wider", COHERENCE_BUDGET_STYLE[coherence.status]].join(" ")}>{coherence.status}</span>}
+                  <CoherenceRangeNote stage={quantum} />
                 </div>}
                 </div>
               </div>

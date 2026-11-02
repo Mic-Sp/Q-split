@@ -7,6 +7,7 @@ import { AdvisorTelemetryBar } from "@/components/advisor-telemetry";
 import { cachedInsight } from "@/lib/advisor-telemetry";
 import { SNAPSHOT_NAME_LIMIT } from "@/lib/benchmark-snapshot";
 import { coherenceBudget, pipelineTiming } from "@/lib/kpi-metrics";
+import { CoherenceRangeNote } from "@/components/coherence-range-note";
 import { formatDuration, formatRawMilliseconds } from "@/lib/duration";
 import { hardwareLabel } from "@/lib/hardware-profiles";
 import { WORKLOADS } from "@/lib/workloads";
@@ -54,7 +55,7 @@ export function BenchmarkRow({ run, busy, selected, selectionDisabled, onSelect,
       <td className="p-2"><p className="font-mono text-cyan-800 dark:text-cyan-200">{kernel.node === "QPU" ? `${formatValue(metrics.qubits_allocated)} / ${formatValue(metrics.available_qubits ?? run.request.available_qubits ?? DEFAULT_AVAILABLE_QUBITS)}` : "— (Classical)"}</p><p className="mt-1 text-[9px] text-slate-600 dark:text-slate-400">{kernel.node === "QPU" ? formatValue(metrics.parallelization_tier) : `${formatValue(metrics.qubits_required)} logical qubits`}</p></td>
       <td className="p-2 font-mono"><p title={formatRawMilliseconds(timing.computeMs)}>{formatDuration(timing.computeMs)} <span className="font-sans text-slate-600 dark:text-slate-400">compute</span></p><p title={formatRawMilliseconds(timing.overheadMs)} className="mt-1 text-amber-800 dark:text-amber-200">{formatDuration(timing.overheadMs)} <span className="font-sans text-slate-600 dark:text-slate-400">I/O</span></p></td>
       <td title={formatRawMilliseconds(timing.totalMs)} className="p-2 font-mono text-cyan-800 dark:text-cyan-200">{formatDuration(timing.totalMs)}</td>
-      <td className="p-2"><p className="font-mono">{formatValue(coherence.survival)}{coherence.survival === undefined ? "" : "%"}</p>{coherence.status && <span className={`mt-1 inline-flex rounded border px-1 py-0.5 text-[8px] font-semibold ${budgetStyle[coherence.status]}`}>{coherence.status}</span>}</td>
+      <td className="p-2"><p className="font-mono">{formatValue(coherence.survival)}{coherence.survival === undefined ? "" : "%"}</p><CoherenceRangeNote stage={kernel} />{coherence.status && <span className={`mt-1 inline-flex rounded border px-1 py-0.5 text-[8px] font-semibold ${budgetStyle[coherence.status]}`}>{coherence.status}</span>}</td>
       <td className="p-2 text-[9px] leading-4 [overflow-wrap:anywhere]">{run.primaryBottleneck}</td>
       <td className="p-2"><div className="flex flex-col items-start gap-1">
         <button type="button" onClick={() => onRestore(run)} className={button}><RotateCcw size={10} />Restore to Simulator</button>

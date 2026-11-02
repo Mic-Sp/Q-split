@@ -2,7 +2,7 @@ import "server-only";
 import { DEFAULT_AVAILABLE_QUBITS, DEFAULT_ROUTING, PIPELINE, totalLatency } from "@/lib/telemetry";
 import type { AdvisorRequest } from "@/types/advisor";
 import type { CompletedRun } from "@/types/run-history";
-import type { HybridTelemetryResponse, RoutingConfig, SimulationRequest, StageTelemetry } from "@/types/telemetry";
+import type { HybridTelemetryResponse, LogSurvivalTerms, RoutingConfig, SimulationRequest, StageTelemetry } from "@/types/telemetry";
 import { HARDWARE_PROFILE_IDS } from "@/types/telemetry";
 import { HARDWARE_PROFILES, RESOURCE_QPU_PROFILES } from "@/lib/hardware-profiles";
 import { WORKLOADS, validWorkloadScale, workloadScaleLabel } from "@/lib/workloads";
@@ -75,12 +75,14 @@ function number(value: unknown, minimum: number, maximum: number, integer = fals
   return value;
 }
 
-// Only fixed-size primitive fields survive. Never copy arbitrary metric objects,
-// measurement strings, descriptions, prompt text, or saved advisor output.
+// Only allowlisted primitives and a fixed five-number log breakdown survive.
+// Never copy arbitrary metric objects or explanatory prose from telemetry.
 /**
  * Rebuild an allowlisted, bounded primitive metric digest from untrusted telemetry.
- * Drop nested dictionaries, measurement text, and unknown fields rather than
- * forwarding possible instructions. A blocked MIPS depth multiplier may be null
+ * Rebuild the fixed log-survival breakdown; drop all other nested dictionaries,
+ * measurement text and unknown fields. The breakdown is omitted from the LLM
+ * digest below; only point percentage and the two range bounds are sent.
+ * A blocked MIPS depth multiplier may be null
  * and is omitted, not coerced to a misleading numeric factor.
  */
 function metrics(value: unknown): StageTelemetry["metrics"] {
@@ -96,6 +98,8 @@ function metrics(value: unknown): StageTelemetry["metrics"] {
     ["qubits_allocated", 0, MAX_QUBITS, true], ["minimum_qubits_required", 1, MAX_QUBITS, true],
     ["idle_qubits", 0, MAX_QUBITS, true], ["circuit_depth", 0, ADVISOR_MAX_CIRCUIT_DEPTH, true],
     ["coherence_survival_pct", 0, 100, false], ["io_state_prep_ms", 0, 60_000, false],
+    ["coherence_survival", 0, 1, false], ["coherence_survival_best", 0, 1, false],
+    ["coherence_survival_worst", 0, 1, false],
     ["launch_transfer_overhead_ms", 0, 60_000, false], ["compute_latency_factor", 0, 1000, false],
     ["statevector_memory_budget_gib", 1, 65_536, false],
     ["reference_circuit_depth", 0, ADVISOR_MAX_CIRCUIT_DEPTH, true], ["reference_qubits", 1, MAX_QUBITS, true],
@@ -116,6 +120,19 @@ function metrics(value: unknown): StageTelemetry["metrics"] {
       result[key] = source[key];
     }
   }
+  if (Object.hasOwn(source, "log_survival_terms")) {
+    if (source.log_survival_terms === null) result.log_survival_terms = null;
+    else {
+      const terms = object(source.log_survival_terms);
+      const parsed = {} as LogSurvivalTerms;
+      for (const key of ["two_qubit", "one_qubit", "measurement", "idle_t1", "idle_t2"] as const) {
+        parsed[key] = terms[key] === null ? null : number(terms[key], -Number.MAX_SAFE_INTEGER, 0);
+      }
+      result.log_survival_terms = parsed;
+    }
+  }
+  if (typeof result.coherence_survival_best === "number" && typeof result.coherence_survival_worst === "number" &&
+      result.coherence_survival_worst > result.coherence_survival_best) invalid();
   if (Object.hasOwn(source, "parallelization_tier")) result.parallelization_tier = choice(source.parallelization_tier, TIERS);
   if (Object.hasOwn(source, "depth_complexity")) result.depth_complexity = choice(source.depth_complexity, DEPTHS);
   if (Object.hasOwn(source, "hardware_architecture")) result.hardware_architecture = choice(source.hardware_architecture, HARDWARE_PROFILE_IDS);
@@ -245,7 +262,12 @@ export function advisorDigest(run: CompletedRun) {
     total_latency_ms: pipelineTiming(run.telemetry).totalMs,
     stages: Object.fromEntries(PIPELINE.map(({ key }) => {
       const stage = run.telemetry.stages[key];
-      return [key, { node: stage.node, status: stage.status, latency_ms: stage.latency_ms, metrics: stage.metrics }];
+      const promptMetrics = { ...stage.metrics };
+      // Compact prompt: keep point percentage and best/worst probabilities.
+      // Detailed log terms stay validated local data, not provider input.
+      delete promptMetrics.log_survival_terms;
+      delete promptMetrics.coherence_survival;
+      return [key, { node: stage.node, status: stage.status, latency_ms: stage.latency_ms, metrics: promptMetrics }];
     })),
   } };
 }

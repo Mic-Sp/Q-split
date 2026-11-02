@@ -20,9 +20,21 @@ def estimate_qpu(spec: CircuitSpec, profile: QPUProfile, shots: int, launch_over
     """Estimate an entire shot batch and per-shot survival using the requested model.
 
     Routing expands depth and 2Q count once. Circuit time excludes measurement,
-    reset and launch; these repeat for latency, never for coherent T1 exposure.
-    Independent gate/readout errors and all-qubit T1 decay are a conservative
-    survival proxy, not algorithm success probability or a calibrated noise channel.
+    reset and launch; these repeat for latency, never for coherent exposure.
+
+    Three conservative choices remain explicit: every qubit is charged for the
+    whole circuit (not a scheduled idle duration); every depth layer is billed
+    at the 2Q duration even if it contains only 1Q gates; and the idle decay can
+    overlap decoherence already included in calibrated gate errors.
+
+    The point/best value retains the T1-only model. Worst replaces T1 with T2
+    when defined, then takes the lower of that result and the T1 point (T2 may
+    exceed T1). These are sensitivity scenarios, not statistical confidence bounds.
+    Log terms are nonpositive natural logs: add one_qubit, two_qubit, measurement
+    and idle_t1 to reproduce the point. idle_t2 is an ALTERNATIVE idle term,
+    never an additional charge; use the more negative idle term for worst.
+    A null term denotes -infinity for certain failure. Infeasible execution has
+    zero survival and no physical log breakdown. Ideal profiles have zero terms.
     """
     if type(shots) is not int or shots < 1:
         raise ValueError("shots must be a positive integer")
@@ -33,13 +45,18 @@ def estimate_qpu(spec: CircuitSpec, profile: QPUProfile, shots: int, launch_over
     circuit_ns = depth * profile.t_2q_ns
     circuit_us = circuit_ns / 1000
     feasible = profile.n_qubits_max is None or spec.n_qubits <= profile.n_qubits_max
-    log_survival = 0.0
-    for count, error in [(spec.n_1q, profile.err_1q), (n_2q, profile.err_2q), (spec.n_meas, profile.err_meas)]:
-        if count:
-            log_survival += -math.inf if error == 1 else count * math.log1p(-error)
-    if profile.t1_us is not None:
-        log_survival -= spec.n_qubits * circuit_us / profile.t1_us
-    survival = math.exp(log_survival) if feasible else 0.0
+    terms = {}
+    for name, count, error in [("one_qubit", spec.n_1q, profile.err_1q),
+                               ("two_qubit", n_2q, profile.err_2q),
+                               ("measurement", spec.n_meas, profile.err_meas)]:
+        terms[name] = (-math.inf if error == 1 else count * math.log1p(-error)) if count else 0.0
+    exposure_us = spec.n_qubits * circuit_us
+    terms["idle_t1"] = -exposure_us / profile.t1_us if profile.t1_us is not None else 0.0
+    t2 = profile.t2_us if profile.t2_us is not None else profile.t1_us
+    terms["idle_t2"] = -exposure_us / t2 if t2 is not None else 0.0
+    gate_log = terms["one_qubit"] + terms["two_qubit"] + terms["measurement"]
+    survival = math.exp(gate_log + terms["idle_t1"]) if feasible else 0.0
+    worst = math.exp(gate_log + min(terms["idle_t1"], terms["idle_t2"])) if feasible else 0.0
     return {
         "execution_feasible": feasible, "circuit_depth": depth, "n_2q": n_2q,
         "shots": shots, "t_circuit_us": circuit_us,
@@ -48,6 +65,11 @@ def estimate_qpu(spec: CircuitSpec, profile: QPUProfile, shots: int, launch_over
         "measurement_reset_ms": shots * (profile.t_meas_ns + profile.t_reset_ns) / 1e6 if feasible else 0.0,
         "launch_overhead_ms": launch_overhead_ms if feasible else 0.0,
         "coherence_survival": survival, "coherence_survival_pct": 100 * survival,
+        "coherence_survival_best": survival, "coherence_survival_worst": worst,
+        "log_survival_terms": {
+            name: (0.0 if value == 0 else value) if math.isfinite(value) else None
+            for name, value in terms.items()
+        } if feasible else None,
     }
 
 

@@ -1,4 +1,4 @@
-import type { HybridTelemetryResponse } from "@/types/telemetry";
+import type { HybridTelemetryResponse, StageTelemetry } from "@/types/telemetry";
 
 const milliseconds = (value: unknown): number =>
   typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
@@ -66,4 +66,21 @@ export function coherenceBudget(data: HybridTelemetryResponse): { survival: numb
       stage.metrics.available_qubits < stage.metrics.minimum_qubits_required)
   ));
   return { classical, survival, status: qpuBlocked ? "EXCEEDED" : survival === undefined ? null : survival >= 70 ? "NOMINAL" : survival >= 35 ? "DEGRADED" : "EXCEEDED" };
+}
+
+/** Compact probability-range annotation for existing QPU survival displays only. */
+export function coherenceRangeLabel(stage?: StageTelemetry): string | null {
+  if (!stage || stage.node !== "QPU" || stage.metrics.execution_feasible === false ||
+      stage.metrics.routing_supported === false || stage.metrics.qubits_allocated === 0) return null;
+  const best = stage.metrics.coherence_survival_best;
+  const worst = stage.metrics.coherence_survival_worst;
+  const valid = (value: unknown): value is number =>
+    typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+  if (!valid(best) || !valid(worst) || worst > best) return null;
+  const percent = (probability: number) => {
+    const value = 100 * probability;
+    return (value > 0 && value < 0.001 ? value.toExponential(2) :
+      new Intl.NumberFormat("en-US", { maximumSignificantDigits: 3 }).format(value)) + "%";
+  };
+  return `Best / worst case: ${percent(best)} / ${percent(worst)}`;
 }

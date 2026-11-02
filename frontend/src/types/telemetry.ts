@@ -20,14 +20,31 @@ export interface SimulationRequest {
   routing?: Partial<RoutingConfig> | null;
 }
 
-/** Per-stage wire telemetry: GPU latency includes I/O; QPU preparation/readout remain separate metric fields. */
+/** Alternative idle terms in natural logs; null denotes negative infinity (certain failure). */
+export interface LogSurvivalTerms {
+  two_qubit: number | null;
+  one_qubit: number | null;
+  measurement: number | null;
+  idle_t1: number | null;
+  idle_t2: number | null;
+}
+
+/** Optional typed fields keep historical runs and workload-specific extra metrics readable. */
+export interface StageMetrics extends Record<string, unknown> {
+  coherence_survival?: number;
+  coherence_survival_best?: number;
+  coherence_survival_worst?: number;
+  log_survival_terms?: LogSurvivalTerms | null;
+}
+
+/** Per-stage wire telemetry: current GPU/QPU batch latency includes I/O; legacy fields remain supported. */
 export interface StageTelemetry {
   name: string;
   node: StageNode;
   latency_ms: number;
   status: StageStatus;
   output_summary: string;
-  metrics: Record<string, unknown>;
+  metrics: StageMetrics;
 }
 
 /** Canonical backend response with three keyed stages and explicit live-reference versus analytical provenance. */

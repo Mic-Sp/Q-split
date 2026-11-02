@@ -4,6 +4,7 @@ import { X } from "lucide-react";
 import { benchmarkComparison } from "@/lib/benchmark-comparison";
 import type { SavedSimulationRun } from "@/types/run-history";
 import { hardwareLabel } from "@/lib/hardware-profiles";
+import { CoherenceRangeNote } from "@/components/coherence-range-note";
 
 /**
  * Render aligned metric rows from selection-ordered columns; column zero supplies every reference delta.
@@ -31,6 +32,7 @@ export function BenchmarkComparison({ runs, onRemove }: { runs: SavedSimulationR
           <th scope="row" className="p-2 align-top font-medium text-slate-600 dark:text-slate-400">{metric.label}</th>
           {columns.map(column => { const cell = column.metrics[index]; return <td key={column.run.id} className={`p-2 align-top [overflow-wrap:anywhere] ${cell.changed ? "bg-cyan-700/5 dark:bg-cyan-400/5" : ""}`}>
             <p title={cell.raw} className="font-mono text-slate-800 dark:text-slate-200">{cell.value}</p>
+            {cell.label === "Coherence survival" && <CoherenceRangeNote stage={column.run.telemetry.stages.stage_2_quantum_kernel} />}
             {cell.delta && <p title={cell.rawDelta} className={`mt-0.5 text-[9px] ${cell.changed ? "text-cyan-700 dark:text-cyan-300" : "text-slate-600 dark:text-slate-400"}`}>{cell.delta}</p>}
           </td>; })}
         </tr>)}</tbody>

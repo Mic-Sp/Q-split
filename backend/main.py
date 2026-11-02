@@ -23,7 +23,7 @@ from qiskit_aer import AerSimulator
 
 # Support both `uvicorn backend.main:app` and the container's `uvicorn main:app`.
 if __package__:
-    from .models import CircuitSpec, QPUProfile
+    from .models import CircuitSpec, QPUProfile, StageMetrics
     from .estimation import (estimate_qpu, estimate_classical, STATEVECTOR_PROFILES,
                              CLASSICAL_GPU_COMPUTE_FACTOR, CLASSICAL_GPU_OVERHEAD_MS)
     from .profiles import HARDWARE_PROFILES, execution_profile, profile_metrics
@@ -32,7 +32,7 @@ if __package__:
     from .circuits import (NATIVE_BASIS_GATES, AER_SEED, QUANTUM_MIPS_TARGET_INDEX,
                            c_amod15, build_shors_15_circuit, build_quantum_mips_grover_circuit, compile_reference_circuit)
 else:
-    from models import CircuitSpec, QPUProfile
+    from models import CircuitSpec, QPUProfile, StageMetrics
     from estimation import (estimate_qpu, estimate_classical, STATEVECTOR_PROFILES,
                             CLASSICAL_GPU_COMPUTE_FACTOR, CLASSICAL_GPU_OVERHEAD_MS)
     from profiles import HARDWARE_PROFILES, execution_profile, profile_metrics
@@ -182,7 +182,7 @@ class StageTelemetry(BaseModel):
     latency_ms: float
     status: str                             # "OPTIMAL", "WARNING", "CRITICAL_BOTTLENECK"
     output_summary: str
-    metrics: Dict[str, Any]
+    metrics: StageMetrics
 
 class HybridTelemetryResponse(BaseModel):
     """Wire response containing the three keyed stages and run-level context.
@@ -397,7 +397,7 @@ def _qpu_metrics(spec: CircuitSpec, profile: QPUProfile, capacity: int, shots: i
             "compute_latency_ms": estimated["latency_ms"],
             # Measurement/reset and launch are already included in latency_ms.
             "io_state_prep_ms": 0.0, "qpu_io_included_in_latency": True,
-            "physics_model": "Independent gate/readout errors and all-qubit T1 decay; per-shot survival"}
+            "physics_model": "Gate/readout errors plus all-qubit exposure billed at 2Q-duration layers; T1 point and T2 sensitivity range may double-count gate decoherence"}
 
 
 def _classical_cost(spec: CircuitSpec, node: str) -> Dict[str, Any]:
@@ -436,7 +436,9 @@ def _run_default_shors_pipeline(
     coherence = estimated["coherence_survival_pct"]
     if qpu_plan and not qubits:
         estimated.update({"latency_ms": 0.0, "compute_latency_ms": 0.0,
-                          "coherence_survival_pct": 0.0, "execution_feasible": False})
+                          "coherence_survival": 0.0, "coherence_survival_pct": 0.0,
+                          "coherence_survival_best": 0.0, "coherence_survival_worst": 0.0,
+                          "log_survival_terms": None, "execution_feasible": False})
         coherence = 0.0
     severity = coherence_stage_status(coherence)
     reliable = coherence_status(coherence) != "EXCEEDED"
@@ -630,6 +632,10 @@ def _block_quantum_mips_stage(stage: StageTelemetry, reason: str) -> StageTeleme
     stage.latency_ms = 0.0
     stage.status = "CRITICAL_BOTTLENECK"
     stage.metrics.update({"execution_feasible": False, "blocking_reason": reason, "retrieval_reliable": False})
+    if stage.node == "QPU":
+        stage.metrics.update({"coherence_survival": 0.0, "coherence_survival_pct": 0.0,
+                              "coherence_survival_best": 0.0, "coherence_survival_worst": 0.0,
+                              "log_survival_terms": None})
     for field in ("compute_latency_ms", "launch_transfer_overhead_ms", "io_state_prep_ms", "io_readout_ms"):
         if field in stage.metrics:
             stage.metrics[field] = 0.0
@@ -860,7 +866,9 @@ def run_shors_pipeline(
                 stage.latency_ms = 0.0
                 stage.status = "CRITICAL_BOTTLENECK"
                 stage.metrics.update({"execution_feasible": False, "circuit_depth": 0,
-                                      "coherence_survival_pct": 0.0, "io_state_prep_ms": 0.0})
+                                      "coherence_survival": 0.0, "coherence_survival_pct": 0.0,
+                                      "coherence_survival_best": 0.0, "coherence_survival_worst": 0.0,
+                                      "log_survival_terms": None, "io_state_prep_ms": 0.0})
                 stage.output_summary = (
                     f"BLOCKED: minimum {plan['minimum_qubits_required']:,} qubits required; "
                     f"only {available_qubits:,} available. No QPU execution performed."
@@ -945,7 +953,9 @@ def run_shors_pipeline(
             stage.output_summary = f"STARVED: {blocked_by} did not produce usable input."
             if stage.node == "QPU":
                 stage.metrics.update({"qubits_allocated": 0, "idle_qubits": available_qubits,
-                                      "circuit_depth": 0, "coherence_survival_pct": 0.0,
+                                      "circuit_depth": 0, "coherence_survival": 0.0, "coherence_survival_pct": 0.0,
+                                      "coherence_survival_best": 0.0, "coherence_survival_worst": 0.0,
+                                      "log_survival_terms": None,
                                       "parallelization_tier": "Blocked · upstream stage unavailable",
                                       "parallel_speedup_ceiling_reached": False})
             reasons[key] = stage.output_summary

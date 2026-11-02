@@ -1,8 +1,39 @@
 """Hardware-independent circuit resources and explicit QPU characterization units."""
 
-from typing import Any
+from typing import Annotated, Any
+from typing_extensions import TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class LogSurvivalTerms(TypedDict):
+    """Natural-log contributions; idle_t1/idle_t2 are alternatives, null is -infinity."""
+
+    two_qubit: Annotated[float | None, Field(le=0, allow_inf_nan=False)]
+    one_qubit: Annotated[float | None, Field(le=0, allow_inf_nan=False)]
+    measurement: Annotated[float | None, Field(le=0, allow_inf_nan=False)]
+    idle_t1: Annotated[float | None, Field(le=0, allow_inf_nan=False)]
+    idle_t2: Annotated[float | None, Field(le=0, allow_inf_nan=False)]
+
+
+class StageMetrics(TypedDict, total=False):
+    """Typed survival fields inside the existing extensible metrics dictionary.
+
+    Optional keys preserve historical/host-stage telemetry. Extra workload metrics
+    remain allowed; TypedDict retains dictionary operations used by the routers.
+    """
+
+    coherence_survival: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
+    coherence_survival_pct: Annotated[float, Field(ge=0, le=100, allow_inf_nan=False)]
+    coherence_survival_best: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
+    coherence_survival_worst: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
+    log_survival_terms: LogSurvivalTerms | None
+
+
+# Pydantic supports TypedDict configuration through this attribute. Retain
+# dictionaries and explicit OpenAPI fields without requiring a newer decorator.
+setattr(StageMetrics, "__pydantic_config__", ConfigDict(extra="allow"))
+setattr(LogSurvivalTerms, "__pydantic_config__", ConfigDict(extra="forbid"))
 
 
 class CircuitSpec(BaseModel):
@@ -31,8 +62,9 @@ class QPUProfile(BaseModel):
 
     None for capacity means unbounded; None for T1/T2 denotes the ideal reference.
     topology_factor multiplies depth and two-qubit count once to model routing.
-    T2 and single-qubit duration are retained for future scheduling models; the
-    requested estimator uses depth in two-qubit-duration units and T1 decay.
+    The estimator bills depth in two-qubit-duration units, retains a T1 point
+    estimate, and uses T2 for its alternative idle-decay sensitivity scenario.
+    Single-qubit duration is retained for future scheduling models.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True, allow_inf_nan=False)
