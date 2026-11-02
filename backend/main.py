@@ -8,6 +8,7 @@ Next.js owns database persistence, AI diagnostics, and provider/cache economics.
 """
 
 from contextlib import asynccontextmanager
+from functools import lru_cache
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Security
 from fastapi.security import APIKeyHeader
@@ -235,6 +236,7 @@ class HybridTelemetryResponse(BaseModel):
 # ==========================================
 # 2. LIVE QISKIT AER KERNEL FOR N = 15
 # ==========================================
+@lru_cache(maxsize=16)
 def execute_live_shors_15(a: Optional[int] = None, noisy: bool = True) -> Dict[str, Any]:
     """Sample an eight-qubit N=15 phase-estimation reference with Aer.
 
@@ -287,6 +289,7 @@ def execute_live_shors_15(a: Optional[int] = None, noisy: bool = True) -> Dict[s
     }
 
 
+@lru_cache(maxsize=16)
 def execute_live_quantum_mips_64() -> Dict[str, Any]:
     """Execute the ideal Grover reference and measure simulator wall-clock work.
 
