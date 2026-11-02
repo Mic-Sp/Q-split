@@ -32,8 +32,11 @@ export interface LogSurvivalTerms {
 /** Optional typed fields keep historical runs and workload-specific extra metrics readable. */
 export interface StageMetrics extends Record<string, unknown> {
   coherence_survival?: number;
+  coherence_survival_pct?: number;
   coherence_survival_best?: number;
   coherence_survival_worst?: number;
+  /** Natural log of T1 point; retained through probability underflow, null for unavailable/certain failure. */
+  coherence_log_survival?: number | null;
   log_survival_terms?: LogSurvivalTerms | null;
 }
 

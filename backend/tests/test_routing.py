@@ -378,7 +378,7 @@ class RoutingTests(unittest.TestCase):
                                 (1 - architecture.err_meas)**spec["n_meas"])
                     if architecture.t1_us is not None:
                         survival *= math.exp(-spec["n_qubits"] * depth * architecture.t_2q_ns / 1000 / architecture.t1_us)
-                    self.assertEqual(kernel.metrics["coherence_survival_pct"], round(100 * survival, 2))
+                    self.assertAlmostEqual(kernel.metrics["coherence_survival_pct"], 100 * survival, delta=max(1e-300, 100 * survival * 1e-12))
                     self.assertEqual(kernel.metrics["capacity_override"], architecture.n_qubits_max is not None and capacity > architecture.n_qubits_max)
 
     def test_sequential_aer_reference_uses_shared_depth_model_across_architectures(self):

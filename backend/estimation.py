@@ -37,6 +37,8 @@ def estimate_qpu(spec: CircuitSpec, profile: QPUProfile, shots: int, launch_over
     never an additional charge; use the more negative idle term for worst.
     A null term denotes -infinity for certain failure. Infeasible execution has
     zero survival and no physical log breakdown. Ideal profiles have zero terms.
+    coherence_log_survival preserves the natural log of the T1 point even when
+    exp underflows; null denotes certain failure or infeasible execution.
     """
     if type(shots) is not int or shots < 1:
         raise ValueError("shots must be a positive integer")
@@ -57,7 +59,8 @@ def estimate_qpu(spec: CircuitSpec, profile: QPUProfile, shots: int, launch_over
     t2 = profile.t2_us if profile.t2_us is not None else profile.t1_us
     terms["idle_t2"] = -exposure_us / t2 if t2 is not None else 0.0
     gate_log = terms["one_qubit"] + terms["two_qubit"] + terms["measurement"]
-    survival = math.exp(gate_log + terms["idle_t1"]) if feasible else 0.0
+    point_log = gate_log + terms["idle_t1"]
+    survival = math.exp(point_log) if feasible else 0.0
     worst = math.exp(gate_log + min(terms["idle_t1"], terms["idle_t2"])) if feasible else 0.0
     return {
         "execution_feasible": feasible, "circuit_depth": depth, "n_2q": n_2q,
@@ -68,6 +71,7 @@ def estimate_qpu(spec: CircuitSpec, profile: QPUProfile, shots: int, launch_over
         "launch_overhead_ms": launch_overhead_ms if feasible else 0.0,
         "coherence_survival": survival, "coherence_survival_pct": 100 * survival,
         "coherence_survival_best": survival, "coherence_survival_worst": worst,
+        "coherence_log_survival": (0.0 if point_log == 0 else point_log) if feasible and math.isfinite(point_log) else None,
         "log_survival_terms": {
             name: (0.0 if value == 0 else value) if math.isfinite(value) else None
             for name, value in terms.items()

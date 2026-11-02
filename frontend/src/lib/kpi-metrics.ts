@@ -68,6 +68,16 @@ export function coherenceBudget(data: HybridTelemetryResponse): { survival: numb
   return { classical, survival, status: qpuBlocked ? "EXCEEDED" : survival === undefined ? null : survival >= 70 ? "NOMINAL" : survival >= 35 ? "DEGRADED" : "EXCEEDED" };
 }
 
+/** Format a percentage for display without rounding small nonzero values to zero. */
+export function formatSurvivalPercent(value: unknown): string {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 100) return "—";
+  const formatted = value > 0 && value < 0.001 ? value.toExponential(2)
+    : new Intl.NumberFormat("en-US", { maximumSignificantDigits: 3 }).format(value);
+  // Keep a displayed value from crossing the classification thresholds.
+  return (value < 35 && Number(formatted) >= 35) || (value < 70 && Number(formatted) >= 70)
+    ? String(value) : formatted;
+}
+
 /** Compact probability-range annotation for existing QPU survival displays only. */
 export function coherenceRangeLabel(stage?: StageTelemetry): string | null {
   if (!stage || stage.node !== "QPU" || stage.metrics.execution_feasible === false ||
@@ -77,10 +87,6 @@ export function coherenceRangeLabel(stage?: StageTelemetry): string | null {
   const valid = (value: unknown): value is number =>
     typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
   if (!valid(best) || !valid(worst) || worst > best) return null;
-  const percent = (probability: number) => {
-    const value = 100 * probability;
-    return (value > 0 && value < 0.001 ? value.toExponential(2) :
-      new Intl.NumberFormat("en-US", { maximumSignificantDigits: 3 }).format(value)) + "%";
-  };
+  const percent = (probability: number) => formatSurvivalPercent(100 * probability) + "%";
   return `Best / worst case: ${percent(best)} / ${percent(worst)}`;
 }

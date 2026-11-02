@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { benchmarkComparison, benchmarkExportRuns, benchmarkMetrics, selectedBenchmarkRuns, toggleBenchmarkSelection } from "./benchmark-comparison";
 import { BENCHMARK_CSV_HEADERS, benchmarkCsv, benchmarkJson } from "./benchmark-export";
 import type { SavedSimulationRun } from "@/types/run-history";
+import { describeChanges } from "./telemetry";
 
 function fixture(id = "run-1"): SavedSimulationRun {
   return {
@@ -20,6 +21,24 @@ function fixture(id = "run-1"): SavedSimulationRun {
     advisorInsight: null,
   };
 }
+
+test("tiny survival values remain visible in comparisons and change tracking", () => {
+  const baseline = fixture("baseline"), candidate = fixture("candidate");
+  baseline.telemetry.stages.stage_2_quantum_kernel.metrics.coherence_survival_pct = 1e-26;
+  candidate.telemetry.stages.stage_2_quantum_kernel.metrics.coherence_survival_pct = 2e-26;
+  const columns = benchmarkComparison([baseline, candidate]);
+  const metric = columns[1].metrics.find(metric => metric.label === "Coherence survival");
+  assert.ok(metric);
+  assert.match(metric.value, /e-26/);
+  assert.match(metric.delta!, /e-26/);
+  const changes = describeChanges(
+    { id: baseline.id, completedAt: baseline.completedAt, request: baseline.request, data: baseline.telemetry },
+    { id: candidate.id, completedAt: candidate.completedAt, request: candidate.request, data: candidate.telemetry },
+  );
+  const change = changes.find(change => change.label.endsWith("coherence survival pct"));
+  assert.equal(change?.before, "1.00e-26");
+  assert.equal(change?.after, "2.00e-26");
+});
 
 // Independent RFC-style reader verifies complete rows, including multiline diagnostics.
 function parseCsv(text: string) {

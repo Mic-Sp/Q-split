@@ -27,6 +27,7 @@ class StageMetrics(TypedDict, total=False):
     coherence_survival_pct: Annotated[float, Field(ge=0, le=100, allow_inf_nan=False)]
     coherence_survival_best: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
     coherence_survival_worst: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
+    coherence_log_survival: Annotated[float | None, Field(le=0, allow_inf_nan=False)]
     log_survival_terms: LogSurvivalTerms | None
 
 

@@ -73,7 +73,7 @@ class QuantumMipsPipelineTests(unittest.TestCase):
                             (1 - architecture.err_meas)**6)
                 if architecture.t1_us is not None:
                     survival *= math.exp(-10 * depth * architecture.t_2q_ns / 1000 / architecture.t1_us)
-                self.assertEqual(result.metrics["coherence_survival_pct"], round(100 * survival, 2))
+                self.assertAlmostEqual(result.metrics["coherence_survival_pct"], 100 * survival, delta=max(1e-300, 100 * survival * 1e-12))
                 self.assertEqual(result.metrics["aer_runtime_ms"], 1.25)
                 self.assertEqual(result.metrics["aer_reference_qubits"], 10)
                 self.assertEqual(result.metrics["measured_peak_probability"], 1020 / 1024)

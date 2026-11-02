@@ -81,7 +81,7 @@ function number(value: unknown, minimum: number, maximum: number, integer = fals
  * Rebuild an allowlisted, bounded primitive metric digest from untrusted telemetry.
  * Rebuild the fixed log-survival breakdown; drop all other nested dictionaries,
  * measurement text and unknown fields. The breakdown is omitted from the LLM
- * digest below; only point percentage and the two range bounds are sent.
+ * digest below; point percentage, log point, and the two range bounds are sent.
  * A blocked MIPS depth multiplier may be null
  * and is omitted, not coerced to a misleading numeric factor.
  */
@@ -119,6 +119,10 @@ function metrics(value: unknown): StageTelemetry["metrics"] {
       if (typeof source[key] !== "boolean") invalid();
       result[key] = source[key];
     }
+  }
+  if (Object.hasOwn(source, "coherence_log_survival")) {
+    result.coherence_log_survival = source.coherence_log_survival === null ? null
+      : number(source.coherence_log_survival, -Number.MAX_VALUE, 0);
   }
   if (Object.hasOwn(source, "log_survival_terms")) {
     if (source.log_survival_terms === null) result.log_survival_terms = null;
@@ -269,7 +273,7 @@ export function advisorDigest(run: CompletedRun) {
     stages: Object.fromEntries(PIPELINE.map(({ key }) => {
       const stage = run.telemetry.stages[key];
       const promptMetrics = { ...stage.metrics };
-      // Compact prompt: keep point percentage and best/worst probabilities.
+      // Compact prompt: keep point percentage/log and best/worst probabilities.
       // Detailed log terms stay validated local data, not provider input.
       delete promptMetrics.log_survival_terms;
       delete promptMetrics.coherence_survival;

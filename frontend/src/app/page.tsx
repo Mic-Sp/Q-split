@@ -17,7 +17,7 @@ import { restoredConfiguration } from "@/lib/benchmark-snapshot";
 import type { SavedSimulationRun } from "@/types/run-history";
 import { createClientId } from "@/lib/client-session";
 import { usePersistentRuns } from "@/hooks/use-persistent-runs";
-import { coherenceBudget, pipelineTiming, type CoherenceBudgetStatus } from "@/lib/kpi-metrics";
+import { coherenceBudget, formatSurvivalPercent, pipelineTiming, type CoherenceBudgetStatus } from "@/lib/kpi-metrics";
 import { formatDuration, formatRawMilliseconds } from "@/lib/duration";
 import { HARDWARE_PROFILES, QUBIT_CAPACITY_PRESETS, hardwareLabel } from "@/lib/hardware-profiles";
 import { WORKLOADS, workloadScaleLabel } from "@/lib/workloads";
@@ -57,7 +57,7 @@ const CAPACITY_PANEL_METRICS = new Set([
   "hardware_architecture", "connectivity_topology", "reference_qubits", "reference_circuit_depth",
   "routing_depth_multiplier", "gate_time_multiplier", "coherence_decay_scale",
 ]);
-const COHERENCE_RANGE_METRICS = new Set(["coherence_survival_best", "coherence_survival_worst", "log_survival_terms"]);
+const COHERENCE_RANGE_METRICS = new Set(["coherence_survival_best", "coherence_survival_worst", "log_survival_terms", "coherence_log_survival"]);
 
 interface DashboardState extends SimulationSession {
   loading: boolean;
@@ -90,7 +90,7 @@ function StatusBadge({ status }: { status: StageStatus }) {
 
 const metricLabels: Record<string, string> = {
   qubits_required: "Logical qubits", circuit_depth: "Circuit depth", io_state_prep_ms: "State preparation", io_readout_ms: "Readout",
-  coherence_survival_pct: "Coherence survival · %", algorithm: "Algorithm", complexity: "Complexity",
+  coherence_survival_pct: "Coherence survival · %", coherence_survival: "Survival · probability", algorithm: "Algorithm", complexity: "Complexity",
   base_a: "Coprime base", factors_found: "Factors found",
   routing_model: "Latency estimate", routing_supported: "Route supported", execution_feasible: "Execution feasible",
   launch_transfer_overhead_ms: "Launch / transfer", compute_latency_factor: "Compute latency factor",
@@ -162,7 +162,7 @@ function PipelineCard({ index, stage, selectedNode, onNodeChange, pending, workl
         {stage ? Object.entries(stage.metrics).filter(([key]) => !CAPACITY_PANEL_METRICS.has(key) && !COHERENCE_RANGE_METRICS.has(key) && key !== "classical_cpu_baseline").map(([key, value]) => (
           <div key={key} className="min-w-0 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 px-2 py-1">
             <dt className="text-[9px] leading-3 text-slate-600 dark:text-slate-400 [overflow-wrap:anywhere]">{metricLabels[key] ?? key.replace(/_ms$/, "").replaceAll("_", " ")}</dt>
-            <dd title={key.endsWith("_ms") ? formatRawMilliseconds(value) : formatValue(value)} className={["mt-0.5 font-mono text-[10px] leading-4 [overflow-wrap:anywhere]", key === "coherence_survival_pct" ? style?.text : "text-slate-800 dark:text-slate-200"].join(" ")}>{key.endsWith("_ms") ? formatDuration(value) : key === "routing_model" ? "Modeled" : key === "depth_model" ? String(value).startsWith("Compiled") ? "Aer reference" : "Analytical" : typeof value === "boolean" ? value ? "Yes" : "No" : formatValue(value)}{key === "coherence_survival_pct" && <CoherenceRangeNote stage={stage} />}</dd>
+            <dd title={key.endsWith("_ms") ? formatRawMilliseconds(value) : typeof value === "number" ? String(value) : formatValue(value)} className={["mt-0.5 font-mono text-[10px] leading-4 [overflow-wrap:anywhere]", key === "coherence_survival_pct" ? style?.text : "text-slate-800 dark:text-slate-200"].join(" ")}>{key.endsWith("_ms") ? formatDuration(value) : key === "coherence_survival_pct" || key === "coherence_survival" ? formatSurvivalPercent(value) : key === "routing_model" ? "Modeled" : key === "depth_model" ? String(value).startsWith("Compiled") ? "Aer reference" : "Analytical" : typeof value === "boolean" ? value ? "Yes" : "No" : formatValue(value)}{key === "coherence_survival_pct" && <CoherenceRangeNote stage={stage} />}</dd>
           </div>
         )) : <div className={["col-span-full h-12 rounded-lg bg-slate-100 dark:bg-slate-800/40", pending ? "animate-pulse" : ""].join(" ")} aria-hidden="true" />}
       </dl>
@@ -407,7 +407,7 @@ export default function Home() {
                   <p className="text-[9px] font-bold uppercase leading-3 tracking-wider text-slate-900 dark:text-slate-100">{label}</p><Icon size={12} className="shrink-0 text-cyan-700 dark:text-cyan-300/70" />
                 </div>
                 <div className="px-2.5 py-1.5">
-                <p title={label === "Pipeline latency" ? formatRawMilliseconds(value) : formatValue(value) + " " + unit} className="break-words font-mono text-base leading-5 tracking-tight">{label === "Pipeline latency" ? formatDuration(value) : <>{summaryValue(value)}<span className="ml-1 text-[10px] text-slate-600 dark:text-slate-400">{unit}</span></>}</p>
+                <p title={label === "Pipeline latency" ? formatRawMilliseconds(value) : (typeof value === "number" ? String(value) : formatValue(value)) + " " + unit} className="break-words font-mono text-base leading-5 tracking-tight">{label === "Pipeline latency" ? formatDuration(value) : <>{label === "Coherence survival" ? formatSurvivalPercent(value) : summaryValue(value)}<span className="ml-1 text-[10px] text-slate-600 dark:text-slate-400">{unit}</span></>}</p>
                 {label === "Pipeline latency" && <dl aria-label="Pipeline latency breakdown" title="Includes separately reported QPU I/O; GPU launch/transfer overhead is counted once. Blocked stages contribute no time." className="mt-1 space-y-0.5 text-[9px] leading-3">
                   <div className="flex flex-wrap justify-between gap-x-2"><dt className="text-slate-600 dark:text-slate-400">Pure Compute Time</dt><dd title={formatRawMilliseconds(timing?.computeMs)} className="font-mono text-slate-700 dark:text-slate-300">{formatDuration(timing?.computeMs)}</dd></div>
                   <div className="flex flex-wrap justify-between gap-x-2"><dt className="text-slate-600 dark:text-slate-400">Interconnect &amp; State-Prep Overhead</dt><dd title={formatRawMilliseconds(timing?.overheadMs)} className="font-mono text-slate-700 dark:text-slate-300">{formatDuration(timing?.overheadMs)}</dd></div>

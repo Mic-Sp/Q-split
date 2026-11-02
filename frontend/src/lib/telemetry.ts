@@ -1,5 +1,5 @@
 import { formatDuration, formatRawMilliseconds } from "@/lib/duration";
-import { pipelineTiming } from "@/lib/kpi-metrics";
+import { formatSurvivalPercent, pipelineTiming } from "@/lib/kpi-metrics";
 import { HARDWARE_PROFILES, hardwareLabel } from "@/lib/hardware-profiles";
 import type { HardwareProfile, HybridTelemetryResponse, RoutingConfig, SimulationRequest, WorkloadId } from "@/types/telemetry";
 import { workloadThresholds } from "@/lib/workloads";
@@ -55,9 +55,10 @@ export interface Transition { id: number; before: Snapshot; after: Snapshot; cha
  */
 export function describeChanges(before: Snapshot, after: Snapshot): MetricDelta[] {
   const changes: MetricDelta[] = [];
-  const add = (label: string, from: unknown, to: unknown, duration = false) => {
+  const add = (label: string, from: unknown, to: unknown, duration = false, percentage = false) => {
     if (JSON.stringify(from) !== JSON.stringify(to)) changes.push({ label,
-      before: duration ? formatDuration(from) : formatValue(from), after: duration ? formatDuration(to) : formatValue(to),
+      before: duration ? formatDuration(from) : percentage ? formatSurvivalPercent(from) : formatValue(from),
+      after: duration ? formatDuration(to) : percentage ? formatSurvivalPercent(to) : formatValue(to),
       ...(duration ? { beforeRaw: formatRawMilliseconds(from), afterRaw: formatRawMilliseconds(to) } : {}),
     });
   };
@@ -75,7 +76,7 @@ export function describeChanges(before: Snapshot, after: Snapshot): MetricDelta[
     add(`${label} · status`, previous?.status, current?.status);
     add(`${label} · latency`, previous?.latency_ms, current?.latency_ms, true);
     const keys = new Set([...Object.keys(previous?.metrics ?? {}), ...Object.keys(current?.metrics ?? {})]);
-    for (const metric of keys) add(`${label} · ${metric.replace(/_ms$/, "").replaceAll("_", " ")}`, previous?.metrics[metric], current?.metrics[metric], metric.endsWith("_ms"));
+    for (const metric of keys) add(`${label} · ${metric.replace(/_ms$/, "").replaceAll("_", " ")}`, previous?.metrics[metric], current?.metrics[metric], metric.endsWith("_ms"), metric === "coherence_survival_pct");
   }
   return changes;
 }

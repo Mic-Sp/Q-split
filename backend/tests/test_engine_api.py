@@ -9,13 +9,27 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.main import app, create_app
+from backend.main import SHOR_SCALES, SimulationRequest, app, create_app
 
 
 @pytest.fixture(autouse=True)
 def local_engine_environment(monkeypatch):
     for variable in ("ENGINE_ENV", "ENGINE_SECRET", "ENGINE_ENABLE_DOCS"):
         monkeypatch.delenv(variable, raising=False)
+
+
+@pytest.mark.parametrize("scale", [2, 3, 4, 5, 7, 9, 14, 16, 64, 513])
+def test_public_shor_rejects_unsupported_moduli_before_dispatch(scale):
+    with TestClient(app) as client, patch("backend.main.run_shors_pipeline") as shor:
+        response = client.post("/api/simulate", json={"workload_id": "shors_crypto", "scale_param": scale})
+    assert response.status_code == 422
+    assert "Shor scale_param must be one of" in response.json()["detail"][0]["msg"]
+    shor.assert_not_called()
+
+
+@pytest.mark.parametrize("scale", SHOR_SCALES)
+def test_public_shor_preserves_all_supported_presets(scale):
+    assert SimulationRequest(workload_id="shors_crypto", scale_param=scale).scale_param == scale
 
 
 @pytest.mark.parametrize("header", [None, "wrong", "test-engine-secret-extra"])

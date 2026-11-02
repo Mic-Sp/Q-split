@@ -92,6 +92,8 @@ StageNode = Literal["CPU", "GPU", "QPU"]
 WorkloadId = Literal["shors_crypto", "quantum_mips"]
 HardwareProfile = Literal["ibm_heron_nisq", "google_weber_grid", "ionq_forte_trapped_ion", "ideal_sim"]
 
+SHOR_SCALES = (15, 21, 35, 512, 2048)
+
 QUANTUM_MIPS_WORKLOAD_NAME = "Quantum-MIPS · Sub-Linear LLM Vector Retrieval"
 QUANTUM_MIPS_DEFAULT_SCALE = 64
 QUANTUM_MIPS_SCALES = {
@@ -181,13 +183,15 @@ class SimulationRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_workload_scale(self):
-        """Constrain Quantum-MIPS to its calibrated scales after field validation.
+        """Match each public workload's supported frontend presets.
 
         Returns:
-            This validated request, preserving Shor's broader integer scale contract.
+            This request with a supported toy modulus, RSA width, or MIPS count.
 
         Raises:
-            ValueError: The MIPS candidate count has no configured reference model."""
+            ValueError: The workload scale has no configured reference model."""
+        if self.workload_id == "shors_crypto" and self.scale_param not in SHOR_SCALES:
+            raise ValueError("Shor scale_param must be one of 15, 21, 35, 512, 2048.")
         if self.workload_id == "quantum_mips" and self.scale_param not in QUANTUM_MIPS_SCALES:
             raise ValueError("Quantum-MIPS scale_param must be one of 64, 1024, 32768, 131072, 1048576.")
         return self
@@ -279,7 +283,7 @@ def execute_live_quantum_mips_64() -> Dict[str, Any]:
     """Execute the ideal Grover reference and measure simulator wall-clock work.
 
     Returns:
-        Generic-basis compiled depth, shot counts, measured top index/probability,
+        Compiled {cx, rz, sx, x} reference depth, shot counts, measured top index/probability,
         and separate compilation, execution, and total times in milliseconds.
 
     Both transpilation and sampling use seed 7. Aer executes on the CPU with one
@@ -414,7 +418,6 @@ def _qpu_metrics(spec: CircuitSpec, profile: QPUProfile, capacity: int, shots: i
     """Adapt the pure batch estimate to the existing telemetry contract."""
     estimated = estimate_qpu(spec, execution_profile(profile, capacity), shots, QPU_LAUNCH_OVERHEAD_MS)
     return {**estimated, **profile_metrics(profile, capacity), "circuit_spec": spec.model_dump(),
-            "coherence_survival_pct": round(estimated["coherence_survival_pct"], 2),
             "compute_latency_ms": estimated["latency_ms"],
             # Measurement/reset and launch are already included in latency_ms.
             "io_state_prep_ms": 0.0, "qpu_io_included_in_latency": True,
@@ -457,7 +460,7 @@ def _run_default_shors_pipeline(
     coherence = estimated["coherence_survival_pct"]
     if qpu_plan and not qubits:
         estimated.update({"latency_ms": 0.0, "compute_latency_ms": 0.0,
-                          "coherence_survival": 0.0, "coherence_survival_pct": 0.0,
+                          "coherence_survival": 0.0, "coherence_survival_pct": 0.0, "coherence_log_survival": None,
                           "coherence_survival_best": 0.0, "coherence_survival_worst": 0.0,
                           "log_survival_terms": None, "execution_feasible": False})
         coherence = 0.0
@@ -654,7 +657,7 @@ def _block_quantum_mips_stage(stage: StageTelemetry, reason: str) -> StageTeleme
     stage.status = "CRITICAL_BOTTLENECK"
     stage.metrics.update({"execution_feasible": False, "blocking_reason": reason, "retrieval_reliable": False})
     if stage.node == "QPU":
-        stage.metrics.update({"coherence_survival": 0.0, "coherence_survival_pct": 0.0,
+        stage.metrics.update({"coherence_survival": 0.0, "coherence_survival_pct": 0.0, "coherence_log_survival": None,
                               "coherence_survival_best": 0.0, "coherence_survival_worst": 0.0,
                               "log_survival_terms": None})
     for field in ("compute_latency_ms", "launch_transfer_overhead_ms", "io_state_prep_ms", "io_readout_ms"):
@@ -887,7 +890,7 @@ def run_shors_pipeline(
                 stage.latency_ms = 0.0
                 stage.status = "CRITICAL_BOTTLENECK"
                 stage.metrics.update({"execution_feasible": False, "circuit_depth": 0,
-                                      "coherence_survival": 0.0, "coherence_survival_pct": 0.0,
+                                      "coherence_survival": 0.0, "coherence_survival_pct": 0.0, "coherence_log_survival": None,
                                       "coherence_survival_best": 0.0, "coherence_survival_worst": 0.0,
                                       "log_survival_terms": None, "io_state_prep_ms": 0.0})
                 stage.output_summary = (
@@ -974,7 +977,7 @@ def run_shors_pipeline(
             stage.output_summary = f"STARVED: {blocked_by} did not produce usable input."
             if stage.node == "QPU":
                 stage.metrics.update({"qubits_allocated": 0, "idle_qubits": available_qubits,
-                                      "circuit_depth": 0, "coherence_survival": 0.0, "coherence_survival_pct": 0.0,
+                                      "circuit_depth": 0, "coherence_survival": 0.0, "coherence_survival_pct": 0.0, "coherence_log_survival": None,
                                       "coherence_survival_best": 0.0, "coherence_survival_worst": 0.0,
                                       "log_survival_terms": None,
                                       "parallelization_tier": "Blocked · upstream stage unavailable",

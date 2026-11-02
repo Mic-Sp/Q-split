@@ -36,6 +36,7 @@ def test_point_is_unchanged_and_range_is_ordered_for_every_profile(spec, profile
     assert actual["coherence_survival_pct"] == 100 * point
     assert 1 >= actual["coherence_survival_best"] >= point >= actual["coherence_survival_worst"] >= 0
     assert actual["coherence_survival_best"] == point
+    assert actual["coherence_log_survival"] == legacy_log
 
 
 @pytest.mark.parametrize("profile_id", HARDWARE_PROFILES)
@@ -85,6 +86,7 @@ def test_ideal_survival_is_exactly_one_for_every_scenario(spec, depth):
     for key in ("coherence_survival", "coherence_survival_best", "coherence_survival_worst"):
         assert actual[key] == 1.0
     assert actual["coherence_survival_pct"] == 100.0
+    assert actual["coherence_log_survival"] == 0.0
     assert all(value == 0 for value in actual["log_survival_terms"].values())
     assert all(math.copysign(1, value) == 1 for value in actual["log_survival_terms"].values())
 
@@ -95,6 +97,7 @@ def test_infeasible_execution_has_zero_range_and_no_physical_breakdown(spec):
     assert not actual["execution_feasible"]
     assert actual["coherence_survival_best"] == actual["coherence_survival_worst"] == actual["coherence_survival"] == 0
     assert actual["log_survival_terms"] is None
+    assert actual["coherence_log_survival"] is None
 
 
 def test_certain_gate_failure_is_json_safe_and_unused_gates_have_zero_log(spec):
@@ -102,6 +105,7 @@ def test_certain_gate_failure_is_json_safe_and_unused_gates_have_zero_log(spec):
     actual = estimate_qpu(spec, profile, 1, 0)
     assert actual["coherence_survival_best"] == actual["coherence_survival_worst"] == 0
     assert actual["log_survival_terms"]["two_qubit"] is None  # JSON representation of -infinity.
+    assert actual["coherence_log_survival"] is None
     json.dumps(actual, allow_nan=False)
     stage = StageTelemetry(name="Kernel", node="QPU", latency_ms=actual["latency_ms"],
                            status="CRITICAL_BOTTLENECK", output_summary="Synthetic certain failure", metrics=actual)
@@ -124,9 +128,36 @@ def test_survival_range_survives_response_validation_over_http(monkeypatch, work
     assert metrics["hardware_architecture"] == profile_id  # Extra workload metrics remain intact.
 
 
+@pytest.mark.parametrize("scale,profile,capacity", [(21, "ibm_heron_nisq", 133),
+                                                   (15, "google_weber_grid", 53),
+                                                   (35, "ionq_forte_trapped_ion", 36)])
+def test_tiny_survival_percentages_survive_the_api_without_rounding(monkeypatch, scale, profile, capacity):
+    monkeypatch.delenv("ENGINE_SECRET", raising=False)
+    with TestClient(app) as client:
+        response = client.post("/api/simulate", json={"scale_param": scale, "hardware_profile": profile,
+                                                     "available_qubits": capacity})
+    assert response.status_code == 200
+    metrics = response.json()["stages"][STAGE_KEYS[1]]["metrics"]
+    assert 0 < metrics["coherence_survival_pct"] < 0.005
+    assert metrics["coherence_survival_pct"] == 100 * metrics["coherence_survival"]
+    assert math.exp(metrics["coherence_log_survival"]) == metrics["coherence_survival"]
+    assert metrics["coherence_status"] == "EXCEEDED"
+
+
+def test_log_survival_preserves_underflow_without_nonfinite_json(spec):
+    huge = spec.model_copy(update={"n_2q": 10_000_000_000})
+    actual = estimate_qpu(huge, HARDWARE_PROFILES["ibm_heron_nisq"], 512, 0.3)
+    assert actual["coherence_survival"] == actual["coherence_survival_pct"] == 0
+    assert math.isfinite(actual["coherence_log_survival"])
+    assert actual["coherence_log_survival"] < -1000
+    terms = actual["log_survival_terms"]
+    assert actual["coherence_log_survival"] == sum(terms[key] for key in ("one_qubit", "two_qubit", "measurement", "idle_t1"))
+    json.dumps(actual, allow_nan=False)
+
+
 def test_openapi_documents_optional_survival_fields_and_legacy_metrics_stay_extensible():
     schema = app.openapi()["components"]["schemas"]
-    assert {"coherence_survival_best", "coherence_survival_worst", "log_survival_terms"} <= set(schema["StageMetrics"]["properties"])
+    assert {"coherence_survival_best", "coherence_survival_worst", "coherence_log_survival", "log_survival_terms"} <= set(schema["StageMetrics"]["properties"])
     assert set(schema["LogSurvivalTerms"]["properties"]) == {"two_qubit", "one_qubit", "measurement", "idle_t1", "idle_t2"}
     legacy = StageTelemetry(name="Host", node="CPU", latency_ms=1, status="OPTIMAL", output_summary="", metrics={"legacy": "retained"})
     assert legacy.metrics == {"legacy": "retained"}

@@ -1,4 +1,4 @@
-import { coherenceBudget, pipelineTiming } from "@/lib/kpi-metrics";
+import { coherenceBudget, formatSurvivalPercent, pipelineTiming } from "@/lib/kpi-metrics";
 import { DEFAULT_AVAILABLE_QUBITS } from "@/lib/telemetry";
 import { formatDuration, formatDurationDelta, formatRawMilliseconds } from "@/lib/duration";
 import type { SavedSimulationRun } from "@/types/run-history";
@@ -6,7 +6,8 @@ import type { SavedSimulationRun } from "@/types/run-history";
 export const MAX_COMPARISON_RUNS = 3;
 const number = new Intl.NumberFormat("en-US", { maximumFractionDigits: 6 });
 const finite = (value: unknown): number | null => typeof value === "number" && Number.isFinite(value) ? value : null;
-const signed = (value: number) => `${value > 0 ? "+" : ""}${number.format(Object.is(value, -0) ? 0 : value)}`;
+const signed = (value: number) => `${value > 0 ? "+" : ""}${value !== 0 && Math.abs(value) < 0.001
+  ? value.toExponential(2) : number.format(Object.is(value, -0) ? 0 : value)}`;
 
 /**
  * Normalize a saved row into the same wall-clock/coherence metrics used by KPIs.
@@ -81,7 +82,7 @@ export function benchmarkComparison(runs: SavedSimulationRun[]) {
   return chosen.map((run, index) => {
     const metrics = benchmarkMetrics(run);
     const numeric = (label: string, value: number | null, baseline: number | null, unit: string, deltaUnit = unit): ComparisonMetric => ({
-      label, value: value === null ? "Not reported" : `${number.format(value)} ${unit}`,
+      label, value: value === null ? "Not reported" : `${unit === "%" ? formatSurvivalPercent(value) : number.format(value)} ${unit}`,
       delta: index === 0 || value === null || baseline === null ? null : `${signed(value - baseline)} ${deltaUnit} vs reference`,
       changed: index > 0 && value !== baseline,
     });

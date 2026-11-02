@@ -44,8 +44,9 @@ class QuantumMipsTests(unittest.TestCase):
         self.assertEqual(legacy.hardware_profile, "ibm_heron_nisq")
         self.assertEqual(legacy.available_qubits, 133)
         self.assertIsNone(legacy.routing)
-        # Existing custom Shor moduli remain supported.
-        self.assertEqual(SimulationRequest(scale_param=97).scale_param, 97)
+        # Public Shor requests share the frontend's supported preset contract.
+        with self.assertRaises(ValidationError):
+            SimulationRequest(scale_param=97)
         payload = {"workload_id": "quantum_mips"}
         mips = SimulationRequest.model_validate(payload)
         self.assertEqual(mips.scale_param, 64)
