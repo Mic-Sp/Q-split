@@ -8,7 +8,7 @@ import pytest
 from backend.workloads import DEPTH_EXPANSION_FACTOR
 
 from backend.main import (
-    HARDWARE_PROFILES, NATIVE_BASIS_GATES, STAGE_KEYS, execute_live_shors_15,
+    HARDWARE_PROFILES, NATIVE_BASIS_GATES, STAGE_KEYS, _fmt_pct, execute_live_shors_15,
     qpu_capacity_plan, run_shors_pipeline,
 )
 
@@ -85,7 +85,7 @@ def test_live_n15_exceeded_summaries_name_reference_and_modeled_hardware(profile
         assert stage.status == "CRITICAL_BOTTLENECK"
         assert stage.metrics["coherence_status"] == "EXCEEDED"
         assert "Ideal Aer reference:" in stage.output_summary
-        assert f"Modeled {HARDWARE_PROFILES[profile].name} survival {survival}%" in stage.output_summary
+        assert f"Modeled {HARDWARE_PROFILES[profile].name} survival {_fmt_pct(survival)}" in stage.output_summary
     assert kernel.metrics["coherence_survival_pct"] == survival
     assert "Extracted period r = 4" in kernel.output_summary
     assert "continued fractions yield 15 = 3 × 5" in post.output_summary

@@ -2,7 +2,7 @@
 
 ## Current production contract
 
-Resource model version 1 retains `ceil(spec.depth * topology_factor * native_2q_per_cx) * t_2q_ns` for circuit duration. It bills every layer at the 2Q duration, including layers containing only 1Q gates. Readout/reset and launch are charged separately. The same circuit duration supplies the conservative all-qubit idle exposure used by the survival model.
+Resource model version 2 (`CALIBRATED_V2`) retains `ceil(spec.depth * topology_factor * native_2q_per_cx) * t_2q_ns` for circuit duration. It bills every layer at the 2Q duration, including layers containing only 1Q gates. Readout/reset and launch are charged separately. The same circuit duration supplies the conservative all-qubit idle exposure used by the survival model.
 
 This design does not change that formula, the two workload expansion factors, profile values, response keys, or the 70/35 thresholds. The analytic workloads continue building the same specifications at every scale. Live reference measurements are cross-checks only.
 

@@ -46,3 +46,17 @@ def test_blocked_ideal_qpu_cannot_leave_nominal_postprocessing_coherence(pipelin
         stage = response.stages[key]
         assert not stage.metrics["execution_feasible"]
         assert stage.metrics["coherence_status"] == "EXCEEDED"
+
+
+@pytest.mark.parametrize("pipeline,scale,capacity", [(run_shors_pipeline, 21, 13), (run_quantum_mips_pipeline, 1024, 14)])
+@pytest.mark.parametrize("profile", ["ibm_heron_nisq", "ideal_sim"])
+def test_percentage_formatting_changes_only_prose_not_precision_or_classification(pipeline, scale, capacity, profile):
+    before = pipeline(scale, profile, available_qubits=capacity).model_dump()
+    with patch("backend.main._fmt_pct", return_value="display-only"):
+        after = pipeline(scale, profile, available_qubits=capacity).model_dump()
+    assert "display-only" in after["stages"][STAGE_KEYS[1]]["output_summary"]
+    for stages in (before["stages"], after["stages"]):
+        for stage in stages.values():
+            stage.pop("output_summary")
+    # Includes every float, best/worst bound, status, and response key.
+    assert after == before

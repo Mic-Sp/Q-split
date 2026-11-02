@@ -125,6 +125,15 @@ async def validate_simulation_request(request: Request, error: RequestValidation
         return JSONResponse(status_code=400, content={"detail": f"Unknown workload_id: {errors[0]['input']}"})
     return await request_validation_exception_handler(request, error)
 
+def _fmt_pct(val: float) -> str:
+    """Format a percentage for prose only; callers retain unrounded telemetry."""
+    if val == 0:
+        return "0%"
+    if 0 < val < 0.01:
+        return "<0.01%"
+    return f"{val:.2f}%"
+
+
 def coherence_status(survival_pct: float) -> str:
     """Classify modeled survival consistently with the frontend coherence budget."""
     return "NOMINAL" if survival_pct >= 70 else "DEGRADED" if survival_pct >= 35 else "EXCEEDED"
@@ -470,9 +479,17 @@ def _run_default_shors_pipeline(
     if measured:
         estimated.update({"aer_reference_circuit_depth": measured["depth"],
                           "aer_gate_counts": measured["gate_counts"], "aer_counts": measured["counts"]})
+    # Resource context, not a QEC estimator or a universal hardware threshold:
+    # Gidney (2025), https://arxiv.org/abs/2505.15917, assumes 0.1% gate error,
+    # 1 us surface-code cycles, 10 us reaction time and nearest-neighbor connectivity.
+    # Do not extrapolate an RSA-512 physical-qubit count from the RSA-2048 estimate.
     factors = {15: "15 = 3 × 5", 21: "21 = 3 × 7", 35: "35 = 5 × 7",
-               512: "FAILED (Requires ~1M Physical Surface-Code Qubits)",
-               2048: "FAILED (Requires ~4M Physical Surface-Code Qubits)"}
+               512: ("UNRESOLVED (Fault-tolerant QEC required; RSA-512 physical-qubit cost is not modeled. "
+                     "Scale context: Gidney 2025, arXiv:2505.15917, estimates RSA-2048 at order 10^6 "
+                     "physical qubits under specific surface-code assumptions.)"),
+               2048: ("UNRESOLVED (QEC scale context: Gidney 2025, arXiv:2505.15917, estimates RSA-2048 "
+                      "using <1M noisy physical qubits in <1 week at 0.1% gate error, 1 us surface-code "
+                      "cycles and 10 us reaction time on a nearest-neighbor grid; not a Q-Split QEC estimate.)")}
     factor = factors.get(scale_param, "Unresolved")
     if live:
         factor = "3 × 5"
@@ -482,11 +499,11 @@ def _run_default_shors_pipeline(
     bottleneck = ("NONE (Fits Within NISQ Coherence Window)" if severity == "OPTIMAL" else
                   "NISQ TWO-QUBIT GATE NOISE (Degrading Phase Peaks)" if reliable else
                   "CATASTROPHIC QPU DECOHERENCE")
-    kernel_summary = f"Modeled depth {estimated['circuit_depth']:,}; coherence survival {coherence}%; {SHOR_SHOTS} shots."
+    kernel_summary = f"Modeled depth {estimated['circuit_depth']:,}; coherence survival {_fmt_pct(coherence)}; {SHOR_SHOTS} shots."
     post_summary = (f"Continued Fractions output: {factor}" if reliable else
                     "STARVED: modeled QPU coherence is insufficient to extract reliable factors.")
     if measured:
-        hardware_projection = f"Modeled {HARDWARE_PROFILES[hardware_profile].name} survival {coherence}%"
+        hardware_projection = f"Modeled {HARDWARE_PROFILES[hardware_profile].name} survival {_fmt_pct(coherence)}"
         kernel_summary = (
             f"Ideal Aer reference: peaks at {measured['top_measurements']}; Extracted period r = {measured['period_r']}. "
             f"{hardware_projection}; modeled depth {estimated['circuit_depth']:,}; {SHOR_SHOTS} shots."
@@ -767,9 +784,9 @@ def quantum_mips_kernel(scale_param: int, hardware_profile: HardwareProfile = "i
     bits = format(token, f"0{plan['index_bits']}b")
     stage.output_summary = (f"{'Aer reference' if live else 'Modeled'} amplified top-1 token index {token} (|{bits}⟩); "
                             f"{metrics['grover_iterations']} iterations; {plan['parallelization_tier']}; "
-                            f"modeled coherence survival {metrics['coherence_survival_pct']}%. ")
+                            f"modeled coherence survival {_fmt_pct(metrics['coherence_survival_pct'])}. ")
     if live:
-        stage.output_summary += (f"Measured ideal-reference peak probability {metrics['measured_peak_probability']:.2%} "
+        stage.output_summary += (f"Measured ideal-reference peak probability {_fmt_pct(100 * metrics['measured_peak_probability'])} "
                                  f"over {metrics['aer_shots']} shots; CPU Aer runtime {metrics['aer_runtime_ms']:.3f} ms. "
                                  "Selected-route hardware latency and coherence are separate projections.")
     else:
