@@ -8,7 +8,7 @@ import type { Prisma } from "@/generated/prisma/client";
 import type { AdvisorInsight, AdvisorRequest, AdvisorResponse } from "@/types/advisor";
 import { cachedInsight, withLookupTelemetry } from "@/lib/advisor-telemetry";
 
-const CACHE_VERSION = "validated-advisor-v2-global";
+const CACHE_VERSION = "validated-advisor-v3-model-version";
 const CACHE_TIMEOUT_MS = 1500;
 // Coalesces concurrent requests within this server process, including tabs.
 // Completed results live in Neon, not in an unbounded in-memory cache.

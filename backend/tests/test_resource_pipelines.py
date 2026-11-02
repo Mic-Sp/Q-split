@@ -8,6 +8,22 @@ from backend.main import HARDWARE_PROFILES, RoutingConfig, STAGE_KEYS, run_quant
 
 
 @pytest.mark.parametrize("pipeline,scale", [(run_shors_pipeline, 21), (run_quantum_mips_pipeline, 1024)])
+@pytest.mark.parametrize("capacity", [1, 133])
+@pytest.mark.parametrize("nodes", [("CPU", "QPU", "CPU"), ("GPU", "QPU", "GPU"),
+                                  ("CPU", "CPU", "CPU"), ("GPU", "GPU", "GPU"), ("QPU", "QPU", "CPU")])
+def test_every_route_response_carries_calibrated_version(pipeline, scale, capacity, nodes):
+    routing = RoutingConfig(stage_1_node=nodes[0], stage_2_node=nodes[1], stage_3_node=nodes[2])
+    response = pipeline(scale, "ibm_heron_nisq", routing, capacity).model_dump()
+    assert response["resource_model_version"] == 2
+    assert response["routing_model"] == "CALIBRATED_V2"
+    for stage in response["stages"].values():
+        if "routing_model" in stage["metrics"]:
+            assert stage["metrics"]["routing_model"] == "CALIBRATED_V2"
+        if "resource_model_version" in stage["metrics"]:
+            assert stage["metrics"]["resource_model_version"] == 2
+
+
+@pytest.mark.parametrize("pipeline,scale", [(run_shors_pipeline, 21), (run_quantum_mips_pipeline, 1024)])
 @pytest.mark.parametrize("capacity", [53, 72, 133, 1024])
 def test_weber_reference_and_exploratory_capacities_remain_independent(pipeline, scale, capacity):
     kernel = pipeline(scale, "google_weber_grid", available_qubits=capacity).stages[STAGE_KEYS[1]]
@@ -26,7 +42,7 @@ def test_same_workload_constructs_identical_spec_for_every_hardware_profile(pipe
     assert all(stage.metrics["classical_baselines"] == stages[0].metrics["classical_baselines"] for stage in stages)
     assert len({stage.latency_ms for stage in stages}) == 4
     for stage in stages:
-        assert stage.metrics["resource_model_version"] == 1
+        assert stage.metrics["resource_model_version"] == 2
         assert stage.metrics["qpu_io_included_in_latency"]
         assert stage.metrics["io_state_prep_ms"] == 0
 

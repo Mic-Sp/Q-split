@@ -6,8 +6,9 @@ const milliseconds = (value: unknown): number =>
 /**
  * Decompose modeled wall-clock latency into classical, quantum, and I/O buckets.
  * Skip infeasible/unsupported work. GPU latency already includes launch cost, so
- * subtract it from compute once; QPU latency is gates only, so add reported prep
- * and readout separately. Missing/invalid costs contribute zero, not NaN.
+ * subtract it from compute once. Current QPU batches include launch and measurement/
+ * reset; split the explicit breakdown without adding I/O again. Legacy gate-only
+ * latency retains its separately reported prep/readout accounting.
  */
 export function pipelineLatencyBuckets(data: HybridTelemetryResponse) {
   let classicalMs = 0;
@@ -25,10 +26,20 @@ export function pipelineLatencyBuckets(data: HybridTelemetryResponse) {
       overheadMs += overhead;
     } else {
       if (stage.node === "QPU") {
-        quantumMs += latency;
-        // QPU latency is gate execution; I/O is reported separately. Readout
-        // contributes only when supplied; do not invent an unmodeled duration.
-        overheadMs += milliseconds(stage.metrics.io_state_prep_ms) + milliseconds(stage.metrics.io_readout_ms);
+        const m = stage.metrics;
+        const inclusive = m.qpu_io_included_in_latency === true || data.resource_model_version === 2 ||
+          m.resource_model_version === 2 || [m.launch_overhead_ms, m.measurement_reset_ms, m.gate_execution_ms].every(value => typeof value === "number");
+        if (inclusive) {
+          const overhead = Math.min(latency, milliseconds(m.launch_overhead_ms) + milliseconds(m.measurement_reset_ms));
+          // Valid complete breakdowns sum to latency; retain the reported total if a legacy breakdown is partial.
+          const gates = typeof m.gate_execution_ms === "number" && Number.isFinite(m.gate_execution_ms) && m.gate_execution_ms >= 0
+            ? Math.min(latency - overhead, m.gate_execution_ms) : latency - overhead;
+          quantumMs += gates;
+          overheadMs += latency - gates;
+        } else {
+          quantumMs += latency;
+          overheadMs += milliseconds(m.io_state_prep_ms) + milliseconds(m.io_readout_ms);
+        }
       } else {
         classicalMs += latency;
       }

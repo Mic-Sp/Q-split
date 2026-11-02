@@ -31,6 +31,11 @@ export interface LogSurvivalTerms {
 
 /** Optional typed fields keep historical runs and workload-specific extra metrics readable. */
 export interface StageMetrics extends Record<string, unknown> {
+  resource_model_version?: 1 | 2;
+  launch_overhead_ms?: number;
+  measurement_reset_ms?: number;
+  gate_execution_ms?: number;
+  qpu_io_included_in_latency?: boolean;
   coherence_survival?: number;
   coherence_survival_pct?: number;
   coherence_survival_best?: number;
@@ -52,6 +57,9 @@ export interface StageTelemetry {
 
 /** Canonical backend response with three keyed stages and explicit live-reference versus analytical provenance. */
 export interface HybridTelemetryResponse {
+  /** Optional on historical responses; missing versions are V1. Persisted inside telemetry JSON. */
+  resource_model_version?: 1 | 2;
+  routing_model?: string;
   workload_id: string;
   workload_name: string;
   scale_label: string;

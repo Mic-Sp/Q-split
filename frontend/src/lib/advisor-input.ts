@@ -7,6 +7,7 @@ import { HARDWARE_PROFILE_IDS } from "@/types/telemetry";
 import { HARDWARE_PROFILES, RESOURCE_QPU_PROFILES } from "@/lib/hardware-profiles";
 import { WORKLOADS, validWorkloadScale, workloadScaleLabel } from "@/lib/workloads";
 import { pipelineTiming } from "@/lib/kpi-metrics";
+import { resourceModelVersion, sameModelVersion, versionedTelemetry } from "@/lib/model-version";
 
 export const ADVISOR_BODY_LIMIT = 65_536;
 export const ADVISOR_TEXT_LIMIT = 100;
@@ -85,14 +86,19 @@ function number(value: unknown, minimum: number, maximum: number, integer = fals
  * A blocked MIPS depth multiplier may be null
  * and is omitted, not coerced to a misleading numeric factor.
  */
-function metrics(value: unknown): StageTelemetry["metrics"] {
+function metrics(value: unknown, inheritedVersion?: 1 | 2): StageTelemetry["metrics"] {
   const source = object(value);
   const result: StageTelemetry["metrics"] = {};
-  if (Object.hasOwn(source, "resource_model_version")) result.resource_model_version = number(source.resource_model_version, 1, 1, true);
+  if (Object.hasOwn(source, "resource_model_version")) result.resource_model_version = number(source.resource_model_version, 1, 2, true) as 1 | 2;
+  else if (inheritedVersion === 2) result.resource_model_version = 2;
+  if (Object.hasOwn(source, "routing_model")) result.routing_model = choice(source.routing_model,
+    ["ILLUSTRATIVE_V1", "ILLUSTRATIVE_V1 (not device measurements)", "CALIBRATED_V2", "CALIBRATED_V2 (not device measurements)"]);
   const numeric = [
     ["index_bits", 1, 31, true], ["candidate_count", 1, 1048576, true], ["grover_iterations", 0, 10000, true],
     ["statevector_qubits", 0, MAX_QUBITS, true], ["planned_qubits", 0, MAX_QUBITS, true],
     ["compute_latency_ms", 0, ADVISOR_MAX_LATENCY_MS, false], ["depth_multiplier", 0, 1, false],
+    ["launch_overhead_ms", 0, RESOURCE_MAX_LATENCY_MS, false],
+    ["measurement_reset_ms", 0, RESOURCE_MAX_LATENCY_MS, false], ["gate_execution_ms", 0, RESOURCE_MAX_LATENCY_MS, false],
     ["measured_peak_probability", 0, 1, false], ["aer_runtime_ms", 0, ADVISOR_MAX_LATENCY_MS, false],
     ["qubits_required", 1, MAX_QUBITS, true], ["available_qubits", 1, MAX_QUBITS, true],
     ["qubits_allocated", 0, MAX_QUBITS, true], ["minimum_qubits_required", 1, MAX_QUBITS, true],
@@ -108,13 +114,13 @@ function metrics(value: unknown): StageTelemetry["metrics"] {
   ] as const;
   for (const [key, min, max, integer] of numeric) {
     if (Object.hasOwn(source, key) && !(key === "depth_multiplier" && source[key] === null)) {
-      const resourceMetric = result.resource_model_version === 1 &&
+      const resourceMetric = result.resource_model_version !== undefined &&
         (key === "compute_latency_ms" || key === "circuit_depth" || key === "reference_circuit_depth");
       const limit = resourceMetric ? Number.MAX_SAFE_INTEGER : max;
       result[key] = number(source[key], min, limit, integer);
     }
   }
-  for (const key of ["routing_supported", "execution_feasible", "parallel_speedup_ceiling_reached", "aer_executed", "retrieval_reliable", "capacity_override"]) {
+  for (const key of ["routing_supported", "execution_feasible", "parallel_speedup_ceiling_reached", "aer_executed", "retrieval_reliable", "capacity_override", "qpu_io_included_in_latency"]) {
     if (Object.hasOwn(source, key)) {
       if (typeof source[key] !== "boolean") invalid();
       result[key] = source[key];
@@ -178,6 +184,9 @@ function validateRun(value: unknown): CompletedRun {
   };
   // Derive trusted labels/architecture from validated selectors; never trust caller-supplied explanatory prose.
   const source = object(run.telemetry);
+  const version = source.resource_model_version === undefined ? undefined : number(source.resource_model_version, 1, 2, true) as 1 | 2;
+  const routingModel = source.routing_model === undefined ? undefined : choice(source.routing_model,
+    ["ILLUSTRATIVE_V1", "ILLUSTRATIVE_V1 (not device measurements)", "CALIBRATED_V2", "CALIBRATED_V2 (not device measurements)"]);
   if (choice(source.workload_id, ["shors_crypto", "quantum_mips"]) !== request.workload_id) invalid();
   const stages = object(source.stages);
   if (Object.keys(stages).length !== PIPELINE.length || PIPELINE.some(({ key }) => !Object.hasOwn(stages, key))) invalid();
@@ -187,12 +196,12 @@ function validateRun(value: unknown): CompletedRun {
     const node = choice(stage.node, ["CPU", "GPU", "QPU"]);
     if (node !== routing[routingKey]) invalid();
     for (const field of ["name", "output_summary"]) if (stage[field] !== undefined && typeof stage[field] !== "string") invalid();
-    const numeric = metrics(stage.metrics);
+    const numeric = metrics(stage.metrics, version);
     if (node === "QPU" && numeric.hardware_architecture !== undefined && numeric.hardware_architecture !== request.hardware_profile) invalid();
     if (node === "QPU") {
       const architecture = HARDWARE_PROFILES[request.hardware_profile];
       const resource = RESOURCE_QPU_PROFILES[request.hardware_profile];
-      const expectedMetrics = numeric.resource_model_version === 1 ? {
+      const expectedMetrics = numeric.resource_model_version !== undefined ? {
         connectivity_topology: architecture.topology, reference_qubits: resource.referenceQubits,
         routing_depth_multiplier: resource.depthMultiplier, gate_time_multiplier: null, coherence_decay_scale: null,
         capacity_override: resource.referenceQubits !== null && request.available_qubits! > resource.referenceQubits,
@@ -217,7 +226,7 @@ function validateRun(value: unknown): CompletedRun {
     if (node === "QPU" && typeof numeric.qubits_allocated === "number" && typeof numeric.idle_qubits === "number" &&
         numeric.qubits_allocated + numeric.idle_qubits > (available as number)) invalid();
     normalized[key] = { name: WORKLOADS[workload].stages[PIPELINE.findIndex(stage => stage.key === key)] ?? label, node,
-      latency_ms: number(stage.latency_ms, 0, numeric.resource_model_version === 1 ? RESOURCE_MAX_LATENCY_MS : ADVISOR_MAX_LATENCY_MS),
+      latency_ms: number(stage.latency_ms, 0, numeric.resource_model_version !== undefined ? RESOURCE_MAX_LATENCY_MS : ADVISOR_MAX_LATENCY_MS),
       status: choice(stage.status, ["OPTIMAL", "WARNING", "CRITICAL_BOTTLENECK"]),
       output_summary: "", metrics: numeric };
   }
@@ -227,16 +236,18 @@ function validateRun(value: unknown): CompletedRun {
   const reason = sanitizeAdvisorText(source.primary_bottleneck);
   const bottleneck = BOTTLENECKS.find((prefix) => reason === prefix || reason.startsWith(`${prefix} (`) || reason.startsWith(`${prefix}:`)) ?? "UNCLASSIFIED BOTTLENECK";
   const telemetry: HybridTelemetryResponse = {
+    ...(version === undefined ? {} : { resource_model_version: version }),
+    ...(routingModel === undefined ? {} : { routing_model: routingModel }),
     workload_id: request.workload_id,
     workload_name: WORKLOADS[workload].label,
     scale_label: workloadScaleLabel(scale, workload),
     execution_mode: choice(source.execution_mode, ["LIVE_QISKIT_AER", "NISQ_ANALYTICAL_PROFILER"]),
     primary_bottleneck: bottleneck, stages: normalized,
   };
-  const latencyLimit = Object.values(normalized).some(stage => stage.metrics.resource_model_version === 1)
+  const latencyLimit = Object.values(normalized).some(stage => stage.metrics.resource_model_version !== undefined)
     ? RESOURCE_MAX_LATENCY_MS : ADVISOR_MAX_LATENCY_MS;
   if (totalLatency(telemetry) > latencyLimit || pipelineTiming(telemetry).totalMs > latencyLimit) invalid();
-  return { id, completedAt, request, telemetry };
+  return { id, completedAt, request, telemetry: versionedTelemetry(telemetry) };
 }
 
 /**
@@ -249,6 +260,7 @@ export function validateAdvisorRequest(value: unknown): AdvisorRequest {
   const current = validateRun(input.current);
   const previous = input.previous === undefined ? undefined : validateRun(input.previous);
   if (previous && previous.request.workload_id !== current.request.workload_id) invalid();
+  if (previous && !sameModelVersion(previous.telemetry, current.telemetry)) throw new Error("Cannot compare runs from different model versions.");
   return { current, ...(previous ? { previous } : {}) };
 }
 
@@ -261,12 +273,14 @@ export function advisorDigest(run: CompletedRun) {
   // Safe even when called independently of the route's pre-flight parser.
   run = validateRun(run);
   const { label, topology, referenceQubits, depthMultiplier, gateTimeMultiplier, prepMs, decayScale } = HARDWARE_PROFILES[run.request.hardware_profile];
-  const resource = run.telemetry.stages.stage_2_quantum_kernel.metrics.resource_model_version === 1;
+  const version = resourceModelVersion(run.telemetry);
+  const resource = version === 2 || run.telemetry.stages.stage_2_quantum_kernel.metrics.resource_model_version === 1;
   const architecture = resource
-    ? { label, topology, ...RESOURCE_QPU_PROFILES[run.request.hardware_profile], resourceModelVersion: 1,
+    ? { label, topology, ...RESOURCE_QPU_PROFILES[run.request.hardware_profile], resourceModelVersion: version,
         gateTimeMultiplier: null, prepMs: 0, decayScale: null }
     : { label, topology, referenceQubits, depthMultiplier, gateTimeMultiplier, prepMs, decayScale };
   return { request: run.request, architecture, telemetry: {
+    resource_model_version: version, routing_model: run.telemetry.routing_model,
     execution_mode: run.telemetry.execution_mode,
     primary_bottleneck: run.telemetry.primary_bottleneck,
     total_latency_ms: pipelineTiming(run.telemetry).totalMs,

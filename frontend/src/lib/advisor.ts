@@ -6,6 +6,7 @@ import { formatDuration, formatDurationDelta } from "@/lib/duration";
 import type { CompletedRun } from "@/types/run-history";
 import type { AdvisorInsight, AdvisorSections, FallbackReason } from "@/types/advisor";
 import { parseAdvisorTelemetry, parseAdvisorUsage, zeroUsage } from "@/lib/advisor-telemetry";
+import { sameModelVersion } from "@/lib/model-version";
 
 /**
  * Read persisted/local diagnostic sections with legacy-compatible length bounds.
@@ -62,7 +63,7 @@ const notices: Record<FallbackReason, string> = {
  * live AI prompts, so provider and offline paths share supported control choices.
  */
 export function deterministicInsight(current: CompletedRun, previous: CompletedRun | undefined, reason: FallbackReason): AdvisorInsight {
-  previous = previous?.request.workload_id === current.request.workload_id ? previous : undefined;
+  previous = previous?.request.workload_id === current.request.workload_id && sameModelVersion(previous.telemetry, current.telemetry) ? previous : undefined;
   const { request, telemetry } = current;
   const stages = PIPELINE.map(({ key }) => telemetry.stages[key]);
   const quantum = stages[1];
@@ -85,7 +86,7 @@ export function deterministicInsight(current: CompletedRun, previous: CompletedR
   else if (quantum.node === "QPU" && request.hardware_profile !== "ideal_sim") recommendation = "Capacity is at the parallel speedup ceiling. Compare the Ideal Noise-Free profile to isolate decoherence, or reduce scale for NISQ survival. Extra idle qubits cannot reduce depth further; the ideal profile is a projection, not error-corrected hardware.";
   else if (stages.some((stage, index) => index !== 1 && stage.node === "GPU")) recommendation = "Try CPU placement for the short classical pre/post routines: modeled GPU launch/transfer overhead can dominate these kernels. Compare total latency with the same scale and quantum routing.";
   else recommendation = "Compare CPU → QPU → CPU with classical kernel emulation at the same scale. Keep capacity at the carry-lookahead ceiling when using QPU; extra qubits provide no further modeled speedup. Compare total pipeline latency, not only QPU time.";
-  if (m.resource_model_version === 1) recommendation = recommendation.replaceAll("180×", "modeled");
+  if (m.resource_model_version === 1 || m.resource_model_version === 2) recommendation = recommendation.replaceAll("180×", "modeled");
   const delta = previous
     ? ` Previous ${previous.telemetry.scale_label}: total ${formatDuration(pipelineTiming(previous.telemetry).totalMs)} → ${formatDuration(pipelineTiming(telemetry).totalMs)} (Δ ${formatDurationDelta(pipelineTiming(telemetry).totalMs - pipelineTiming(previous.telemetry).totalMs)}).${previous.request.hardware_profile !== request.hardware_profile ? ` Hardware changed from ${hardwareLabel(previous.request.hardware_profile)} to ${hardwareLabel(request.hardware_profile)}.` : ""}${previous.request.workload_id !== request.workload_id ? " Workload changed; cross-workload timings are not an isolated speedup comparison." : previous.request.scale_param !== request.scale_param ? " Scale also changed; this is not an isolated hardware-speedup comparison." : ""}` : "";
   const spaceTime = mips ? mipsSpaceTime(current, thresholds) : quantum.node === "QPU"
@@ -117,7 +118,7 @@ function mipsRecommendation(current: CompletedRun, thresholds: ReturnType<typeof
   if (kernel.node !== "QPU") return `Compare ${route} against the current deterministic classical emulation at the same scale. QPU requires at least ${formatValue(thresholds.minimum)} qubits and a viable coherence budget; this marked-state model does not establish practical LLM retrieval advantage.`;
   const available = request.available_qubits ?? kernel.metrics.available_qubits;
   if (typeof available === "number" && available < thresholds.ceiling) return `Try ${formatValue(available < thresholds.windowed ? thresholds.windowed : thresholds.ceiling)} available qubits for the next tier; Multi-Oracle at ${formatValue(thresholds.ceiling)} reduces sequential depth to 0.20×. Keep ${route} and compare coherence: O(√M) Grover iterations can still exhaust NISQ budgets.`;
-  const gatePenalty = kernel.metrics.resource_model_version === 1 ? "modeled" : "180×";
+  const gatePenalty = kernel.metrics.resource_model_version === 1 || kernel.metrics.resource_model_version === 2 ? "modeled" : "180×";
   if (request.hardware_profile === "ionq_forte_trapped_ion") return `Compare a superconducting profile at the same Multi-Oracle capacity and routing to isolate the trapped-ion ${gatePenalty} gate latency penalty. Long coherence and all-to-all connectivity do not guarantee lower total latency; extra qubits above the ceiling stay idle.`;
   return `Keep ${route}. At the Multi-Oracle ceiling, extra qubits are idle; reduce M or compare IonQ Forte's longer coherence window against its ${gatePenalty} gate-time penalty. Ideal Noise-Free isolates modeled noise and does not represent physical error correction. O(√M) iterations still grow with scale.`;
 }

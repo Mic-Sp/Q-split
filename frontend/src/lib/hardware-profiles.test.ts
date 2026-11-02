@@ -86,7 +86,7 @@ test("all architecture requests validate, serialize, restore and export exact sa
     assert.equal(validateAdvisorRequest({ current: run }).current.request.hardware_profile, id);
     const saved = serializeRun({ ...createRunRecord(run), createdAt: new Date() } as SimulationRun);
     assert.equal(saved.hardwareProfile, id);
-    assert.deepEqual(saved.telemetry, run.telemetry);
+    assert.deepEqual(saved.telemetry, { ...run.telemetry, resource_model_version: 1, routing_model: "ILLUSTRATIVE_V1" });
     assert.deepEqual(restoredConfiguration(saved), run.request);
     assert.deepEqual(JSON.parse(JSON.stringify(saved)).telemetry.stages.stage_2_quantum_kernel.metrics.hardware_architecture, id);
   }

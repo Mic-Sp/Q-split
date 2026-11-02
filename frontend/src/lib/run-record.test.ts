@@ -5,6 +5,7 @@ import { formatValue, qubitThresholds } from "./telemetry";
 import type { SimulationRun } from "@/generated/prisma/client";
 import { mergeRuns } from "@/lib/run-history";
 import { deterministicInsight } from "@/lib/advisor";
+import { resourceModelVersion } from "@/lib/model-version";
 
 function completed() {
   return {
@@ -32,7 +33,7 @@ test("derives summaries from telemetry and preserves full structured JSON", () =
   assert.equal(record.stage3Node, "CPU");
   assert.equal(record.circuitDepth, BigInt(38_654_705_664));
   assert.equal(record.coherenceSurvivalPct, 0);
-  assert.deepEqual(record.telemetry, input.telemetry);
+  assert.deepEqual(record.telemetry, { ...input.telemetry, resource_model_version: 1, routing_model: "ILLUSTRATIVE_V1" });
   assert.deepEqual(record.requestPayload, input.request);
 });
 
@@ -43,6 +44,28 @@ test("serialization retains large integer precision and valid timestamps", () =>
   assert.equal(saved.completedAt, "2026-10-26T15:00:00.000Z");
   assert.doesNotThrow(() => JSON.stringify(saved));
   assert.equal(formatValue(BigInt(saved.circuitDepth!)), "38,654,705,664");
+});
+
+test("versions round-trip in existing telemetry JSON and legacy DB rows remain readable", () => {
+  for (const version of [1, 2] as const) {
+    const input = completed();
+    Object.assign(input.telemetry, { resource_model_version: version });
+    Object.assign(input.telemetry.stages.stage_2_quantum_kernel.metrics, { resource_model_version: version });
+    const record = createRunRecord(input);
+    assert.equal(Object.hasOwn(record, "resourceModelVersion"), false, "No new SQL column required");
+    const wire = JSON.parse(JSON.stringify(record.telemetry));
+    assert.equal(wire.resource_model_version, version);
+    const saved = serializeRun({ ...record, telemetry: wire, createdAt: new Date() } as SimulationRun);
+    assert.equal(resourceModelVersion(saved.telemetry), version);
+  }
+  const legacy = completed();
+  const record = createRunRecord(legacy);
+  const saved = serializeRun({ ...record, telemetry: legacy.telemetry, createdAt: new Date() } as unknown as SimulationRun);
+  assert.equal(saved.telemetry.resource_model_version, 1);
+  assert.equal(saved.telemetry.routing_model, "ILLUSTRATIVE_V1");
+  assert.deepEqual(saved.telemetry.stages, legacy.telemetry.stages);
+  Object.assign(legacy.telemetry.stages.stage_2_quantum_kernel.metrics, { resource_model_version: 1 });
+  assert.equal(resourceModelVersion(serializeRun({ ...record, telemetry: legacy.telemetry, createdAt: new Date() } as unknown as SimulationRun).telemetry), 1);
 });
 
 test("omitted routing uses the backend's CPU/QPU/CPU defaults", () => {

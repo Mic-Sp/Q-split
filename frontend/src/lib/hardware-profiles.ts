@@ -46,7 +46,7 @@ export function hardwareLabel(value: string) {
  * Explain topology savings separately from gate-time/coherence assumptions for nonbaseline profiles.
  */
 export function architectureTradeOff(profile: HardwareProfile, resourceVersion?: unknown) {
-  if (resourceVersion === 1) {
+  if (resourceVersion === 1 || resourceVersion === 2) {
     const physics = RESOURCE_QPU_PROFILES[profile];
     return `${HARDWARE_PROFILES[profile].topology}: ${physics.depthMultiplier}× routing depth; ${physics.t2qNs} ns representative native entangler; ${physics.native2qPerCx} native 2Q gates per CX (assumed, applied to depth and 2Q count). Batch timing includes shots, measurement/reset and launch. Survival combines gate errors and all-qubit T1 decay; routing and native conversion are approximations.`;
   }

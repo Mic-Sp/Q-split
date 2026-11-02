@@ -94,6 +94,8 @@ const metricLabels: Record<string, string> = {
   base_a: "Coprime base", factors_found: "Factors found",
   routing_model: "Latency estimate", routing_supported: "Route supported", execution_feasible: "Execution feasible",
   launch_transfer_overhead_ms: "Launch / transfer", compute_latency_factor: "Compute latency factor",
+  launch_overhead_ms: "QPU launch", measurement_reset_ms: "Measurement / reset", gate_execution_ms: "Gate execution",
+  resource_model_version: "Model version",
   simulation_method: "Simulation method", statevector_memory_required: "Statevector memory required",
   statevector_memory_budget_gib: "Memory budget · GiB",
   available_qubits: "Available QPU qubits", qubits_allocated: "Qubits allocated",
@@ -162,7 +164,7 @@ function PipelineCard({ index, stage, selectedNode, onNodeChange, pending, workl
         {stage ? Object.entries(stage.metrics).filter(([key]) => !CAPACITY_PANEL_METRICS.has(key) && !COHERENCE_RANGE_METRICS.has(key) && key !== "classical_cpu_baseline").map(([key, value]) => (
           <div key={key} className="min-w-0 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 px-2 py-1">
             <dt className="text-[9px] leading-3 text-slate-600 dark:text-slate-400 [overflow-wrap:anywhere]">{metricLabels[key] ?? key.replace(/_ms$/, "").replaceAll("_", " ")}</dt>
-            <dd title={key.endsWith("_ms") ? formatRawMilliseconds(value) : typeof value === "number" ? String(value) : formatValue(value)} className={["mt-0.5 font-mono text-[10px] leading-4 [overflow-wrap:anywhere]", key === "coherence_survival_pct" ? style?.text : "text-slate-800 dark:text-slate-200"].join(" ")}>{key.endsWith("_ms") ? formatDuration(value) : key === "coherence_survival_pct" || key === "coherence_survival" ? formatSurvivalPercent(value) : key === "routing_model" ? "Modeled" : key === "depth_model" ? String(value).startsWith("Compiled") ? "Aer reference" : "Analytical" : typeof value === "boolean" ? value ? "Yes" : "No" : formatValue(value)}{key === "coherence_survival_pct" && <CoherenceRangeNote stage={stage} />}</dd>
+            <dd title={key.endsWith("_ms") ? formatRawMilliseconds(value) : typeof value === "number" ? String(value) : formatValue(value)} className={["mt-0.5 font-mono text-[10px] leading-4 [overflow-wrap:anywhere]", key === "coherence_survival_pct" ? style?.text : "text-slate-800 dark:text-slate-200"].join(" ")}>{key.endsWith("_ms") ? formatDuration(value) : key === "coherence_survival_pct" || key === "coherence_survival" ? formatSurvivalPercent(value) : key === "routing_model" ? String(value) : key === "depth_model" ? String(value).startsWith("Compiled") ? "Aer reference" : "Analytical" : typeof value === "boolean" ? value ? "Yes" : "No" : formatValue(value)}{key === "coherence_survival_pct" && <CoherenceRangeNote stage={stage} />}</dd>
           </div>
         )) : <div className={["col-span-full h-12 rounded-lg bg-slate-100 dark:bg-slate-800/40", pending ? "animate-pulse" : ""].join(" ")} aria-hidden="true" />}
       </dl>
@@ -408,9 +410,9 @@ export default function Home() {
                 </div>
                 <div className="px-2.5 py-1.5">
                 <p title={label === "Pipeline latency" ? formatRawMilliseconds(value) : (typeof value === "number" ? String(value) : formatValue(value)) + " " + unit} className="break-words font-mono text-base leading-5 tracking-tight">{label === "Pipeline latency" ? formatDuration(value) : <>{label === "Coherence survival" ? formatSurvivalPercent(value) : summaryValue(value)}<span className="ml-1 text-[10px] text-slate-600 dark:text-slate-400">{unit}</span></>}</p>
-                {label === "Pipeline latency" && <dl aria-label="Pipeline latency breakdown" title="Includes separately reported QPU I/O; GPU launch/transfer overhead is counted once. Blocked stages contribute no time." className="mt-1 space-y-0.5 text-[9px] leading-3">
+                {label === "Pipeline latency" && <dl aria-label="Pipeline latency breakdown" title="QPU launch and measurement/reset are included once alongside gate execution; legacy prep/readout and GPU launch/transfer are also counted once. Blocked stages contribute no time." className="mt-1 space-y-0.5 text-[9px] leading-3">
                   <div className="flex flex-wrap justify-between gap-x-2"><dt className="text-slate-600 dark:text-slate-400">Pure Compute Time</dt><dd title={formatRawMilliseconds(timing?.computeMs)} className="font-mono text-slate-700 dark:text-slate-300">{formatDuration(timing?.computeMs)}</dd></div>
-                  <div className="flex flex-wrap justify-between gap-x-2"><dt className="text-slate-600 dark:text-slate-400">Interconnect &amp; State-Prep Overhead</dt><dd title={formatRawMilliseconds(timing?.overheadMs)} className="font-mono text-slate-700 dark:text-slate-300">{formatDuration(timing?.overheadMs)}</dd></div>
+                  <div className="flex flex-wrap justify-between gap-x-2"><dt className="text-slate-600 dark:text-slate-400">Interconnect, Measurement &amp; Reset</dt><dd title={formatRawMilliseconds(timing?.overheadMs)} className="font-mono text-slate-700 dark:text-slate-300">{formatDuration(timing?.overheadMs)}</dd></div>
                 </dl>}
                 {label === "Coherence survival" && <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
                   <p className="text-[9px] leading-3 text-slate-600 dark:text-slate-400">{coherence?.classical ? "Deterministic Classical Emulation" : "vs. 100% deterministic classical baseline"}</p>

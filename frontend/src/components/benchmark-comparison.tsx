@@ -22,10 +22,10 @@ export function BenchmarkComparison({ runs, onRemove }: { runs: SavedSimulationR
         <caption className="sr-only">Systems metrics and differences relative to the first selected benchmark</caption>
         <thead className="border-b border-slate-300 dark:border-slate-700/80 text-cyan-900 dark:text-cyan-100"><tr>
           <th scope="col" className="w-36 p-2 font-semibold">Systems metric</th>
-          {columns.map(({ run }, index) => <th scope="col" key={run.id} className="p-2 align-top font-semibold">
+          {columns.map(({ run, compatible, modelVersion }, index) => <th scope="col" key={run.id} className="p-2 align-top font-semibold">
             <div className="flex items-start justify-between gap-2"><span className="min-w-0 [overflow-wrap:anywhere]">{run.snapshotName ?? run.scaleLabel}</span><button type="button" aria-label={`Remove ${run.snapshotName ?? run.scaleLabel} from comparison`} onClick={() => onRemove(run.id)} className="shrink-0 rounded p-1 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-cyan-800 dark:hover:text-cyan-200"><X size={12} /></button></div>
             <span className="mt-1 block text-[9px] font-normal text-slate-600 dark:text-slate-400">{run.scaleLabel} · {hardwareLabel(run.hardwareProfile)} · {run.stage1Node} → {run.stage2Node} → {run.stage3Node}</span>
-            <span className="mt-1 block text-[9px] font-normal text-cyan-700 dark:text-cyan-400">{index === 0 ? "Reference run" : "Compared with reference"}</span>
+            <span className="mt-1 block text-[9px] font-normal text-cyan-700 dark:text-cyan-400">{modelVersion} · {index === 0 ? "Reference run" : compatible ? "Compared with reference" : "Different model version · comparison unavailable"}</span>
           </th>)}
         </tr></thead>
         <tbody>{columns[0].metrics.map((metric, index) => <tr key={metric.label} className="border-b border-slate-200 dark:border-slate-800/70 last:border-0">

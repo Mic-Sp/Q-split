@@ -218,6 +218,27 @@ test("fingerprints include telemetry, comparison state, model and policy but ign
   assert.notEqual(advisorCacheKey(withPrevious, "gemini-test", "policy-v1"), previousKey);
 });
 
+test("model versions partition Advisor cache entries and cross-version requests fail before provider access", async t => {
+  repository(t);
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => { calls++; return response(); });
+  const legacy = fixture(), calibrated = fixture();
+  calibrated.current.id = "4d9c09fa-7843-4c63-9d2b-556f74c4e5ac";
+  Object.assign(legacy.current.telemetry, { resource_model_version: 1 });
+  Object.assign(calibrated.current.telemetry, { resource_model_version: 2, routing_model: "CALIBRATED_V2" });
+  assert.notEqual(advisorCacheKey(validateAdvisorRequest(legacy), "same-model", "same-policy"),
+    advisorCacheKey(validateAdvisorRequest(calibrated), "same-model", "same-policy"));
+  assert.equal((await (await POST(request(legacy))).json()).insight.source, "gemini");
+  assert.equal((await (await POST(request(calibrated))).json()).insight.source, "gemini");
+  assert.equal((await (await POST(request(calibrated))).json()).insight.source, "cached");
+  assert.equal(calls, 2);
+  const compared = { ...calibrated, previous: legacy.current };
+  assert.equal((await POST(request(compared))).status, 400);
+  assert.equal(calls, 2);
+  assert.equal(deterministicInsight(validateAdvisorRequest(calibrated).current,
+    validateAdvisorRequest(legacy).current, "missing_key").previousRunId, null);
+});
+
 test("changed comparisons and invalid, legacy, or fallback diagnostics are cache misses", async (t) => {
   const { entries } = repository(t); let calls = 0;
   t.mock.method(globalThis, "fetch", async () => { calls++; return response(); });

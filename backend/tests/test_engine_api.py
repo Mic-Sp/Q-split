@@ -143,7 +143,8 @@ def test_health_is_public_uncached_and_does_not_execute_workloads(monkeypatch, e
     ) as mips:
         response = client.get("/")
         assert response.status_code == 200
-        assert response.json() == {"status": "online", "engine": "Q-Split Hybrid Profiler v2.0"}
+        assert response.json() == {"status": "online", "engine": "Q-Split Hybrid Profiler v2.0",
+                                   "resource_model_version": 2, "routing_model": "CALIBRATED_V2"}
         assert response.headers["cache-control"] == "no-store"
         shor.assert_not_called()
         mips.assert_not_called()

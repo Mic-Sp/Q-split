@@ -1,9 +1,9 @@
 """Literature-grounded approximations; never substitute for current calibrations."""
 
 if __package__:
-    from .models import QPUProfile
+    from .models import QPUProfile, RESOURCE_MODEL_VERSION
 else:
-    from models import QPUProfile
+    from models import QPUProfile, RESOURCE_MODEL_VERSION
 
 
 RETRIEVED_ON = "2026-11-01"
@@ -96,7 +96,7 @@ def execution_profile(profile: QPUProfile, available_qubits: int) -> QPUProfile:
 def profile_metrics(profile: QPUProfile, available_qubits: int) -> dict:
     """Serialize provenance and units in one shared adapter for both workloads."""
     return {"hardware_architecture": profile.id, "connectivity_topology": TOPOLOGIES[profile.id],
-            "resource_model_version": 1,
+            "resource_model_version": RESOURCE_MODEL_VERSION,
             **({"reference_qubits": profile.n_qubits_max} if profile.n_qubits_max is not None else {}),
             "capacity_override": profile.n_qubits_max is not None and available_qubits > profile.n_qubits_max,
             "routing_depth_multiplier": profile.topology_factor,

@@ -5,6 +5,7 @@ import type { SimulationRequest, StageStatus } from "@/types/telemetry";
 import { parseAdvisorInsight } from "@/lib/advisor";
 import { validWorkloadScale } from "@/lib/workloads";
 import { isHardwareProfile } from "@/lib/hardware-profiles";
+import { versionedTelemetry } from "@/lib/model-version";
 
 function invalid(message: string): never {
   throw new Error(message);
@@ -41,7 +42,7 @@ export function createRunRecord(value: unknown): Prisma.SimulationRunCreateInput
   if (request.available_qubits !== undefined && (!Number.isSafeInteger(request.available_qubits) ||
       request.available_qubits < 1 || request.available_qubits > 2_147_483_647)) invalid("Invalid available qubits.");
   const routing = { ...DEFAULT_ROUTING, ...request.routing };
-  const telemetry = parseTelemetry(run.telemetry);
+  const telemetry = versionedTelemetry(parseTelemetry(run.telemetry));
   if (telemetry.workload_id !== request.workload_id) invalid("Workload metadata does not match telemetry.");
   for (const { key, routingKey } of PIPELINE) {
     if (telemetry.stages[key].node !== routing[routingKey]) invalid("Node routing does not match telemetry.");
@@ -95,7 +96,7 @@ export function serializeRun(run: SimulationRun): SavedSimulationRun {
     qubitsRequired: run.qubitsRequired, circuitDepth: run.circuitDepth?.toString() ?? null,
     coherenceSurvivalPct: run.coherenceSurvivalPct,
     request: run.requestPayload as unknown as SimulationRequest,
-    telemetry: run.telemetry as unknown as SavedSimulationRun["telemetry"],
+    telemetry: versionedTelemetry(parseTelemetry(run.telemetry)),
     advisorInsight: run.advisorInsight ? parseAdvisorInsight(run.advisorInsight, run.id) : null,
     snapshotName: run.snapshotName ?? null, isSnapshot: run.isSnapshot ?? false,
     snapshotUpdatedAt: run.snapshotUpdatedAt?.toISOString() ?? null,

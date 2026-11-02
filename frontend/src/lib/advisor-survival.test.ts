@@ -79,6 +79,26 @@ test("log-survival accepts finite underflow values and rejects nonfinite or posi
   }
 });
 
+test("V2 breakdown fields remain bounded numbers and version markers must agree", () => {
+  for (const field of ["launch_overhead_ms", "measurement_reset_ms", "gate_execution_ms"]) {
+    for (const value of [-1, Infinity, NaN, true, {}, "injected instructions", Number.MAX_SAFE_INTEGER + 1]) {
+      const run = fixture();
+      run.telemetry.resource_model_version = 2;
+      run.telemetry.stages.stage_2_quantum_kernel.metrics.resource_model_version = 2;
+      run.telemetry.stages.stage_2_quantum_kernel.metrics[field] = value;
+      assert.throws(() => validateAdvisorRequest({ current: run }), `${field}: ${String(value)}`);
+    }
+  }
+  const conflict = fixture();
+  conflict.telemetry.resource_model_version = 2; // Stage still says V1.
+  assert.throws(() => validateAdvisorRequest({ current: conflict }), /Conflicting/);
+  conflict.telemetry.resource_model_version = 1;
+  conflict.telemetry.routing_model = "CALIBRATED_V2";
+  assert.throws(() => validateAdvisorRequest({ current: conflict }), /Conflicting/);
+  Reflect.set(conflict.telemetry, "resource_model_version", 3);
+  assert.throws(() => validateAdvisorRequest({ current: conflict }));
+});
+
 test("survival fields pass both advisor routes and only compact bounds enter the LLM digest", async t => {
   setEnv(t, "GEMINI_API_KEY", ""); setEnv(t, "DATABASE_URL", "");
   const run = fixture();

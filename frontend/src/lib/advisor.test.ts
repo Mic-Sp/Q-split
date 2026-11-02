@@ -46,7 +46,7 @@ test("insights serialize independently from telemetry and are bound to their run
   const record = createRunRecord(current);
   const saved = serializeRun({ ...record, createdAt: new Date() } as SimulationRun);
   assert.deepEqual(saved.advisorInsight, current.advisorInsight);
-  assert.deepEqual(record.telemetry, current.telemetry);
+  assert.deepEqual(record.telemetry, { ...current.telemetry, resource_model_version: 1, routing_model: "ILLUSTRATIVE_V1" });
   assert.throws(() => parseAdvisorInsight({ ...current.advisorInsight, runId: "another-run" }, current.id));
   assert.throws(() => parseAdvisorInsight({ ...current.advisorInsight, sections: {} }, current.id));
   assert.throws(() => parseAdvisorInsight({ ...current.advisorInsight, source: "gemini" }, current.id));

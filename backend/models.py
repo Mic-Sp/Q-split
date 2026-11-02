@@ -5,6 +5,9 @@ from typing_extensions import TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
 
+RESOURCE_MODEL_VERSION = 2
+ROUTING_MODEL = "CALIBRATED_V2"
+
 
 class LogSurvivalTerms(TypedDict):
     """Natural-log contributions; idle_t1/idle_t2 are alternatives, null is -infinity."""

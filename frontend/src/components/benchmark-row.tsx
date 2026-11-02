@@ -13,6 +13,7 @@ import { hardwareLabel } from "@/lib/hardware-profiles";
 import { WORKLOADS } from "@/lib/workloads";
 import { DEFAULT_AVAILABLE_QUBITS, formatValue } from "@/lib/telemetry";
 import type { SavedSimulationRun } from "@/types/run-history";
+import { modelVersionLabel, resourceModelVersion } from "@/lib/model-version";
 
 const timeFormatter = new Intl.DateTimeFormat("en-US", { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/Chicago", timeZoneName: "short" });
 const budgetStyle = { NOMINAL: "text-emerald-700 dark:text-emerald-300 border-emerald-700/25 dark:border-emerald-400/25", DEGRADED: "text-amber-700 dark:text-amber-300 border-amber-700/25 dark:border-amber-400/25", EXCEEDED: "text-rose-700 dark:text-rose-300 border-rose-700/25 dark:border-rose-400/25" };
@@ -49,6 +50,7 @@ export function BenchmarkRow({ run, busy, selected, selectionDisabled, onSelect,
           <div className="flex gap-1"><button type="submit" disabled={busy || !name.trim()} className={button}>{busy ? "Saving…" : "Save name"}</button><button type="button" disabled={busy} onClick={() => setEditing(false)} className={button}>Cancel</button></div>
         </form> : <><p className="flex items-start gap-1 font-semibold text-cyan-900 dark:text-cyan-100 [overflow-wrap:anywhere]">{run.isSnapshot && <Pin size={12} aria-label="Pinned Benchmark Snapshot" className="mt-0.5 shrink-0 text-cyan-700 dark:text-cyan-400" />}{run.snapshotName ?? "Unnamed run"}</p><p className="mt-0.5 text-[9px] text-slate-600 dark:text-slate-400">{run.workloadId === "shors_crypto" ? WORKLOADS.shors_crypto.label : run.workloadName}</p></>}
         <time dateTime={run.completedAt} className="mt-1 block text-[9px] text-slate-600 dark:text-slate-400">{timeFormatter.format(new Date(run.completedAt))}</time>
+        <p className="mt-1 text-[9px] text-slate-600 dark:text-slate-400">{modelVersionLabel(resourceModelVersion(run.telemetry))}</p>
       </td>
       <td className="p-2"><p>{run.scaleLabel}</p><p className="mt-1 text-[9px] text-slate-600 dark:text-slate-400">{hardwareLabel(run.hardwareProfile)}</p></td>
       <td className="whitespace-nowrap p-2 font-mono">{run.stage1Node} → {run.stage2Node} → {run.stage3Node}</td>

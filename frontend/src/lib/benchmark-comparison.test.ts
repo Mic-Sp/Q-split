@@ -40,6 +40,28 @@ test("tiny survival values remain visible in comparisons and change tracking", (
   assert.equal(change?.after, "2.00e-26");
 });
 
+test("cross-version snapshots show model labels and suppress all metric deltas", () => {
+  const baseline = fixture("legacy"), candidate = fixture("calibrated");
+  candidate.telemetry.resource_model_version = 2;
+  candidate.telemetry.routing_model = "CALIBRATED_V2";
+  candidate.telemetry.stages.stage_2_quantum_kernel.latency_ms *= 2;
+  const columns = benchmarkComparison([baseline, candidate]);
+  assert.equal(columns[0].modelVersion, "ILLUSTRATIVE_V1");
+  assert.equal(columns[1].modelVersion, "CALIBRATED_V2");
+  assert.equal(columns[1].compatible, false);
+  assert.ok(columns[1].metrics.every(metric => metric.delta === null && metric.rawDelta === undefined && !metric.changed));
+  const changes = describeChanges(
+    { id: baseline.id, completedAt: baseline.completedAt, request: baseline.request, data: baseline.telemetry },
+    { id: candidate.id, completedAt: candidate.completedAt, request: candidate.request, data: candidate.telemetry },
+  );
+  assert.deepEqual(changes, [{ label: "Model version changed · metric comparison unavailable", before: "ILLUSTRATIVE_V1", after: "CALIBRATED_V2" }]);
+  assert.match(benchmarkCsv([baseline, candidate]), /Model Version/);
+  assert.match(benchmarkCsv([candidate]), /CALIBRATED_V2/);
+  // V2 against V2 still computes deltas.
+  baseline.telemetry.resource_model_version = 2;
+  assert.equal(benchmarkComparison([baseline, candidate])[1].metrics[0].delta, "+2.00 ms vs reference");
+});
+
 // Independent RFC-style reader verifies complete rows, including multiline diagnostics.
 function parseCsv(text: string) {
   const rows: string[][] = [];
@@ -154,7 +176,7 @@ test("CSV flattens system metrics consistently with KPI math and round-trips Uni
   assert.equal(record["Timestamp (UTC)"], run.completedAt);
   assert.equal(record.Workload, "Shor's Algorithm");
   assert.equal(record["Pure Compute ms"], "2.75");
-  assert.equal(record["Interconnect & State-Prep Overhead ms"], "1.75");
+  assert.equal(record["Interconnect & I/O Overhead ms"], "1.75");
   assert.equal(record["Total Latency ms"], "4.5");
   assert.equal(record["Circuit Depth"], "38654705664");
   assert.equal(record["Available Qubits"], "28"); assert.equal(record["Allocated Qubits"], "12");

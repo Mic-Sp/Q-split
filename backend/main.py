@@ -25,7 +25,7 @@ from qiskit_aer import AerSimulator
 
 # Support both `uvicorn backend.main:app` and the container's `uvicorn main:app`.
 if __package__:
-    from .models import CircuitSpec, QPUProfile, StageMetrics
+    from .models import CircuitSpec, QPUProfile, StageMetrics, RESOURCE_MODEL_VERSION, ROUTING_MODEL
     from .estimation import (estimate_qpu, estimate_classical, STATEVECTOR_PROFILES,
                              CLASSICAL_GPU_COMPUTE_FACTOR, CLASSICAL_GPU_OVERHEAD_MS)
     from .profiles import HARDWARE_PROFILES, execution_profile, profile_metrics
@@ -34,7 +34,7 @@ if __package__:
     from .circuits import (NATIVE_BASIS_GATES, AER_SEED, QUANTUM_MIPS_TARGET_INDEX,
                            c_amod15, build_shors_15_circuit, build_quantum_mips_grover_circuit, compile_reference_circuit)
 else:
-    from models import CircuitSpec, QPUProfile, StageMetrics
+    from models import CircuitSpec, QPUProfile, StageMetrics, RESOURCE_MODEL_VERSION, ROUTING_MODEL
     from estimation import (estimate_qpu, estimate_classical, STATEVECTOR_PROFILES,
                             CLASSICAL_GPU_COMPUTE_FACTOR, CLASSICAL_GPU_OVERHEAD_MS)
     from profiles import HARDWARE_PROFILES, execution_profile, profile_metrics
@@ -214,6 +214,8 @@ class HybridTelemetryResponse(BaseModel):
 
     execution_mode identifies whether a small Aer reference ran; it does not
     mean that selected-route GPU/QPU costs were measured on physical hardware."""
+    resource_model_version: Literal[2] = RESOURCE_MODEL_VERSION
+    routing_model: Literal["CALIBRATED_V2"] = ROUTING_MODEL
     workload_id: WorkloadId
     workload_name: str
     scale_label: str
@@ -552,7 +554,7 @@ def _quantum_mips_classical_stage(scale_param: int, node: StageNode, stage_key: 
     metrics = {
         "algorithm": profile["algorithm"], "complexity": profile["complexity"],
         "candidate_count": scale_param, "index_bits": QUANTUM_MIPS_SCALES[scale_param]["index_bits"],
-        "cpu_reference_latency_ms": cpu_ms, "routing_model": "ILLUSTRATIVE_V1 (not device measurements)",
+        "cpu_reference_latency_ms": cpu_ms, "routing_model": ROUTING_MODEL,
         "routing_supported": node != "QPU", "execution_feasible": node != "QPU",
     }
     if node == "QPU":
@@ -721,7 +723,7 @@ def quantum_mips_kernel(scale_param: int, hardware_profile: HardwareProfile = "i
                "circuit_depth": 0, "compute_latency_ms": 0.0, "io_state_prep_ms": 0.0,
                "coherence_survival_pct": 0.0 if node == "QPU" else 100.0,
                "coherence_status": "EXCEEDED" if node == "QPU" else "NOMINAL",
-               "routing_model": "ILLUSTRATIVE_V1 (not device measurements)", "routing_supported": True,
+               "routing_model": ROUTING_MODEL, "routing_supported": True,
                "aer_executed": False, "retrieval_reliable": False,
                "model_scope": "Known marked candidate; vector loading and an adaptive maximum-finding oracle are not executed."}
     stage = StageTelemetry(name="Quantum Inner-Product & Grover-Max Amplification", node=node, latency_ms=0.0,
@@ -875,7 +877,7 @@ def run_shors_pipeline(
     )):
         stage = response.stages[key]
         stage.node = target
-        stage.metrics["routing_model"] = "ILLUSTRATIVE_V1 (not device measurements)"
+        stage.metrics["routing_model"] = ROUTING_MODEL
         stage.metrics["routing_supported"] = True
         stage.metrics["execution_feasible"] = True
 
@@ -1018,7 +1020,8 @@ def run_shors_pipeline(
 @router.get("/")
 async def health_check():
     """Return engine identity without invoking Aer, database, or provider services."""
-    return JSONResponse({"status": "online", "engine": "Q-Split Hybrid Profiler v2.0"},
+    return JSONResponse({"status": "online", "engine": "Q-Split Hybrid Profiler v2.0",
+                         "resource_model_version": RESOURCE_MODEL_VERSION, "routing_model": ROUTING_MODEL},
                         headers={"Cache-Control": "no-store"})
 
 @router.post("/api/simulate", response_model=HybridTelemetryResponse,

@@ -58,6 +58,27 @@ test("pipeline timing adds separately reported QPU I/O to active compute", () =>
   near(pipelineTiming(data).overheadMs, 0.17);
 });
 
+test("inclusive QPU breakdown separates gates from launch and measurement/reset exactly once", () => {
+  const data = fixture();
+  data.resource_model_version = 2;
+  const kernel = data.stages.stage_2_quantum_kernel;
+  const gate_execution_ms = kernel.latency_ms;
+  const launch_overhead_ms = kernel.metrics.io_state_prep_ms as number;
+  const measurement_reset_ms = launch_overhead_ms;
+  kernel.latency_ms = gate_execution_ms + launch_overhead_ms + measurement_reset_ms;
+  Object.assign(kernel.metrics, { gate_execution_ms, launch_overhead_ms, measurement_reset_ms,
+    qpu_io_included_in_latency: true, io_state_prep_ms: 0 });
+  const original = structuredClone(data);
+  const timing = pipelineLatencyBuckets(data);
+  near(timing.quantumMs, gate_execution_ms);
+  near(timing.overheadMs, launch_overhead_ms + measurement_reset_ms);
+  near(timing.totalMs, Object.values(data.stages).reduce((sum, stage) => sum + stage.latency_ms, 0));
+  assert.deepEqual(data, original);
+  kernel.metrics.execution_feasible = false;
+  near(pipelineLatencyBuckets(data).overheadMs, 0);
+  near(pipelineLatencyBuckets(data).quantumMs, 0);
+});
+
 test("GPU launch/transfer and kernel overhead are separated once, including mixed routes", () => {
   const data = fixture();
   data.stages.stage_1_classical_pre = stage("GPU", 0.37, { launch_transfer_overhead_ms: 0.3 });

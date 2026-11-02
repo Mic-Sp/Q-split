@@ -3,6 +3,7 @@ import { formatSurvivalPercent, pipelineTiming } from "@/lib/kpi-metrics";
 import { HARDWARE_PROFILES, hardwareLabel } from "@/lib/hardware-profiles";
 import type { HardwareProfile, HybridTelemetryResponse, RoutingConfig, SimulationRequest, WorkloadId } from "@/types/telemetry";
 import { workloadThresholds } from "@/lib/workloads";
+import { modelVersionLabel, resourceModelVersion, sameModelVersion } from "@/lib/model-version";
 
 export const DEFAULT_ROUTING: RoutingConfig = {
   stage_1_node: "CPU", stage_2_node: "QPU", stage_3_node: "CPU",
@@ -54,6 +55,11 @@ export interface Transition { id: number; before: Snapshot; after: Snapshot; cha
  * values, and total latency uses full wall-clock accounting rather than stage sums.
  */
 export function describeChanges(before: Snapshot, after: Snapshot): MetricDelta[] {
+  if (!sameModelVersion(before.data, after.data)) return [{
+    label: "Model version changed · metric comparison unavailable",
+    before: modelVersionLabel(resourceModelVersion(before.data)),
+    after: modelVersionLabel(resourceModelVersion(after.data)),
+  }];
   const changes: MetricDelta[] = [];
   const add = (label: string, from: unknown, to: unknown, duration = false, percentage = false) => {
     if (JSON.stringify(from) !== JSON.stringify(to)) changes.push({ label,
@@ -107,6 +113,7 @@ export function parseTelemetry(value: unknown): HybridTelemetryResponse {
       throw new Error(`The engine returned invalid telemetry for ${key}.`);
     }
   }
+  resourceModelVersion(data);
   return data;
 }
 

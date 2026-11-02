@@ -2,6 +2,7 @@ import { coherenceBudget, formatSurvivalPercent, pipelineTiming } from "@/lib/kp
 import { DEFAULT_AVAILABLE_QUBITS } from "@/lib/telemetry";
 import { formatDuration, formatDurationDelta, formatRawMilliseconds } from "@/lib/duration";
 import type { SavedSimulationRun } from "@/types/run-history";
+import { modelVersionLabel, resourceModelVersion, sameModelVersion } from "@/lib/model-version";
 
 export const MAX_COMPARISON_RUNS = 3;
 const number = new Intl.NumberFormat("en-US", { maximumFractionDigits: 6 });
@@ -81,6 +82,7 @@ export function benchmarkComparison(runs: SavedSimulationRun[]) {
   const reference = benchmarkMetrics(chosen[0]);
   return chosen.map((run, index) => {
     const metrics = benchmarkMetrics(run);
+    const compatible = sameModelVersion(chosen[0].telemetry, run.telemetry);
     const numeric = (label: string, value: number | null, baseline: number | null, unit: string, deltaUnit = unit): ComparisonMetric => ({
       label, value: value === null ? "Not reported" : `${unit === "%" ? formatSurvivalPercent(value) : number.format(value)} ${unit}`,
       delta: index === 0 || value === null || baseline === null ? null : `${signed(value - baseline)} ${deltaUnit} vs reference`,
@@ -102,9 +104,7 @@ export function benchmarkComparison(runs: SavedSimulationRun[]) {
     // Survival deltas are percentage points; the independent budget classification can also change.
     coherence.value += metrics.coherenceStatus ? ` · ${metrics.coherenceStatus}` : "";
     coherence.changed ||= index > 0 && metrics.coherenceStatus !== reference.coherenceStatus;
-    return {
-      run,
-      metrics: [
+    const rows: ComparisonMetric[] = [
         duration("Total latency", metrics.totalMs, reference.totalMs),
         duration("Pure compute", metrics.computeMs, reference.computeMs),
         duration("Interconnect overhead", metrics.overheadMs, reference.overheadMs),
@@ -115,7 +115,10 @@ export function benchmarkComparison(runs: SavedSimulationRun[]) {
           delta: index === 0 || depth === null || baselineDepth === null ? null : `${depth > baselineDepth ? "+" : ""}${number.format(depth - baselineDepth)} gates vs reference`, changed: index > 0 && depth !== baselineDepth },
         coherence,
         categorical("Bottleneck status", `${run.bottleneckStatus} · ${run.primaryBottleneck}`, `${chosen[0].bottleneckStatus} · ${chosen[0].primaryBottleneck}`),
-      ],
+      ];
+    return {
+      run, compatible, modelVersion: modelVersionLabel(resourceModelVersion(run.telemetry)),
+      metrics: compatible ? rows : rows.map(row => ({ ...row, delta: null, rawDelta: undefined, changed: false })),
     };
   });
 }
