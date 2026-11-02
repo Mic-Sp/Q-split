@@ -18,6 +18,14 @@ from backend.main import (
 
 
 class GroverReferenceTests(unittest.TestCase):
+    def test_seeded_gate_counts_and_sampled_counts_repeat_exactly(self):
+        first = execute_live_quantum_mips_64()
+        second = execute_live_quantum_mips_64()
+        # Timings measure wall-clock work and intentionally are not deterministic.
+        for field in ("aer_gate_counts", "aer_counts", "aer_reference_circuit_depth", "aer_shots",
+                      "top_1_token_index", "measured_peak_probability"):
+            self.assertEqual(first[field], second[field])
+
     def test_oracle_amplifies_correct_bit_order_and_uncomputes_all_workspace(self):
         circuit = build_quantum_mips_grover_circuit()
         self.assertEqual(circuit.num_qubits, 10)

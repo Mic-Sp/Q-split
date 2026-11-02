@@ -48,7 +48,8 @@ class CircuitSpec(BaseModel):
     are milliseconds; gate counts and depth describe a single shot.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, allow_inf_nan=False)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, allow_inf_nan=False,
+                              revalidate_instances="always")
 
     n_qubits: int = Field(strict=True, ge=1)
     depth: int = Field(strict=True, ge=0)
@@ -73,7 +74,8 @@ class QPUProfile(BaseModel):
     Single-qubit duration is retained for future scheduling models.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, allow_inf_nan=False)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, allow_inf_nan=False,
+                              revalidate_instances="always")
 
     id: str = Field(min_length=1)
     name: str = Field(min_length=1)

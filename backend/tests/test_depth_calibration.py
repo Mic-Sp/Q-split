@@ -95,6 +95,10 @@ def test_mips_depth_grows_across_all_scales_without_a_live_analytic_seam(profile
     depths = [stage.metrics["circuit_depth"] for stage in stages]
     assert all(smaller <= larger for smaller, larger in zip(depths, depths[1:]))
     assert depths[1] >= 3 * depths[0]
+    for smaller, larger in zip(stages, stages[1:]):
+        assert larger.latency_ms >= smaller.latency_ms
+        for field in ("coherence_survival_best", "coherence_survival", "coherence_survival_worst", "coherence_log_survival"):
+            assert larger.metrics[field] <= smaller.metrics[field]
     for scale, stage in zip(QUANTUM_MIPS_SCALES, stages):
         assert stage.metrics["circuit_spec"] == mips_spec(
             scale, stage.metrics["qubits_allocated"], stage.metrics["depth_multiplier"],

@@ -31,7 +31,7 @@ if __package__:
     from .profiles import HARDWARE_PROFILES, execution_profile, profile_metrics
     from .workloads import (QUANTUM_MIPS_CLASSICAL_PROFILES, shors_spec, mips_spec,
                            mips_reference_depth, select_shors_base)
-    from .circuits import (NATIVE_BASIS_GATES, AER_SEED, QUANTUM_MIPS_TARGET_INDEX,
+    from .circuits import (NATIVE_BASIS_GATES, AER_SEED, QUANTUM_MIPS_TARGET_INDEX, SHOR_SHOTS, QUANTUM_MIPS_AER_SHOTS,
                            c_amod15, build_shors_15_circuit, build_quantum_mips_grover_circuit, compile_reference_circuit)
 else:
     from models import CircuitSpec, QPUProfile, StageMetrics, RESOURCE_MODEL_VERSION, ROUTING_MODEL
@@ -40,7 +40,7 @@ else:
     from profiles import HARDWARE_PROFILES, execution_profile, profile_metrics
     from workloads import (QUANTUM_MIPS_CLASSICAL_PROFILES, shors_spec, mips_spec,
                           mips_reference_depth, select_shors_base)
-    from circuits import (NATIVE_BASIS_GATES, AER_SEED, QUANTUM_MIPS_TARGET_INDEX,
+    from circuits import (NATIVE_BASIS_GATES, AER_SEED, QUANTUM_MIPS_TARGET_INDEX, SHOR_SHOTS, QUANTUM_MIPS_AER_SHOTS,
                           c_amod15, build_shors_15_circuit, build_quantum_mips_grover_circuit, compile_reference_circuit)
 
 router = APIRouter()
@@ -250,7 +250,7 @@ def execute_live_shors_15(a: Optional[int] = None, noisy: bool = True) -> Dict[s
     # Simulate in Qiskit Aer
     sim = AerSimulator(method="statevector", max_parallel_threads=1)
     t_qc = compile_reference_circuit(qc)
-    counts = sim.run(t_qc, shots=512, seed_simulator=AER_SEED).result().get_counts()
+    counts = sim.run(t_qc, shots=SHOR_SHOTS, seed_simulator=AER_SEED).result().get_counts()
 
     # Classical Continued Fractions Post-Processing
     measured_phases = []
@@ -276,9 +276,6 @@ def execute_live_shors_15(a: Optional[int] = None, noisy: bool = True) -> Dict[s
         "period_r": extracted_r,
         "coherence_pct": 100.0,
     }
-
-
-QUANTUM_MIPS_AER_SHOTS = 1024
 
 
 def execute_live_quantum_mips_64() -> Dict[str, Any]:
@@ -413,7 +410,6 @@ def qpu_capacity_plan(scale_param: int, available_qubits: int) -> Dict[str, Any]
 
 
 QPU_LAUNCH_OVERHEAD_MS = 0.30  # One batch launch; explicit modeling assumption.
-SHOR_SHOTS = 512
 
 
 def _qpu_metrics(spec: CircuitSpec, profile: QPUProfile, capacity: int, shots: int) -> Dict[str, Any]:

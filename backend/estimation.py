@@ -40,9 +40,14 @@ def estimate_qpu(spec: CircuitSpec, profile: QPUProfile, shots: int, launch_over
     coherence_log_survival preserves the natural log of the T1 point even when
     exp underflows; null denotes certain failure or infeasible execution.
     """
+    # Copies/constructed Pydantic instances can bypass validation. Revalidate at
+    # the pure estimator boundary so invalid numbers never become projections.
+    spec = CircuitSpec.model_validate(spec)
+    profile = QPUProfile.model_validate(profile)
     if type(shots) is not int or shots < 1:
         raise ValueError("shots must be a positive integer")
-    if isinstance(launch_overhead_ms, bool) or not math.isfinite(launch_overhead_ms) or launch_overhead_ms < 0:
+    if (isinstance(launch_overhead_ms, bool) or not isinstance(launch_overhead_ms, (int, float))
+            or not math.isfinite(launch_overhead_ms) or launch_overhead_ms < 0):
         raise ValueError("launch_overhead_ms must be finite and nonnegative")
     depth = math.ceil(spec.depth * profile.topology_factor * profile.native_2q_per_cx)
     n_2q = math.ceil(spec.n_2q * profile.topology_factor * profile.native_2q_per_cx)
@@ -89,7 +94,8 @@ def estimate_classical(spec: CircuitSpec, node_type: str) -> dict:
     Host costs are taken as supplied, independent of kernel node placement.
     Native feasibility never depends on exponential statevector RAM.
     """
-    if node_type not in STATEVECTOR_PROFILES:
+    spec = CircuitSpec.model_validate(spec)
+    if not isinstance(node_type, str) or node_type not in STATEVECTOR_PROFILES:
         raise ValueError("node_type must be CPU or GPU")
     node = STATEVECTOR_PROFILES[node_type]
     feasible = spec.n_qubits <= node["max_qubits"]

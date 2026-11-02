@@ -14,6 +14,8 @@ else:
 
 NATIVE_BASIS_GATES = ["cx", "rz", "sx", "x"]
 AER_SEED = 7
+SHOR_SHOTS = 512
+QUANTUM_MIPS_AER_SHOTS = 1024
 NATIVE_OPTIMIZATION_LEVEL = 1
 QUANTUM_MIPS_TARGET_INDEX = 45  # Marked-state demonstration, not a vector search.
 

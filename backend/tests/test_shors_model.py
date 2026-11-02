@@ -15,7 +15,7 @@ from backend.main import (
 
 @pytest.mark.parametrize("profile", HARDWARE_PROFILES)
 @pytest.mark.parametrize("tier", ["sequential", "windowed", "ceiling"])
-def test_modeled_depth_and_runtime_strictly_increase_with_problem_size(profile, tier):
+def test_modeled_depth_and_runtime_increase_and_survival_decreases_with_problem_size(profile, tier):
     # Compare like-for-like workspace tiers. Fixed capacity can change tiers as
     # size grows, so it does not isolate the size-scaling formula.
     stages = []
@@ -33,6 +33,10 @@ def test_modeled_depth_and_runtime_strictly_increase_with_problem_size(profile, 
     for smaller, larger in zip(stages, stages[1:]):
         assert smaller.metrics["circuit_depth"] < larger.metrics["circuit_depth"]
         assert smaller.latency_ms < larger.latency_ms
+        for field in ("coherence_survival_best", "coherence_survival", "coherence_survival_worst"):
+            assert larger.metrics[field] <= smaller.metrics[field]
+        # Natural logs keep the regression meaningful after probabilities underflow.
+        assert larger.metrics["coherence_log_survival"] <= smaller.metrics["coherence_log_survival"]
 
 
 def test_live_sampling_depth_cannot_change_modeled_n15_latency():

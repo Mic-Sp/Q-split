@@ -165,6 +165,65 @@ def test_invalid_execution_controls_are_rejected(spec, profile, shots, launch):
         estimate_qpu(spec, profile, shots, launch)
 
 
+@pytest.mark.parametrize("shots", [True, False, 1.0, 1.5, "512", None, math.nan, math.inf, -math.inf, -1, 0])
+def test_qpu_rejects_every_invalid_shot_type(spec, profile, shots):
+    with pytest.raises(ValueError, match="shots"):
+        estimate_qpu(spec, profile, shots, 0)
+
+
+@pytest.mark.parametrize("launch", [True, False, "0.3", None, math.nan, math.inf, -math.inf, -1])
+def test_qpu_rejects_invalid_launch_values(spec, profile, launch):
+    with pytest.raises(ValueError, match="launch_overhead_ms"):
+        estimate_qpu(spec, profile, 1, launch)
+
+
+@pytest.mark.parametrize("estimator", ["QPU", "CPU", "GPU"])
+@pytest.mark.parametrize("field", ["n_qubits", "depth", "n_1q", "n_2q", "n_meas",
+                                   "stage1_ms", "stage3_ms", "native_classical_ms"])
+@pytest.mark.parametrize("value", [True, False, math.nan, math.inf, -math.inf, -1])
+def test_estimators_reject_invalid_resources_even_in_unvalidated_model_copies(spec, profile, estimator, field, value):
+    invalid = spec.model_copy(update={field: value})
+    with pytest.raises(ValidationError):
+        if estimator == "QPU":
+            estimate_qpu(invalid, profile, 1, 0)
+        else:
+            estimate_classical(invalid, estimator)
+
+
+@pytest.mark.parametrize("field", ["n_qubits", "depth", "n_1q", "n_2q", "n_meas"])
+@pytest.mark.parametrize("estimator", ["QPU", "CPU", "GPU"])
+def test_estimators_reject_noninteger_resource_counts(spec, profile, field, estimator):
+    invalid = spec.model_copy(update={field: 1.5})
+    with pytest.raises(ValidationError):
+        if estimator == "QPU":
+            estimate_qpu(invalid, profile, 1, 0)
+        else:
+            estimate_classical(invalid, estimator)
+
+
+@pytest.mark.parametrize("field", ["n_qubits_max", "t1_us", "t2_us", "t_1q_ns", "t_2q_ns",
+                                   "t_meas_ns", "t_reset_ns", "err_1q", "err_2q", "err_meas",
+                                   "topology_factor", "native_2q_per_cx"])
+@pytest.mark.parametrize("value", [True, False, math.nan, math.inf, -math.inf, -1])
+def test_qpu_rejects_invalid_physics_even_in_unvalidated_profile_copies(spec, profile, field, value):
+    invalid = profile.model_copy(update={field: value})
+    with pytest.raises(ValidationError):
+        estimate_qpu(spec, invalid, 1, 0)
+
+
+@pytest.mark.parametrize("node", [True, False, math.nan, math.inf, -math.inf, -1, None, [], {}])
+def test_classical_rejects_invalid_node_values(spec, node):
+    with pytest.raises(ValueError, match="node_type"):
+        estimate_classical(spec, node)
+
+
+@pytest.mark.parametrize("shots", [1, 1.5, True, math.nan, math.inf, -1])
+def test_classical_has_no_shot_parameter(spec, shots):
+    # Emulate a distribution once; do not add a fake shot-batch API to this estimator.
+    with pytest.raises(TypeError, match="shots"):
+        estimate_classical(spec, "CPU", shots=shots)
+
+
 @pytest.mark.parametrize("field,value", [("n_qubits", 0), ("depth", -1), ("n_1q", True),
                                          ("n_2q", 1.5), ("stage1_ms", math.nan), ("stage3_ms", -1)])
 def test_circuit_models_reject_invalid_resources(spec, field, value):
