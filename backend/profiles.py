@@ -27,14 +27,15 @@ def _provenance(source_url, sources, published, notes, *, retrieval_date=RETRIEV
 
 HARDWARE_PROFILES = {
     "ibm_heron_nisq": QPUProfile(
-        id="ibm_heron_nisq", name="IBM Heron r1 (representative)", n_qubits_max=133,
+        id="ibm_heron_nisq", name="IBM Heron (133-qubit cap, r3-era timing; representative)", n_qubits_max=133,
         t1_us=200, t2_us=150, t_1q_ns=32, t_2q_ns=68,
         t_meas_ns=1500, t_reset_ns=200_000,
         err_1q=0.0003, err_2q=0.003, err_meas=0.01, topology_factor=1.5, native_2q_per_cx=1.0,
         provenance=_provenance(IBM_NOISE, [IBM_NOISE, IBM_PROCESSORS],
                                {"n_qubits_max", "t1_us", "t_2q_ns"},
-            "133 qubits selects Heron r1. T1=200 us is a family-scale approximation; 68 ns is an "
-            "IBM Boston example, not a measured r1 calibration. Remaining timing/error values and "
+            "133 qubits is a capacity cap paired with representative r3-era timing. T1=200 us is "
+            "a family-scale approximation; 68 ns is an IBM Boston example, not a measured "
+            "calibration of a 133-qubit device. Remaining timing/error values and "
             "the Heavy-Hex routing multiplier are explicit modeling assumptions.")),
     "google_weber_grid": QPUProfile(
         id="google_weber_grid", name="Google Weber / Sycamore (representative)", n_qubits_max=53,

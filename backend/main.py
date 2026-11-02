@@ -7,7 +7,9 @@ it is a resource estimate, not an injected calibrated Aer noise model.
 Next.js owns database persistence, AI diagnostics, and provider/cache economics.
 """
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Security
+from contextlib import asynccontextmanager
+
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Security
 from fastapi.security import APIKeyHeader
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
@@ -41,11 +43,26 @@ else:
     from circuits import (NATIVE_BASIS_GATES, AER_SEED, QUANTUM_MIPS_TARGET_INDEX,
                           c_amod15, build_shors_15_circuit, build_quantum_mips_grover_circuit, compile_reference_circuit)
 
-app = FastAPI(
-    title="Q-Split Hybrid Partitioning Engine",
-    description="Hybrid Quantum-Classical Workload Profiler (Shor's Algorithm & Quantum-MIPS AI)",
-    version="2.0.0"
-)
+router = APIRouter()
+
+
+def _production_mode() -> bool:
+    return os.environ.get("ENGINE_ENV", "").strip().lower() == "production"
+
+
+def _configured_engine_secret() -> str:
+    """Reject production misconfiguration without including credentials in errors."""
+    secret = os.environ.get("ENGINE_SECRET", "").strip()
+    if _production_mode() and not secret:
+        raise RuntimeError("ENGINE_SECRET must be set and nonblank when ENGINE_ENV=production.")
+    return secret
+
+
+@asynccontextmanager
+async def engine_lifespan(_app: FastAPI):
+    # Recheck at startup even if the environment changed after app construction.
+    _configured_engine_secret()
+    yield
 
 # Browsers use the same-origin Next.js proxy. Server-to-server fetches do not
 # need CORS; deliberately do not grant browser origins access to engine routes.
@@ -53,13 +70,18 @@ engine_secret_header = APIKeyHeader(name="X-Engine-Secret", auto_error=False)
 
 
 async def require_engine_secret(secret: Optional[str] = Security(engine_secret_header)):
-    """Enforce the optional server-only shared secret before simulation dispatch.
+    """Enforce server-only credentials before simulation dispatch.
 
-    Set ENGINE_SECRET on both FastAPI and Next.js for publicly reachable engines.
-    An unset/blank value preserves unauthenticated local development. CORS is
-    not authentication: direct HTTP clients must pass this check when enabled.
+    ENGINE_ENV=production requires a nonblank ENGINE_SECRET at startup. An
+    unset/blank value preserves open local development without that flag. CORS
+    is not authentication. The root health route does not use this dependency.
     """
-    expected = os.environ.get("ENGINE_SECRET", "").strip()
+    try:
+        expected = _configured_engine_secret()
+    except RuntimeError as error:
+        # Also fail closed for ASGI callers bypassing lifespan, or secret loss
+        # after startup. The health probe remains independent of this check.
+        raise HTTPException(status_code=503, detail="Engine authentication is not configured.") from error
     if expected and (secret is None or not compare_digest(secret.encode("utf-8"), expected.encode("utf-8"))):
         raise HTTPException(status_code=401, detail="Invalid engine credentials.")
 
@@ -81,7 +103,6 @@ QUANTUM_MIPS_SCALES = {
 }
 
 
-@app.exception_handler(RequestValidationError)
 async def validate_simulation_request(request: Request, error: RequestValidationError):
     """Preserve the legacy unknown-workload HTTP status during schema validation.
 
@@ -991,14 +1012,14 @@ def run_shors_pipeline(
 # ==========================================
 # 4. API ENDPOINTS
 # ==========================================
-@app.get("/")
+@router.get("/")
 async def health_check():
     """Return engine identity without invoking Aer, database, or provider services."""
     return JSONResponse({"status": "online", "engine": "Q-Split Hybrid Profiler v2.0"},
                         headers={"Cache-Control": "no-store"})
 
-@app.post("/api/simulate", response_model=HybridTelemetryResponse,
-          dependencies=[Depends(require_engine_secret)])
+@router.post("/api/simulate", response_model=HybridTelemetryResponse,
+             dependencies=[Depends(require_engine_secret)])
 def simulate_workload(req: SimulationRequest):
     """Dispatch a Pydantic-validated request to its workload's three-stage builder.
 
@@ -1009,3 +1030,29 @@ def simulate_workload(req: SimulationRequest):
         return run_shors_pipeline(req.scale_param, req.hardware_profile, req.routing, req.available_qubits)
     elif req.workload_id == "quantum_mips":
         return run_quantum_mips_pipeline(req.scale_param, req.hardware_profile, req.routing, req.available_qubits)
+
+
+def create_app() -> FastAPI:
+    """Build the engine after validating production credentials and docs policy.
+
+    Validate during construction as well as lifespan startup, so disabling ASGI
+    lifespan cannot bypass the production requirement. Docs visibility is chosen
+    at construction; restart the process after changing deployment settings.
+    """
+    _configured_engine_secret()
+    enable_docs = not _production_mode() or os.environ.get("ENGINE_ENABLE_DOCS", "").strip() == "1"
+    engine = FastAPI(
+        title="Q-Split Hybrid Partitioning Engine",
+        description="Hybrid Quantum-Classical Workload Profiler (Shor's Algorithm & Quantum-MIPS AI)",
+        version="2.0.0",
+        lifespan=engine_lifespan,
+        docs_url="/docs" if enable_docs else None,
+        redoc_url="/redoc" if enable_docs else None,
+        openapi_url="/openapi.json" if enable_docs else None,
+    )
+    engine.add_exception_handler(RequestValidationError, validate_simulation_request)
+    engine.include_router(router)
+    return engine
+
+
+app = create_app()

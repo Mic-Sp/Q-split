@@ -345,7 +345,7 @@ export default function Home() {
               <InfoPopover label="About QPU capacity">
                 <p className="font-semibold text-cyan-800 dark:text-cyan-200">Available QPU capacity</p>
                 <p className="mt-2">Per QPU stage. Select a tier threshold to explore the trade-off; changes apply on Run simulation.</p>
-                <p className="mt-2">36 references Forte; 53 references Weber. 133 and 1,121 reference Heron r1 and Condor milestones. 72 and capacities above a device’s reference are exploratory overrides. These are modeled usable qubits; physical error-correction overhead is excluded. Extra capacity above the workload’s parallelization ceiling stays idle.</p>
+                <p className="mt-2">36 references Forte; 53 references Weber. 133 is the Heron capacity cap with representative r3-era timing; 1,121 references the Condor milestone. 72 and capacities above a device’s reference are exploratory overrides. These are modeled usable qubits; physical error-correction overhead is excluded. Extra capacity above the workload’s parallelization ceiling stays idle.</p>
                 <p className="mt-2">Shor N = 15 and Quantum-MIPS M = 64 in sequential mode run Qiskit Aer reference circuits. Parallel tiers and larger scales use an analytical hardware model. Quantum-MIPS emulation uses the selected ancilla tier and is limited by CPU/GPU RAM.</p>
               </InfoPopover>
             </div>

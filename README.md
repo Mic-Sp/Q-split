@@ -44,7 +44,7 @@ These vocabularies are intentionally separate: a `NOMINAL` coherence budget alon
 
 ### Hardware Profiles
 
-* IBM Heron NISQ: 133-qubit r1 reference with Heavy-Hex superconducting connectivity and modeled SWAP routing overhead.
+* IBM Heron (133-qubit cap, r3-era timing; representative): Heavy-Hex superconducting connectivity and modeled SWAP routing overhead. Capacity and timing are representative assumptions rather than a single device calibration.
 * Google Weber (2D Grid): 53 qubits, 32 ns √iSWAP gates paired with their 0.9% typical isolated XEB error, and typical T1 of 15 µs from the [14 May 2021 Weber datasheet](https://quantumai.google/hardware/datasheet/weber.pdf). The model assumes two native √iSWAP gates per CX, applied to both depth and 2Q count; this conversion needs verification against a gate-decomposition reference. The datasheet's typical 1–5 kHz repetition rate is supporting provenance context; the reset-time assumption is unchanged. The 53-qubit selector is the reference; 72 and other larger capacities remain exploratory overrides.
 * IonQ Forte (Trapped Ion): 36-qubit reference with all-to-all connectivity, high gate fidelity, and long coherence. The model removes SWAP routing layers but uses slower laser-driven gate execution; high fidelity does not mean noise-free execution.
 * Ideal Noise-Free: Theoretical reference with 100% modeled coherence for feasible execution. Capacity and routing limits still apply.
@@ -124,9 +124,9 @@ The zero-dependency limiter is **process-local**: quotas survive warm-process/mo
 
    Set `DATABASE_URL` to the Neon connection for persistent history and advisor caching. `DATABASE_URL_UNPOOLED` supplies a direct connection for Prisma migrations and maintenance; it falls back to `DATABASE_URL` when blank. Without database credentials, simulations still work; without a Gemini key, the advisor supplies deterministic local diagnostics.
 
-   For a publicly reachable engine, set the same nonempty `ENGINE_SECRET` in the FastAPI process environment and the Next.js server environment (locally, `frontend/.env.local`). The proxy sends it as `X-Engine-Secret`; missing or incorrect credentials receive HTTP 401 before simulation dispatch. For example, start FastAPI with `ENGINE_SECRET='your-shared-secret' backend/venv/bin/python -m uvicorn backend.main:app --port 8000`. An unset or blank secret allows unauthenticated local development; CORS does not authenticate direct HTTP clients. Engine routes grant no browser CORS access because browsers use the Next.js proxy. Keep the secret out of `NEXT_PUBLIC_*` variables.
+   Set the same nonempty `ENGINE_SECRET` in the FastAPI process environment and the Next.js server environment (locally, `frontend/.env.local`) to authenticate simulations. The proxy sends it as `X-Engine-Secret`; missing or incorrect credentials receive HTTP 401 before simulation dispatch. Without `ENGINE_ENV=production`, an unset or blank secret keeps local development open. Production requires a nonblank secret and refuses to start without one; see [production deployment](#production-deployment). Engine routes grant no browser CORS access because browsers use the Next.js proxy. Keep the secret out of `NEXT_PUBLIC_*` variables.
 
-   `GET /` is a public, uncached health probe that performs no simulation and does not wait for simulation worker threads. Each Next.js Node server startup pings it once with a three-second timeout; engine downtime does not fail frontend startup. A cold engine may still take longer to become ready.
+   `GET /` is a public, uncached health probe in both development and configured production. It needs no secret, stays available when docs are disabled, performs no simulation, and does not wait for simulation worker threads. Each Next.js Node server startup pings it once with a three-second timeout; engine downtime does not fail frontend startup. A cold engine may still take longer to become ready.
 
 3. In a separate terminal, create the Python environment and start the backend **from the repository root**:
 
@@ -161,6 +161,27 @@ The zero-dependency limiter is **process-local**: quotas survive warm-process/mo
    ```
 
    The frontend tests include the 1,620-configuration backend integration matrix and use the Python environment installed above.
+
+## Production deployment
+
+Set these variables in the **FastAPI process environment** before starting the engine:
+
+| Variable | Production behavior |
+| --- | --- |
+| `ENGINE_ENV=production` | Requires a nonblank `ENGINE_SECRET` during app creation and startup. |
+| `ENGINE_SECRET` | Supply through the hosting platform's secret configuration; set the same value on the Next.js server. Missing or whitespace-only values prevent startup. |
+| `ENGINE_ENABLE_DOCS` | Leave unset to disable `/docs`, `/docs/oauth2-redirect`, `/redoc`, and `/openapi.json`. Set exactly `1` to expose them; simulation requests still require the secret. |
+
+On Next.js, set `SIMULATION_API_URL` to the engine URL and `ENGINE_SECRET` to the matching value. `ENGINE_ENV` and `ENGINE_ENABLE_DOCS` belong to FastAPI, not the browser. Restart the engine after changing these settings. Local Python development without the production flag keeps optional authentication and docs enabled. If a running production process loses its secret, simulation requests fail closed with HTTP 503.
+
+The backend Dockerfile defaults to `ENGINE_ENV=production`. With `ENGINE_SECRET` supplied in the host environment, build and run it from the repository root:
+
+```sh
+docker build -t q-split-engine backend
+docker run --rm -p 8000:8000 -e ENGINE_SECRET q-split-engine
+```
+
+For an intentionally open local container, pass `-e ENGINE_ENV=development`. Configure platform health checks and Next.js pre-warming to use **`GET /`**. It remains public without `X-Engine-Secret`, independently of authentication and docs visibility. A production process with missing credentials must be configured correctly before it can start serving any routes.
 
 ## Run persistence and session API
 

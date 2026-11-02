@@ -3,6 +3,7 @@
 **Live App:** [https://q-split.vercel.app/](https://q-split.vercel.app/)
 
 For local installation, environment variables, and test commands, see [README.md](README.md).
+For hosted engine configuration, see [production deployment](README.md#production-deployment): production requires a shared secret, while the root health probe remains public.
 
 ## What are you looking at?
 
@@ -29,7 +30,7 @@ Your goal is to find the best hardware combo (`CPU`, `GPU`, or `QPU`) without ru
    * Hover over any button to see what it does! 
    * *Note:* N = 15 and M = 64 sequential references execute in Qiskit Aer; other tiers and larger scales use analytical projections. Select the **Sequential** tier to explore the base-scale Aer reference. Measured simulator timing is separate from projected GPU/QPU timing and coherence.
 3. **`03 / HARDWARE PROFILE` — Pick a Hardware Model:**
-   * **IBM Heron NISQ:** 133-qubit r1 reference with superconducting gates and sparse Heavy-Hex connectivity.
+   * **IBM Heron (133-qubit cap, r3-era timing; representative):** A 133-qubit capacity cap paired with representative r3-era timings, superconducting gates, and sparse Heavy-Hex connectivity.
    * **Google Weber (2D Grid):** A 53-qubit reference from the 2021 datasheet, using 32 ns √iSWAP gates and their 0.9% typical isolated error. The model assumes two native entanglers per CX. The 72-qubit tier and larger capacities remain exploratory overrides.
    * **IonQ Forte (Trapped Ion):** 36-qubit reference with high gate fidelity, long coherence, and all-to-all connectivity. Laser-driven gates are slower in the model; high fidelity does not mean noise-free execution.
    * **Ideal Noise-Free:** Theoretical reference with 100% modeled coherence for feasible execution. Capacity and routing limits still apply.
@@ -44,7 +45,7 @@ Use the header's **Sun/Moon** button for light or dark mode, or the **monitor** 
 
 ### Experiment 1: Model GPU Launch/Transfer Overhead
 
-1. Keep **Shor's Algorithm** at **`N = 15`** on **IBM Heron NISQ**.
+1. Keep **Shor's Algorithm** at **`N = 15`** on **IBM Heron (133-qubit cap, r3-era timing; representative)**.
 2. Scroll slightly to the **Execution pipeline** cards (`STAGE 01`, `STAGE 02`, `STAGE 03`).
 3. Switch **Stage 01** from `CPU` to `GPU` and click **Run simulation**.
 4. **What happens:** Stage 01 reports `WARNING`. For this small scalar workload, the modeled `0.30 ms` GPU launch/transfer penalty outweighs its compute savings.
@@ -54,7 +55,7 @@ Use the header's **Sun/Moon** button for light or dark mode, or the **monitor** 
 1. Change `01 / WORKLOAD PRESET` to **Quantum-MIPS** and select **`M = 128k (LLM Vocab)`**.
 2. Set the pipeline route to **`GPU` $\rightarrow$ `QPU` $\rightarrow$ `GPU`** and click **Run simulation**.
 3. **What happens:** GPU host stages report `OPTIMAL` because their modeled compute savings amortize the launch/transfer cost at this scale. The QPU stage can still exceed its coherence budget, so host-stage status alone does not establish an offload advantage.
-4. Switch `03 / HARDWARE PROFILE` between **IBM Heron NISQ** and **IonQ Forte (Trapped Ion)**. After each profile change, set **Available QPU Qubits** to `36` to compare equal-capacity registers, then run again. This fits the sequential register at this scale and exposes the modeled trade-off between gate latency and coherence; it does not guarantee a viable QPU run.
+4. Switch `03 / HARDWARE PROFILE` between **IBM Heron (133-qubit cap, r3-era timing; representative)** and **IonQ Forte (Trapped Ion)**. After each profile change, set **Available QPU Qubits** to `36` to compare equal-capacity registers, then run again. This fits the sequential register at this scale and exposes the modeled trade-off between gate latency and coherence; it does not guarantee a viable QPU run.
 
 ### Experiment 3: Break Classical RAM, Then Ask the AI Advisor
 

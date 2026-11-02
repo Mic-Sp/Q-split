@@ -4,8 +4,8 @@ import { HARDWARE_PROFILE_IDS, type HardwareProfile } from "@/types/telemetry";
 export const QUBIT_CAPACITY_PRESETS = [16, 36, 53, 72, 133, 1121, 2048, 4096, 16384];
 
 export const HARDWARE_PROFILES = {
-  ibm_heron_nisq: { label: "IBM Heron NISQ", topology: "Heavy-Hex", referenceQubits: 133, depthMultiplier: 1, gateTimeMultiplier: 1, prepMs: 0.15, decayScale: 1200,
-    description: "Superconducting transmons · Heavy-Hex connectivity · 133-qubit reference. Baseline routing depth and gate time: 1.0×; 0.15 ms state preparation; decay scale 1200. The N=15 sequential Aer reference retains its legacy 0.05 ms setup." },
+  ibm_heron_nisq: { label: "IBM Heron (133-qubit cap, r3-era timing; representative)", topology: "Heavy-Hex", referenceQubits: 133, depthMultiplier: 1, gateTimeMultiplier: 1, prepMs: 0.15, decayScale: 1200,
+    description: "Superconducting transmons · Heavy-Hex connectivity · 133-qubit capacity cap with representative r3-era timing. Baseline routing depth and gate time: 1.0×; 0.15 ms state preparation; decay scale 1200. The N=15 sequential Aer reference retains its legacy 0.05 ms setup." },
   google_weber_grid: { label: "Google Weber (2D Grid)", topology: "2D Square Grid", referenceQubits: 53, depthMultiplier: 0.78, gateTimeMultiplier: 0.45, prepMs: 0.12, decayScale: 850,
     description: "Superconducting transmons · four-neighbor square lattice · 53-qubit reference. The 2021 datasheet specifies 32 ns √iSWAP gates with 0.9% typical isolated error. The resource model assumes two native entanglers per CX; this conversion needs verification against a gate-decomposition reference. Larger capacities are exploratory overrides." },
   ionq_forte_trapped_ion: { label: "IonQ Forte (Trapped Ion)", topology: "All-to-All Ion Trap", referenceQubits: 36, depthMultiplier: 0.55, gateTimeMultiplier: 180, prepMs: 0.85, decayScale: 8500,
