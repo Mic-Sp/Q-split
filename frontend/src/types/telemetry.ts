@@ -20,6 +20,41 @@ export interface SimulationRequest {
   routing?: Partial<RoutingConfig> | null;
 }
 
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+/** Per-shot circuit resources before hardware routing; host/native times are milliseconds. */
+export interface CircuitSpec {
+  n_qubits: number;
+  depth: number;
+  n_1q: number;
+  n_2q: number;
+  n_meas: number;
+  stage1_ms: number;
+  stage3_ms: number;
+  native_classical_ms?: number | null;
+  native_classical_name?: string | null;
+}
+
+/** Backend QPU characterization. Null capacity/coherence fields represent the ideal reference. */
+export interface QPUProfile {
+  id: string;
+  name: string;
+  n_qubits_max: number | null;
+  t1_us: number | null;
+  t2_us: number | null;
+  t_1q_ns: number;
+  t_2q_ns: number;
+  t_meas_ns: number;
+  t_reset_ns: number;
+  err_1q: number;
+  err_2q: number;
+  err_meas: number;
+  topology_factor: number;
+  /** Omitted by historical profiles created before native-entangler conversion was introduced. */
+  native_2q_per_cx?: number;
+  provenance: Record<string, JsonValue>;
+}
+
 /** Alternative idle terms in natural logs; null denotes negative infinity (certain failure). */
 export interface LogSurvivalTerms {
   two_qubit: number | null;
@@ -32,6 +67,8 @@ export interface LogSurvivalTerms {
 /** Optional typed fields keep historical runs and workload-specific extra metrics readable. */
 export interface StageMetrics extends Record<string, unknown> {
   resource_model_version?: 1 | 2;
+  circuit_spec?: CircuitSpec;
+  qpu_profile?: QPUProfile;
   launch_overhead_ms?: number;
   measurement_reset_ms?: number;
   gate_execution_ms?: number;

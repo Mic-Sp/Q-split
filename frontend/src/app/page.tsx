@@ -12,6 +12,7 @@ import { OffloadVerdictStrip } from "@/components/offload-verdict";
 import { InfoPopover } from "@/components/info-popover";
 import { CaptureBenchmark } from "@/components/capture-benchmark";
 import { CoherenceRangeNote } from "@/components/coherence-range-note";
+import { StructuredTelemetryDetails } from "@/components/structured-telemetry-details";
 import { recordCompletedRun, sessionForWorkload, type SimulationSession } from "@/lib/simulation-session";
 import { restoredConfiguration } from "@/lib/benchmark-snapshot";
 import type { SavedSimulationRun } from "@/types/run-history";
@@ -27,7 +28,7 @@ import {
   GitCompareArrows, Layers3, LoaderCircle, Play, Radio, Workflow, Zap,
 } from "lucide-react";
 import {
-  DEFAULT_AVAILABLE_QUBITS, DEFAULT_ROUTING, formatValue, hardwareDefaultQubits, PIPELINE, simulate,
+  DEFAULT_AVAILABLE_QUBITS, DEFAULT_ROUTING, formatValue, hardwareDefaultQubits, isScalarMetricValue, PIPELINE, simulate,
   type Snapshot, type Transition,
 } from "@/lib/telemetry";
 import type { HardwareProfile, RoutingConfig, SimulationRequest, StageNode, StageStatus, StageTelemetry, WorkloadId } from "@/types/telemetry";
@@ -161,13 +162,14 @@ function PipelineCard({ index, stage, selectedNode, onNodeChange, pending, workl
         </div>
       )}
       <dl className="mb-2 grid grid-cols-2 gap-1 xl:grid-cols-3">
-        {stage ? Object.entries(stage.metrics).filter(([key]) => !CAPACITY_PANEL_METRICS.has(key) && !COHERENCE_RANGE_METRICS.has(key) && key !== "classical_cpu_baseline").map(([key, value]) => (
+        {stage ? Object.entries(stage.metrics).filter(([key, value]) => isScalarMetricValue(value) && !CAPACITY_PANEL_METRICS.has(key) && !COHERENCE_RANGE_METRICS.has(key) && key !== "classical_cpu_baseline").map(([key, value]) => (
           <div key={key} className="min-w-0 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 px-2 py-1">
             <dt className="text-[9px] leading-3 text-slate-600 dark:text-slate-400 [overflow-wrap:anywhere]">{metricLabels[key] ?? key.replace(/_ms$/, "").replaceAll("_", " ")}</dt>
             <dd title={key.endsWith("_ms") ? formatRawMilliseconds(value) : typeof value === "number" ? String(value) : formatValue(value)} className={["mt-0.5 font-mono text-[10px] leading-4 [overflow-wrap:anywhere]", key === "coherence_survival_pct" ? style?.text : "text-slate-800 dark:text-slate-200"].join(" ")}>{key.endsWith("_ms") ? formatDuration(value) : key === "coherence_survival_pct" || key === "coherence_survival" ? formatSurvivalPercent(value) : key === "routing_model" ? String(value) : key === "depth_model" ? String(value).startsWith("Compiled") ? "Aer reference" : "Analytical" : typeof value === "boolean" ? value ? "Yes" : "No" : formatValue(value)}{key === "coherence_survival_pct" && <CoherenceRangeNote stage={stage} />}</dd>
           </div>
         )) : <div className={["col-span-full h-12 rounded-lg bg-slate-100 dark:bg-slate-800/40", pending ? "animate-pulse" : ""].join(" ")} aria-hidden="true" />}
       </dl>
+      {stage && <StructuredTelemetryDetails metrics={stage.metrics} />}
       <div className="mt-auto rounded-lg bg-slate-50 dark:bg-slate-950/70 p-1.5">
         <p className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">Stage output</p>
         <p className="text-[11px] leading-4 text-slate-600 dark:text-slate-400 [overflow-wrap:anywhere]">
@@ -512,8 +514,8 @@ function DeltaTable({ changes }: { changes: Transition["changes"] }) {
     <div role="region" aria-label="Metric changes" tabIndex={0} className="overflow-x-auto rounded-sm">
       <table className="w-full min-w-[420px] table-fixed text-left text-[11px]">
         <thead><tr className="border-b border-slate-200 dark:border-slate-800 text-[10px] uppercase tracking-wider text-slate-600 dark:text-slate-400"><th className="pb-2 pr-3 font-medium">Parameter / metric</th><th className="pb-2 pr-3 font-medium">Previous</th><th className="pb-2 font-medium">Current</th></tr></thead>
-        <tbody>{changes.map((change) => (
-          <tr key={change.label} className="border-b border-slate-200 dark:border-slate-800/60 last:border-0">
+        <tbody>{changes.map((change, index) => (
+          <tr key={`${change.label}-${index}`} className="border-b border-slate-200 dark:border-slate-800/60 last:border-0">
             <th scope="row" className="py-1.5 pr-3 font-normal capitalize text-slate-600 dark:text-slate-400 [overflow-wrap:anywhere]">{change.label}</th>
             <td title={change.beforeRaw} className="py-1.5 pr-3 font-mono text-slate-600 dark:text-slate-400 [overflow-wrap:anywhere]">{change.before}</td>
             <td title={change.afterRaw} className="py-1.5 font-mono text-slate-800 dark:text-slate-200 [overflow-wrap:anywhere]">{change.after}</td>

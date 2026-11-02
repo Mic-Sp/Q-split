@@ -26,6 +26,12 @@ export const PIPELINE = [
   { key: "stage_3_classical_post", routingKey: "stage_3_node", label: "Classical postprocessing" },
 ] as const;
 
+/** Flat tables accept wire scalars and missing values; structured telemetry belongs in disclosures. */
+export function isScalarMetricValue(value: unknown): value is string | number | boolean | null | undefined {
+  return value === null || value === undefined || typeof value === "string" || typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value));
+}
+
 /**
  * Render generic metric values for display, keeping numeric/BigInt formatting out of raw exports.
  */
@@ -62,7 +68,9 @@ export function describeChanges(before: Snapshot, after: Snapshot): MetricDelta[
   }];
   const changes: MetricDelta[] = [];
   const add = (label: string, from: unknown, to: unknown, duration = false, percentage = false) => {
-    if (JSON.stringify(from) !== JSON.stringify(to)) changes.push({ label,
+    // Check both sides so object/scalar transitions never serialize diagnostics into flat rows.
+    if (!isScalarMetricValue(from) || !isScalarMetricValue(to)) return;
+    if (from !== to) changes.push({ label,
       before: duration ? formatDuration(from) : percentage ? formatSurvivalPercent(from) : formatValue(from),
       after: duration ? formatDuration(to) : percentage ? formatSurvivalPercent(to) : formatValue(to),
       ...(duration ? { beforeRaw: formatRawMilliseconds(from), afterRaw: formatRawMilliseconds(to) } : {}),
@@ -82,7 +90,11 @@ export function describeChanges(before: Snapshot, after: Snapshot): MetricDelta[
     add(`${label} · status`, previous?.status, current?.status);
     add(`${label} · latency`, previous?.latency_ms, current?.latency_ms, true);
     const keys = new Set([...Object.keys(previous?.metrics ?? {}), ...Object.keys(current?.metrics ?? {})]);
-    for (const metric of keys) add(`${label} · ${metric.replace(/_ms$/, "").replaceAll("_", " ")}`, previous?.metrics[metric], current?.metrics[metric], metric.endsWith("_ms"), metric === "coherence_survival_pct");
+    for (const metric of keys) {
+      // The stage-level latency above is authoritative; some payloads also echo it inside metrics.
+      if (metric === "latency_ms") continue;
+      add(`${label} · ${metric.replace(/_ms$/, "").replaceAll("_", " ")}`, previous?.metrics[metric], current?.metrics[metric], metric.endsWith("_ms"), metric === "coherence_survival_pct");
+    }
   }
   return changes;
 }
