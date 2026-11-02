@@ -365,7 +365,7 @@ class RoutingTests(unittest.TestCase):
                     result = run_shors_pipeline(scale, profile, available_qubits=capacity)
                     kernel = result.stages[STAGE_KEYS[1]]
                     reference = math.ceil(plan["circuit_depth"] * DEPTH_EXPANSION_FACTOR)
-                    depth = math.ceil(reference * architecture.topology_factor)
+                    depth = math.ceil(reference * architecture.topology_factor * architecture.native_2q_per_cx)
                     self.assertEqual(kernel.metrics["reference_circuit_depth"], reference)
                     self.assertEqual(kernel.metrics["circuit_depth"], depth)
                     self.assertAlmostEqual(kernel.latency_ms, 0.30 + 512 * (
@@ -374,7 +374,7 @@ class RoutingTests(unittest.TestCase):
                     self.assertEqual(kernel.metrics["qubits_allocated"], plan["qubits_allocated"])
                     spec = kernel.metrics["circuit_spec"]
                     survival = ((1 - architecture.err_1q)**spec["n_1q"] *
-                                (1 - architecture.err_2q)**math.ceil(spec["n_2q"] * architecture.topology_factor) *
+                                (1 - architecture.err_2q)**math.ceil(spec["n_2q"] * architecture.topology_factor * architecture.native_2q_per_cx) *
                                 (1 - architecture.err_meas)**spec["n_meas"])
                     if architecture.t1_us is not None:
                         survival *= math.exp(-spec["n_qubits"] * depth * architecture.t_2q_ns / 1000 / architecture.t1_us)
@@ -386,7 +386,7 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(stages["ideal_sim"].metrics["coherence_survival_pct"], 100)
         for profile, architecture in HARDWARE_PROFILES.items():
             stage = stages[profile]
-            depth = math.ceil(math.ceil(288 * DEPTH_EXPANSION_FACTOR) * architecture.topology_factor)
+            depth = math.ceil(math.ceil(288 * DEPTH_EXPANSION_FACTOR) * architecture.topology_factor * architecture.native_2q_per_cx)
             self.assertEqual(stage.metrics["circuit_depth"], depth)
             self.assertEqual(stage.metrics["aer_reference_circuit_depth"], 189)
             self.assertAlmostEqual(stage.latency_ms, 0.30 + 512 * (

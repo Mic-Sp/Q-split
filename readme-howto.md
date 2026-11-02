@@ -30,7 +30,7 @@ Your goal is to find the best hardware combo (`CPU`, `GPU`, or `QPU`) without ru
    * *Note:* N = 15 and M = 64 sequential references execute in Qiskit Aer; other tiers and larger scales use analytical projections. Select the **Sequential** tier to explore the base-scale Aer reference. Measured simulator timing is separate from projected GPU/QPU timing and coherence.
 3. **`03 / HARDWARE PROFILE` — Pick a Hardware Model:**
    * **IBM Heron NISQ:** 133-qubit r1 reference with superconducting gates and sparse Heavy-Hex connectivity.
-   * **Google Weber (2D Grid):** An exploratory 72-qubit grid preset. The published Weber physical device has 53 active qubits; this preset's capacity is an exploratory model setting.
+   * **Google Weber (2D Grid):** A 53-qubit reference from the 2021 datasheet, using 32 ns √iSWAP gates and their 0.9% typical isolated error. The model assumes two native entanglers per CX. The 72-qubit tier and larger capacities remain exploratory overrides.
    * **IonQ Forte (Trapped Ion):** 36-qubit reference with high gate fidelity, long coherence, and all-to-all connectivity. Laser-driven gates are slower in the model; high fidelity does not mean noise-free execution.
    * **Ideal Noise-Free:** Theoretical reference with 100% modeled coherence for feasible execution. Capacity and routing limits still apply.
 4. **`04 / AVAILABLE QPU QUBITS` & `TIERS` — Trade Space for Speed:**

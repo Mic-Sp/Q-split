@@ -114,7 +114,7 @@ function metrics(value: unknown): StageTelemetry["metrics"] {
       result[key] = number(source[key], min, limit, integer);
     }
   }
-  for (const key of ["routing_supported", "execution_feasible", "parallel_speedup_ceiling_reached", "aer_executed", "retrieval_reliable"]) {
+  for (const key of ["routing_supported", "execution_feasible", "parallel_speedup_ceiling_reached", "aer_executed", "retrieval_reliable", "capacity_override"]) {
     if (Object.hasOwn(source, key)) {
       if (typeof source[key] !== "boolean") invalid();
       result[key] = source[key];
@@ -191,11 +191,17 @@ function validateRun(value: unknown): CompletedRun {
       const expectedMetrics = numeric.resource_model_version === 1 ? {
         connectivity_topology: architecture.topology, reference_qubits: resource.referenceQubits,
         routing_depth_multiplier: resource.depthMultiplier, gate_time_multiplier: null, coherence_decay_scale: null,
+        capacity_override: resource.referenceQubits !== null && request.available_qubits! > resource.referenceQubits,
       } : { connectivity_topology: architecture.topology,
         reference_qubits: architecture.referenceQubits, routing_depth_multiplier: architecture.depthMultiplier,
         gate_time_multiplier: architecture.gateTimeMultiplier, coherence_decay_scale: architecture.decayScale };
       for (const [key, expected] of Object.entries(expectedMetrics)) {
-        if (numeric[key] !== undefined && numeric[key] !== expected) invalid();
+        // Historical unversioned Weber runs labeled the exploratory 72-qubit
+        // preset as their reference. Preserve those saved runs without treating
+        // 72 as the published capacity or relaxing versioned reference checks.
+        const legacyWeberReference = numeric.resource_model_version === undefined &&
+          request.hardware_profile === "google_weber_grid" && key === "reference_qubits" && numeric[key] === 72;
+        if (numeric[key] !== undefined && numeric[key] !== expected && !legacyWeberReference) invalid();
       }
     }
     if (node === "QPU" && numeric.available_qubits !== undefined && numeric.available_qubits !== request.available_qubits) invalid();

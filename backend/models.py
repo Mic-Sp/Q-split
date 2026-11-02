@@ -61,7 +61,9 @@ class QPUProfile(BaseModel):
     """Representative physics, not a live device calibration.
 
     None for capacity means unbounded; None for T1/T2 denotes the ideal reference.
-    topology_factor multiplies depth and two-qubit count once to model routing.
+    topology_factor models routing; native_2q_per_cx converts CX-basis resources
+    to native entanglers. Their product multiplies depth and two-qubit count once.
+    t_2q_ns and err_2q describe the same native gate.
     The estimator bills depth in two-qubit-duration units, retains a T1 point
     estimate, and uses T2 for its alternative idle-decay sensitivity scenario.
     Single-qubit duration is retained for future scheduling models.
@@ -82,4 +84,5 @@ class QPUProfile(BaseModel):
     err_2q: float = Field(ge=0, le=1)
     err_meas: float = Field(ge=0, le=1)
     topology_factor: float = Field(ge=1)
+    native_2q_per_cx: float = Field(default=1.0, ge=1)
     provenance: dict[str, Any]

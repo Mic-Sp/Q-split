@@ -1,27 +1,31 @@
 import { HARDWARE_PROFILE_IDS, type HardwareProfile } from "@/types/telemetry";
 
+// Published reference capacities and exploratory choices, including legacy 72-qubit runs.
+export const QUBIT_CAPACITY_PRESETS = [16, 36, 53, 72, 133, 1121, 2048, 4096, 16384];
+
 export const HARDWARE_PROFILES = {
   ibm_heron_nisq: { label: "IBM Heron NISQ", topology: "Heavy-Hex", referenceQubits: 133, depthMultiplier: 1, gateTimeMultiplier: 1, prepMs: 0.15, decayScale: 1200,
     description: "Superconducting transmons · Heavy-Hex connectivity · 133-qubit reference. Baseline routing depth and gate time: 1.0×; 0.15 ms state preparation; decay scale 1200. The N=15 sequential Aer reference retains its legacy 0.05 ms setup." },
-  google_weber_grid: { label: "Google Weber (2D Grid)", topology: "2D Square Grid", referenceQubits: 72, depthMultiplier: 0.78, gateTimeMultiplier: 0.45, prepMs: 0.12, decayScale: 850,
-    description: "Superconducting transmons · four-neighbor square lattice · fast ~20 ns-class fSim/√iSWAP gates. Model: 0.78× Heavy-Hex depth, 0.45× gate time, 0.12 ms prep, decay scale 850. The requested 72-qubit preset is exploratory; Google's published Weber grid has 53 active qubits." },
+  google_weber_grid: { label: "Google Weber (2D Grid)", topology: "2D Square Grid", referenceQubits: 53, depthMultiplier: 0.78, gateTimeMultiplier: 0.45, prepMs: 0.12, decayScale: 850,
+    description: "Superconducting transmons · four-neighbor square lattice · 53-qubit reference. The 2021 datasheet specifies 32 ns √iSWAP gates with 0.9% typical isolated error. The resource model assumes two native entanglers per CX; this conversion needs verification against a gate-decomposition reference. Larger capacities are exploratory overrides." },
   ionq_forte_trapped_ion: { label: "IonQ Forte (Trapped Ion)", topology: "All-to-All Ion Trap", referenceQubits: 36, depthMultiplier: 0.55, gateTimeMultiplier: 180, prepMs: 0.85, decayScale: 8500,
     description: "Trapped-ion optical/hyperfine qubits · all-to-all connectivity · 36-qubit reference. Removing SWAP routing layers models 0.55× depth. Laser-driven shared vibrational-mode gates cost 180× gate time, with 0.85 ms combined prep/readout; long coherence uses decay scale 8500." },
   ideal_sim: { label: "Ideal Noise-Free", topology: "Noise-free reference", referenceQubits: null, depthMultiplier: 1, gateTimeMultiplier: 1, prepMs: 0.15, decayScale: null,
     description: "Noise-free reference with 100% coherence; baseline depth and gate time. Capacity is controlled separately; this profile does not imply unlimited qubits or error-corrected hardware. Analytical prep is 0.15 ms; N=15 sequential Aer retains 0.05 ms setup." },
 } satisfies Record<HardwareProfile, { label: string; topology: string; referenceQubits: number | null; depthMultiplier: number; gateTimeMultiplier: number; prepMs: number; decayScale: number | null; description: string }>;
 
-// Versioned resource-model constants. Keep the registry above for historical
-// unversioned runs; backend integration tests verify this new trust-boundary map.
+// Versioned resource-model constants. Legacy timing constants above remain for
+// unversioned runs; reference capacities and descriptions reflect the source.
+// Backend integration tests verify this trust-boundary map.
 export const RESOURCE_QPU_PROFILES = {
   ibm_heron_nisq: { referenceQubits: 133, depthMultiplier: 1.5, t1Us: 200, t2Us: 150, t1qNs: 32, t2qNs: 68,
-    measurementNs: 1500, resetNs: 200000, error1q: 0.0003, error2q: 0.003, errorMeasurement: 0.01 },
-  google_weber_grid: { referenceQubits: 53, depthMultiplier: 1.2, t1Us: 15, t2Us: 20, t1qNs: 25, t2qNs: 12,
-    measurementNs: 4000, resetNs: 200000, error1q: 0.001, error2q: 0.009, errorMeasurement: 0.04 },
+    measurementNs: 1500, resetNs: 200000, error1q: 0.0003, error2q: 0.003, errorMeasurement: 0.01, native2qPerCx: 1 },
+  google_weber_grid: { referenceQubits: 53, depthMultiplier: 1.2, t1Us: 15, t2Us: 20, t1qNs: 25, t2qNs: 32,
+    measurementNs: 4000, resetNs: 200000, error1q: 0.001, error2q: 0.009, errorMeasurement: 0.04, native2qPerCx: 2 },
   ionq_forte_trapped_ion: { referenceQubits: 36, depthMultiplier: 1, t1Us: 100000000, t2Us: 1000000, t1qNs: 110000, t2qNs: 900000,
-    measurementNs: 250000, resetNs: 1000000, error1q: 0.0002, error2q: 0.004, errorMeasurement: 0.005 },
+    measurementNs: 250000, resetNs: 1000000, error1q: 0.0002, error2q: 0.004, errorMeasurement: 0.005, native2qPerCx: 1 },
   ideal_sim: { referenceQubits: null, depthMultiplier: 1, t1Us: null, t2Us: null, t1qNs: 32, t2qNs: 250,
-    measurementNs: 1500, resetNs: 0, error1q: 0, error2q: 0, errorMeasurement: 0 },
+    measurementNs: 1500, resetNs: 0, error1q: 0, error2q: 0, errorMeasurement: 0, native2qPerCx: 1 },
 } satisfies Record<HardwareProfile, object>;
 
 /**
@@ -44,7 +48,7 @@ export function hardwareLabel(value: string) {
 export function architectureTradeOff(profile: HardwareProfile, resourceVersion?: unknown) {
   if (resourceVersion === 1) {
     const physics = RESOURCE_QPU_PROFILES[profile];
-    return `${HARDWARE_PROFILES[profile].topology}: ${physics.depthMultiplier}× routing depth; ${physics.t2qNs} ns representative entangler. Batch timing includes shots, measurement/reset and launch. Survival combines gate errors and all-qubit T1 decay; topology and timing are approximations.`;
+    return `${HARDWARE_PROFILES[profile].topology}: ${physics.depthMultiplier}× routing depth; ${physics.t2qNs} ns representative native entangler; ${physics.native2qPerCx} native 2Q gates per CX (assumed, applied to depth and 2Q count). Batch timing includes shots, measurement/reset and launch. Survival combines gate errors and all-qubit T1 decay; routing and native conversion are approximations.`;
   }
   if (profile === "google_weber_grid") return "Square-grid connectivity reduces modeled SWAP routing to 0.78× Heavy-Hex depth with 0.45× gate time, while its coherence decay window is shorter (850).";
   if (profile === "ionq_forte_trapped_ion") return "All-to-all ion connectivity removes SWAP layers (0.55× depth), but laser-driven shared vibrational-mode gates cost 180× gate time with 0.85 ms prep/readout; the decay scale is 8500.";

@@ -54,6 +54,46 @@ def test_topology_expands_depth_and_two_qubit_errors_once_without_mutation(spec,
     assert profile.topology_factor == 1
 
 
+def test_native_conversion_doubles_routed_depth_and_two_qubit_count(spec, profile):
+    routed = profile.model_copy(update={"topology_factor": 1.5})
+    one = estimate_qpu(spec, routed, 100, 0.5)
+    two = estimate_qpu(spec, routed.model_copy(update={"native_2q_per_cx": 2.0}), 100, 0.5)
+    assert routed.native_2q_per_cx == 1.0
+    assert two["circuit_depth"] == 2 * one["circuit_depth"] == 30
+    assert two["n_2q"] == 2 * one["n_2q"] == 18
+    assert two["gate_execution_ms"] == 2 * one["gate_execution_ms"]
+    assert two["measurement_reset_ms"] == one["measurement_reset_ms"]
+    assert two["launch_overhead_ms"] == one["launch_overhead_ms"]
+    assert two["coherence_survival"] == pytest.approx(0.99**12 * 0.98**18 * 0.97**3 * math.exp(-3 * 3 / 200))
+    assert spec.depth == 10 and spec.n_2q == 6
+
+
+def test_routing_and_native_conversion_round_up_only_after_multiplication(spec, profile):
+    native = profile.model_copy(update={"topology_factor": 1.25, "native_2q_per_cx": 2.0})
+    actual = estimate_qpu(spec, native, 1, 0)
+    assert actual["circuit_depth"] == 25
+    assert actual["n_2q"] == 15  # ceil(6 * 1.25 * 2), not ceil(6 * 1.25) * 2.
+
+
+def test_weber_time_and_error_describe_the_same_sqrt_iswap_native_gate():
+    weber = HARDWARE_PROFILES["google_weber_grid"]
+    assert (weber.t_2q_ns, weber.err_2q) == (32, 0.009)
+    assert weber.native_2q_per_cx == 2.0
+    statistics = weber.provenance["statistics"]
+    for field in ("t_2q_ns", "err_2q"):
+        assert statistics[field]["gate"] == "sqrt(iSWAP)"
+        assert statistics[field]["source_url"] == "https://quantumai.google/hardware/datasheet/weber.pdf"
+    assert "typical (median) isolated XEB" in statistics["err_2q"]["statistic_type"]
+    assert weber.provenance["value_types"]["err_2q"] == "vendor_or_literature_approximation"
+    assert weber.provenance["value_types"]["native_2q_per_cx"] == "model_assumption"
+    assert "gate-decomposition reference" in weber.provenance["notes"]
+    assert statistics["repetition_rate_hz"]["range"] == [1000, 5000]
+    assert statistics["repetition_rate_hz"]["statistic_type"] == "typical repetition-rate range"
+    assert weber.t_reset_ns == 200_000
+    assert all(profile.native_2q_per_cx == 1.0 for key, profile in HARDWARE_PROFILES.items()
+               if key != "google_weber_grid")
+
+
 def test_capacity_is_inclusive_and_cannot_charge_an_infeasible_execution(spec, profile):
     assert estimate_qpu(spec, profile, 100, 0.5)["execution_feasible"]
     too_small = profile.model_copy(update={"n_qubits_max": 2})
@@ -65,7 +105,7 @@ def test_capacity_is_inclusive_and_cannot_charge_an_infeasible_execution(spec, p
 
 def test_unit_conversions_and_noise_free_reference(spec):
     assert HARDWARE_PROFILES["ibm_heron_nisq"].t1_us == 200
-    assert HARDWARE_PROFILES["google_weber_grid"].t_2q_ns == 12
+    assert HARDWARE_PROFILES["google_weber_grid"].t_2q_ns == 32
     assert HARDWARE_PROFILES["ionq_forte_trapped_ion"].t1_us == 100 * 1e6
     ideal = estimate_qpu(spec, HARDWARE_PROFILES["ideal_sim"], 512, 0.3)
     assert ideal["coherence_survival"] == 1
@@ -133,7 +173,8 @@ def test_circuit_models_reject_invalid_resources(spec, field, value):
 
 
 @pytest.mark.parametrize("field,value", [("t1_us", 0), ("t_2q_ns", -1), ("err_1q", -0.1),
-                                         ("err_2q", 1.01), ("topology_factor", 0), ("t_meas_ns", math.inf)])
+                                         ("err_2q", 1.01), ("topology_factor", 0), ("t_meas_ns", math.inf),
+                                         ("native_2q_per_cx", 0.9), ("native_2q_per_cx", math.inf)])
 def test_profiles_reject_invalid_physics(profile, field, value):
     with pytest.raises(ValidationError):
         QPUProfile.model_validate({**profile.model_dump(), field: value})
@@ -141,8 +182,8 @@ def test_profiles_reject_invalid_physics(profile, field, value):
 
 def test_profiles_record_per_value_provenance_and_capacity_override_does_not_mutate():
     for profile in HARDWARE_PROFILES.values():
-        assert profile.provenance["retrieval_date"] == "2026-11-01"
-        for field in ("t1_us", "t2_us", "t_1q_ns", "t_2q_ns", "t_meas_ns", "t_reset_ns", "err_1q", "err_2q", "err_meas"):
+        assert profile.provenance["retrieval_date"] == ("2026-11-02" if profile.id == "google_weber_grid" else "2026-11-01")
+        for field in ("t1_us", "t2_us", "t_1q_ns", "t_2q_ns", "t_meas_ns", "t_reset_ns", "err_1q", "err_2q", "err_meas", "native_2q_per_cx"):
             assert field in profile.provenance["value_types"]
     vendor = HARDWARE_PROFILES["google_weber_grid"]
     exploratory = execution_profile(vendor, 1024)

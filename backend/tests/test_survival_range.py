@@ -22,9 +22,9 @@ def spec():
 def test_point_is_unchanged_and_range_is_ordered_for_every_profile(spec, profile_id):
     profile = HARDWARE_PROFILES[profile_id]
     actual = estimate_qpu(spec, profile, 512, 0.3)
-    # Reproduce the previous estimator's T1-only computation independently.
-    depth = math.ceil(spec.depth * profile.topology_factor)
-    cx = math.ceil(spec.n_2q * profile.topology_factor)
+    # Reproduce the T1-only computation independently, including native conversion.
+    depth = math.ceil(spec.depth * profile.topology_factor * profile.native_2q_per_cx)
+    cx = math.ceil(spec.n_2q * profile.topology_factor * profile.native_2q_per_cx)
     legacy_log = 0.0
     for count, error in [(spec.n_1q, profile.err_1q), (cx, profile.err_2q), (spec.n_meas, profile.err_meas)]:
         if count:

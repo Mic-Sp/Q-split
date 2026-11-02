@@ -60,7 +60,7 @@ class QuantumMipsPipelineTests(unittest.TestCase):
             with self.subTest(profile=profile):
                 result = quantum_mips_kernel(64, profile, "QPU", 10)
                 reference = mips_reference_depth(64)
-                depth = math.ceil(reference * architecture.topology_factor)
+                depth = math.ceil(reference * architecture.topology_factor * architecture.native_2q_per_cx)
                 self.assertEqual(result.metrics["aer_reference_circuit_depth"], 640)
                 self.assertEqual(result.metrics["reference_circuit_depth"], reference)
                 self.assertEqual(result.metrics["circuit_depth"], depth)
@@ -68,7 +68,7 @@ class QuantumMipsPipelineTests(unittest.TestCase):
                     depth * architecture.t_2q_ns + architecture.t_meas_ns + architecture.t_reset_ns) / 1e6)
                 self.assertEqual(result.metrics["io_state_prep_ms"], 0)
                 self.assertTrue(result.metrics["qpu_io_included_in_latency"])
-                two_qubit_count = math.ceil(math.ceil(202 * GATE_COUNT_EXPANSION_FACTOR) * architecture.topology_factor)
+                two_qubit_count = math.ceil(math.ceil(202 * GATE_COUNT_EXPANSION_FACTOR) * architecture.topology_factor * architecture.native_2q_per_cx)
                 survival = ((1 - architecture.err_1q)**math.ceil(2 * 202 * GATE_COUNT_EXPANSION_FACTOR) * (1 - architecture.err_2q)**two_qubit_count *
                             (1 - architecture.err_meas)**6)
                 if architecture.t1_us is not None:
@@ -93,7 +93,7 @@ class QuantumMipsPipelineTests(unittest.TestCase):
                     result = quantum_mips_kernel(scale, profile, "QPU", capacity)
                     architecture = HARDWARE_PROFILES[profile]
                     reference = mips_reference_depth(scale)
-                    depth = math.ceil(math.ceil(reference * [1.0, 0.40, 0.20][tier]) * architecture.topology_factor)
+                    depth = math.ceil(math.ceil(reference * [1.0, 0.40, 0.20][tier]) * architecture.topology_factor * architecture.native_2q_per_cx)
                     self.assertEqual(result.metrics["reference_circuit_depth"], reference)
                     self.assertEqual(result.metrics["circuit_depth"], depth)
                     self.assertAlmostEqual(result.latency_ms, 0.30 + 1024 * (

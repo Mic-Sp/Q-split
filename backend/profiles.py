@@ -14,12 +14,15 @@ FORTE_SPECS = "https://www.ionq.com/quantum-systems/forte"
 FORTE_PAPER = "https://arxiv.org/html/2308.05071v2"
 
 
-def _provenance(source_url, sources, published, notes):
+def _provenance(source_url, sources, published, notes, *, retrieval_date=RETRIEVED_ON, statistics=None):
     fields = ["n_qubits_max", "t1_us", "t2_us", "t_1q_ns", "t_2q_ns", "t_meas_ns",
-              "t_reset_ns", "err_1q", "err_2q", "err_meas", "topology_factor"]
-    return {"source_url": source_url, "sources": sources, "retrieval_date": RETRIEVED_ON,
+              "t_reset_ns", "err_1q", "err_2q", "err_meas", "topology_factor", "native_2q_per_cx"]
+    return {"source_url": source_url, "sources": sources, "retrieval_date": retrieval_date,
             "value_types": {field: "vendor_or_literature_approximation" if field in published else "model_assumption"
-                            for field in fields}, "notes": notes}
+                            for field in fields},
+            "statistics": statistics or {},
+            "notes": notes + " The native_2q_per_cx conversion is a model assumption and should "
+                             "be verified against a gate-decomposition reference."}
 
 
 HARDWARE_PROFILES = {
@@ -27,7 +30,7 @@ HARDWARE_PROFILES = {
         id="ibm_heron_nisq", name="IBM Heron r1 (representative)", n_qubits_max=133,
         t1_us=200, t2_us=150, t_1q_ns=32, t_2q_ns=68,
         t_meas_ns=1500, t_reset_ns=200_000,
-        err_1q=0.0003, err_2q=0.003, err_meas=0.01, topology_factor=1.5,
+        err_1q=0.0003, err_2q=0.003, err_meas=0.01, topology_factor=1.5, native_2q_per_cx=1.0,
         provenance=_provenance(IBM_NOISE, [IBM_NOISE, IBM_PROCESSORS],
                                {"n_qubits_max", "t1_us", "t_2q_ns"},
             "133 qubits selects Heron r1. T1=200 us is a family-scale approximation; 68 ns is an "
@@ -35,20 +38,31 @@ HARDWARE_PROFILES = {
             "the Heavy-Hex routing multiplier are explicit modeling assumptions.")),
     "google_weber_grid": QPUProfile(
         id="google_weber_grid", name="Google Weber / Sycamore (representative)", n_qubits_max=53,
-        t1_us=15, t2_us=20, t_1q_ns=25, t_2q_ns=12,
+        t1_us=15, t2_us=20, t_1q_ns=25, t_2q_ns=32,
         t_meas_ns=4000, t_reset_ns=200_000,
-        err_1q=0.001, err_2q=0.009, err_meas=0.04, topology_factor=1.2,
+        err_1q=0.001, err_2q=0.009, err_meas=0.04, topology_factor=1.2, native_2q_per_cx=2.0,
         provenance=_provenance(WEBER_DATASHEET, [WEBER_DATASHEET],
-                               {"n_qubits_max", "t1_us", "t_1q_ns", "t_2q_ns", "t_meas_ns"},
-            "2021 datasheet: 53 active Weber qubits, median T1=15 us, 25 ns 1Q, 12 ns Sycamore "
-            "entangler, 4 us readout. Error rates are rounded proxies across differing gate/SPAM "
-            "benchmarks; 12 ns Sycamore is not a CX duration. Reset, T2 and square-grid topology "
-            "overhead are assumptions; generic CX-based circuits are not device-natively scheduled.")),
+                               {"n_qubits_max", "t1_us", "t_1q_ns", "t_2q_ns", "t_meas_ns", "err_1q", "err_2q"},
+            "14 May 2021 datasheet: 53 Weber qubits, typical (median) T1=15 us, 25 ns 1Q, "
+            "32 ns sqrt(iSWAP), 4 us readout. The 0.9% typical isolated XEB error is for that same "
+            "sqrt(iSWAP) gate; typical parallel error is 1.4% (context, not used). Assume two "
+            "native sqrt(iSWAP) gates per CX for both depth and 2Q count. Reset remains an "
+            "assumption; the typical 1–5 kHz repetition rate is supporting context, not a "
+            "standalone reset measurement. T2, measurement-error proxy and square-grid routing "
+            "are assumptions; CX-based circuits are not device-natively scheduled.",
+            retrieval_date="2026-11-02", statistics={
+                "t_2q_ns": {"gate": "sqrt(iSWAP)", "statistic_type": "specified native gate duration",
+                            "source_url": WEBER_DATASHEET},
+                "err_2q": {"gate": "sqrt(iSWAP)", "statistic_type": "typical (median) isolated XEB error per gate, Jan–Mar 2021",
+                           "source_url": WEBER_DATASHEET},
+                "repetition_rate_hz": {"range": [1000, 5000], "statistic_type": "typical repetition-rate range",
+                                       "source_url": WEBER_DATASHEET, "usage": "supporting context only; reset unchanged"},
+            })),
     "ionq_forte_trapped_ion": QPUProfile(
         id="ionq_forte_trapped_ion", name="IonQ Forte (representative)", n_qubits_max=36,
         t1_us=100_000_000, t2_us=1_000_000, t_1q_ns=110_000, t_2q_ns=900_000,
         t_meas_ns=250_000, t_reset_ns=1_000_000,
-        err_1q=0.0002, err_2q=0.004, err_meas=0.005, topology_factor=1.0,
+        err_1q=0.0002, err_2q=0.004, err_meas=0.005, topology_factor=1.0, native_2q_per_cx=1.0,
         provenance=_provenance(FORTE_SPECS, [FORTE_SPECS, FORTE_PAPER],
                                {"n_qubits_max", "t1_us", "t2_us", "t_1q_ns", "t_2q_ns", "err_1q", "err_2q", "err_meas"},
             "T1=100 s uses the upper end of the vendor's 10–100 s range; T2 is about 1 s. "
@@ -58,7 +72,7 @@ HARDWARE_PROFILES = {
     "ideal_sim": QPUProfile(
         id="ideal_sim", name="Ideal noise-free reference", n_qubits_max=None,
         t1_us=None, t2_us=None, t_1q_ns=32, t_2q_ns=250, t_meas_ns=1500, t_reset_ns=0,
-        err_1q=0, err_2q=0, err_meas=0, topology_factor=1,
+        err_1q=0, err_2q=0, err_meas=0, topology_factor=1, native_2q_per_cx=1.0,
         provenance=_provenance(None, [], set(),
             "Theoretical reference: unlimited capacity, no gate/SPAM errors or T1 decay. Finite "
             "gate/readout durations are illustrative, so shot repetition still costs time.")),

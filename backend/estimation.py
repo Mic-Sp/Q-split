@@ -19,8 +19,10 @@ CLASSICAL_GPU_COMPUTE_FACTOR = 0.25
 def estimate_qpu(spec: CircuitSpec, profile: QPUProfile, shots: int, launch_overhead_ms: float) -> dict:
     """Estimate an entire shot batch and per-shot survival using the requested model.
 
-    Routing expands depth and 2Q count once. Circuit time excludes measurement,
-    reset and launch; these repeat for latency, never for coherent exposure.
+    Routing and native-entangler conversion multiply CX-basis depth and 2Q count
+    together, rounded up once. Native 2Q time and error then apply to these
+    expanded resources. Circuit time excludes measurement, reset and launch;
+    these repeat for latency, never for coherent exposure.
 
     Three conservative choices remain explicit: every qubit is charged for the
     whole circuit (not a scheduled idle duration); every depth layer is billed
@@ -40,8 +42,8 @@ def estimate_qpu(spec: CircuitSpec, profile: QPUProfile, shots: int, launch_over
         raise ValueError("shots must be a positive integer")
     if isinstance(launch_overhead_ms, bool) or not math.isfinite(launch_overhead_ms) or launch_overhead_ms < 0:
         raise ValueError("launch_overhead_ms must be finite and nonnegative")
-    depth = math.ceil(spec.depth * profile.topology_factor)
-    n_2q = math.ceil(spec.n_2q * profile.topology_factor)
+    depth = math.ceil(spec.depth * profile.topology_factor * profile.native_2q_per_cx)
+    n_2q = math.ceil(spec.n_2q * profile.topology_factor * profile.native_2q_per_cx)
     circuit_ns = depth * profile.t_2q_ns
     circuit_us = circuit_ns / 1000
     feasible = profile.n_qubits_max is None or spec.n_qubits <= profile.n_qubits_max

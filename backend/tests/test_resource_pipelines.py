@@ -7,6 +7,18 @@ import pytest
 from backend.main import HARDWARE_PROFILES, RoutingConfig, STAGE_KEYS, run_quantum_mips_pipeline, run_shors_pipeline
 
 
+@pytest.mark.parametrize("pipeline,scale", [(run_shors_pipeline, 21), (run_quantum_mips_pipeline, 1024)])
+@pytest.mark.parametrize("capacity", [53, 72, 133, 1024])
+def test_weber_reference_and_exploratory_capacities_remain_independent(pipeline, scale, capacity):
+    kernel = pipeline(scale, "google_weber_grid", available_qubits=capacity).stages[STAGE_KEYS[1]]
+    assert kernel.metrics["reference_qubits"] == 53
+    assert kernel.metrics["available_qubits"] == capacity
+    assert kernel.metrics["capacity_override"] is (capacity > 53)
+    assert kernel.metrics["execution_feasible"]
+    assert kernel.metrics["qpu_profile"]["n_qubits_max"] == 53
+    assert kernel.metrics["qpu_profile"]["native_2q_per_cx"] == 2.0
+
+
 @pytest.mark.parametrize("pipeline,scale,capacity", [(run_shors_pipeline, 21, 13), (run_quantum_mips_pipeline, 1024, 14)])
 def test_same_workload_constructs_identical_spec_for_every_hardware_profile(pipeline, scale, capacity):
     stages = [pipeline(scale, profile, available_qubits=capacity).stages[STAGE_KEYS[1]] for profile in HARDWARE_PROFILES]

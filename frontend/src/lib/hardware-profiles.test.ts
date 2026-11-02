@@ -2,7 +2,7 @@ import { apiRequest, parseAdvisorPrompt } from "./test-support/api";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { HARDWARE_PROFILE_IDS, type HardwareProfile } from "@/types/telemetry";
-import { HARDWARE_PROFILES, hardwareLabel, isHardwareProfile } from "./hardware-profiles";
+import { HARDWARE_PROFILES, QUBIT_CAPACITY_PRESETS, hardwareLabel, isHardwareProfile } from "./hardware-profiles";
 import { advisorDigest, validateAdvisorRequest } from "./advisor-input";
 import { deterministicInsight } from "./advisor";
 import { offloadVerdict } from "./offload-verdict";
@@ -36,9 +36,11 @@ function fixture(profile: HardwareProfile): CompletedRun {
 test("hardware registry exposes exactly four profiles and explicit comparative assumptions", () => {
   assert.equal(HARDWARE_PROFILE_IDS.length, 4);
   assert.deepEqual(HARDWARE_PROFILE_IDS.map(id => { const arch = HARDWARE_PROFILES[id]; return [arch.referenceQubits, arch.depthMultiplier, arch.gateTimeMultiplier, arch.prepMs, arch.decayScale]; }), [
-    [133, 1, 1, 0.15, 1200], [72, 0.78, 0.45, 0.12, 850], [36, 0.55, 180, 0.85, 8500], [null, 1, 1, 0.15, null],
+    [133, 1, 1, 0.15, 1200], [53, 0.78, 0.45, 0.12, 850], [36, 0.55, 180, 0.85, 8500], [null, 1, 1, 0.15, null],
   ]);
-  assert.match(HARDWARE_PROFILES.google_weber_grid.description, /72.*exploratory.*53/);
+  assert.match(HARDWARE_PROFILES.google_weber_grid.description, /53-qubit reference.*32 ns.*0\.9%/);
+  assert.ok(QUBIT_CAPACITY_PRESETS.includes(53));
+  assert.ok(QUBIT_CAPACITY_PRESETS.includes(72));
   assert.equal(hardwareLabel("ionq_forte_trapped_ion"), "IonQ Forte (Trapped Ion)");
   for (const value of ["unknown", "google", "__proto__", null, true]) assert.equal(isHardwareProfile(value), false);
 });
@@ -46,10 +48,35 @@ test("hardware registry exposes exactly four profiles and explicit comparative a
 test("profile selection defaults to native capacity or the current scale's full ideal register", () => {
   for (const [scale, ceiling] of [[15, 22], [21, 28], [35, 33], [512, 2816], [2048, 11264]]) {
     assert.equal(hardwareDefaultQubits("ibm_heron_nisq", scale), 133);
-    assert.equal(hardwareDefaultQubits("google_weber_grid", scale), 72);
+    assert.equal(hardwareDefaultQubits("google_weber_grid", scale), 53);
     assert.equal(hardwareDefaultQubits("ionq_forte_trapped_ion", scale), 36);
     assert.equal(hardwareDefaultQubits("ideal_sim", scale), ceiling);
     assert.ok(hardwareDefaultQubits("ideal_sim", scale) >= qubitThresholds(scale).minimum);
+  }
+});
+
+test("legacy Weber reference metadata and exploratory capacities survive advisor and history", async t => {
+  const oldKey = process.env.GEMINI_API_KEY, oldUrl = process.env.DATABASE_URL;
+  delete process.env.GEMINI_API_KEY; delete process.env.DATABASE_URL;
+  t.after(() => {
+    if (oldKey === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = oldKey;
+    if (oldUrl === undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL = oldUrl;
+  });
+  for (const reference of [53, 72]) {
+    for (const capacity of [53, 72, 133]) {
+      const run = fixture("google_weber_grid");
+      run.request.available_qubits = capacity;
+      Object.assign(run.telemetry.stages.stage_2_quantum_kernel.metrics, {
+        available_qubits: capacity, reference_qubits: reference,
+      });
+      assert.equal(validateAdvisorRequest({ current: run }).current.request.available_qubits, capacity);
+      assert.equal(advisorDigest(run).architecture.referenceQubits, 53);
+      const saved = serializeRun({ ...createRunRecord(run), createdAt: new Date() } as SimulationRun);
+      assert.equal(saved.telemetry.stages.stage_2_quantum_kernel.metrics.reference_qubits, reference);
+      assert.equal(restoredConfiguration(saved).available_qubits, capacity);
+      const response = await POST(apiRequest("http://localhost/api/advisor", { method: "POST", body: JSON.stringify({ current: run }) }));
+      assert.equal(response.status, 200);
+    }
   }
 });
 

@@ -19,7 +19,7 @@ import { createClientId } from "@/lib/client-session";
 import { usePersistentRuns } from "@/hooks/use-persistent-runs";
 import { coherenceBudget, pipelineTiming, type CoherenceBudgetStatus } from "@/lib/kpi-metrics";
 import { formatDuration, formatRawMilliseconds } from "@/lib/duration";
-import { HARDWARE_PROFILES, hardwareLabel } from "@/lib/hardware-profiles";
+import { HARDWARE_PROFILES, QUBIT_CAPACITY_PRESETS, hardwareLabel } from "@/lib/hardware-profiles";
 import { WORKLOADS, workloadScaleLabel } from "@/lib/workloads";
 import { HARDWARE_PROFILE_IDS } from "@/types/telemetry";
 import {
@@ -31,7 +31,6 @@ import {
   type Snapshot, type Transition,
 } from "@/lib/telemetry";
 import type { HardwareProfile, RoutingConfig, SimulationRequest, StageNode, StageStatus, StageTelemetry, WorkloadId } from "@/types/telemetry";
-const QUBIT_PRESETS = [16, 36, 72, 133, 1121, 2048, 4096, 16384];
 const summaryValue = (value: unknown) => typeof value === "number" && Math.abs(value) >= 1_000_000
   ? new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 2 }).format(value)
   : formatValue(value);
@@ -346,13 +345,13 @@ export default function Home() {
               <InfoPopover label="About QPU capacity">
                 <p className="font-semibold text-cyan-800 dark:text-cyan-200">Available QPU capacity</p>
                 <p className="mt-2">Per QPU stage. Select a tier threshold to explore the trade-off; changes apply on Run simulation.</p>
-                <p className="mt-2">36 references Forte; 72 is the exploratory Google grid preset (published Weber: 53 active qubits). 133 and 1,121 reference Heron r1 and Condor milestones; larger presets are exploratory capacities. These are modeled usable qubits; physical error-correction overhead is excluded. Extra capacity above the workload’s parallelization ceiling stays idle.</p>
+                <p className="mt-2">36 references Forte; 53 references Weber. 133 and 1,121 reference Heron r1 and Condor milestones. 72 and capacities above a device’s reference are exploratory overrides. These are modeled usable qubits; physical error-correction overhead is excluded. Extra capacity above the workload’s parallelization ceiling stays idle.</p>
                 <p className="mt-2">Shor N = 15 and Quantum-MIPS M = 64 in sequential mode run Qiskit Aer reference circuits. Parallel tiers and larger scales use an analytical hardware model. Quantum-MIPS emulation uses the selected ancilla tier and is limited by CPU/GPU RAM.</p>
               </InfoPopover>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <input id="available-qubits" type="number" min={1} max={2147483647} step={1} value={availableQubits} onChange={(event) => setAvailableQubits(event.target.value)} aria-invalid={!validCapacity} aria-describedby="capacity-help" className="min-h-8 w-24 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-2 py-1.5 font-mono text-xs text-cyan-800 dark:text-cyan-200" />
-              <div role="group" aria-label="QPU capacity presets" className="flex flex-wrap gap-1.5">{QUBIT_PRESETS.map((value) => (
+              <div role="group" aria-label="QPU capacity presets" className="flex flex-wrap gap-1.5">{QUBIT_CAPACITY_PRESETS.map((value) => (
                 <button key={value} type="button" aria-pressed={capacity === value} onClick={() => setAvailableQubits(String(value))} className={["min-h-8 rounded-md border px-2 py-1.5 font-mono text-[11px]", capacity === value ? "border-cyan-700/50 dark:border-cyan-400/50 bg-cyan-700/10 dark:bg-cyan-400/10 text-cyan-800 dark:text-cyan-200" : "border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:border-slate-400 dark:hover:border-slate-600"].join(" ")}>{formatValue(value)}</button>
               ))}</div>
               <div className="ml-2 flex min-w-0 flex-wrap items-center gap-2 border-l border-slate-400 dark:border-slate-600/80 pl-4">
