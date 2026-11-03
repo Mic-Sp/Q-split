@@ -1,18 +1,63 @@
 # ⚡ Q-Split
 
-### Hybrid Quantum-Classical Workload Profiler & Heterogeneous Orchestrator
+**A hybrid quantum-classical workload simulator: see where quantum offload helps, and where it falls apart.**
 
-**Live Cockpit:** https://q-split.vercel.app/  
-**Engine API (FastAPI):** https://q-split-engine.onrender.com/docs
+Q-Split helps you decide which parts of a program to send to a quantum processor and which to keep on CPUs or GPUs. Choose a workload, route its three stages, and compare modeled runtime, hardware capacity, and the chance that a quantum calculation finishes without errors. It shows when data transfers, limited memory, or quantum noise outweigh the benefit of offloading work. Small circuits run in a simulator; larger cases use documented estimates so you can explore the tradeoffs without access to quantum hardware.
+
+[**Live demo**](https://q-split.vercel.app/) · [API docs](https://q-split-engine.onrender.com/docs) · [Run it locally](#-quickstart--local-development)
+
+> ⏳ **First load note:** the simulation engine runs on a free-tier host that sleeps when idle. If the first simulation takes 30–60 seconds, it's just waking up. After that it's fast.
+
+<!-- Replace with a real screenshot or demo GIF (a 10–15 second screen recording works great) -->
+![Q-Split dashboard](docs/screenshot.png)
 
 ---
 
-## 🎯 Overview
+## What is this?
 
-**Q-Split** is a full-stack simulator and co-design profiler for exploring quantum-classical workload placement. Its 3-stage pipeline compares modeled CPU/GPU execution and QPU offload while accounting for illustrative launch/transfer overhead, circuit depth, statevector memory limits, and NISQ decoherence. Results are simulation estimates, not physical-device benchmarks or proof of practical quantum advantage.
+Quantum computers don't run whole programs on their own. Real quantum algorithms are *hybrid*: a classical computer (CPU/GPU) prepares the problem, a quantum processor (QPU) runs the quantum part, and the classical side processes the result. Every handoff costs time, and today's quantum hardware is noisy enough that a long circuit can lose its quantum state before it finishes.
+
+**Q-Split lets you explore those tradeoffs.** Pick a workload, a problem size and a hardware profile, and it models a 3-stage pipeline (classical preprocessing → quantum kernel → classical postprocessing). It shows:
+
+- where the time goes (compute vs. interconnect, measurement and reset)
+- whether the quantum state survives long enough to finish (coherence)
+- which stage is the bottleneck
+- a verdict on whether offloading to a QPU makes sense
+
+## Try it in 60 seconds
+
+1. Open the [live demo](https://q-split.vercel.app/).
+2. Choose **Shor's Algorithm**, **N = 15**, **IBM Heron**, then click **Run simulation**.
+3. Switch to a larger scale such as **RSA-2048** and run again. Compare how the bottleneck, coherence and verdict change.
+4. Reassign a pipeline stage to **CPU / GPU / QPU** and re-run to see how routing changes the result.
+5. Click **Generate analysis** to get an AI-written architecture diagnosis of your run.
+
+## Features
+
+- **Two workloads:** Shor's Algorithm (N = 15 up to RSA-2048) and Quantum-MIPS vector retrieval (M = 64 up to 1M).
+- **Five hardware profiles:** IBM Heron, Google Weber, IonQ Forte, a fault-tolerant surface-code logical QPU, and an ideal noise-free reference.
+- **Dual simulation engine:** small reference circuits run in Qiskit Aer, and larger scales use analytical co-design models.
+- **Per-stage routing:** assign each pipeline stage to CPU, GPU or QPU.
+- **Telemetry:** latency breakdown, circuit depth, coherence survival and bottleneck detection.
+- **Run history:** save, pin and name snapshots, compare up to three runs, and export to CSV or JSON.
+- **AI Telemetry Advisor:** Gemini-powered diagnostics with database caching and a deterministic fallback when the AI is unavailable.
+- **Tested:** a 2,025-configuration backend integration matrix plus unit tests.
+
+## Tech stack
+
+| Layer | Tools |
+|---|---|
+| Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS |
+| API & persistence | Next.js route handlers, Prisma, Neon serverless PostgreSQL |
+| Simulation engine | Python, FastAPI, Pydantic, Qiskit Aer (Dockerized) |
+| AI | Google Gemini with grounded prompts and read-through caching |
+| Hosting | Vercel (frontend), Render (engine) |
+
+## ⚠️ What this is (and isn't)
+
+Q-Split is an **educational simulator**. Results are modeled estimates built on simplified, comparative assumptions. They are **not** physical-device benchmarks, there is no connection to real quantum hardware, and RSA-scale runs project resource requirements rather than factoring real keys. Nothing here is evidence of practical quantum advantage.
 
 ---
-
 ## 🛠️ System Architecture & Dual Engine
 
 * Frontend & API: Next.js 16 (React 19, TypeScript, Tailwind CSS) with custom parser validation and Prisma ORM backed by Neon Serverless PostgreSQL. FastAPI uses Pydantic for backend request validation.
@@ -45,7 +90,7 @@ These vocabularies are intentionally separate: a `NOMINAL` coherence budget alon
 ### Hardware Profiles
 
 * IBM Heron (133-qubit cap, r3-era timing; representative): Heavy-Hex superconducting connectivity and modeled SWAP routing overhead. Capacity and timing are representative assumptions rather than a single device calibration.
-* Google Weber (2D Grid): 53 qubits, 32 ns √iSWAP gates paired with their 0.9% typical isolated XEB error, and typical T1 of 15 µs from the [14 May 2021 Weber datasheet](https://quantumai.google/hardware/datasheet/weber.pdf). The model assumes two native √iSWAP gates per CX, applied to both depth and 2Q count; this conversion needs verification against a gate-decomposition reference. The datasheet's typical 1–5 kHz repetition rate is supporting provenance context; the reset-time assumption is unchanged. The 53-qubit selector is the reference; 72 and other larger capacities remain exploratory overrides.
+* Google Weber (2D Grid): 53 qubits, 32 ns √iSWAP gates paired with their 0.9% typical isolated XEB error, and typical T1 of 15 µs from the [14 May 2021 Weber datasheet](https://quantumai.google/hardware/datasheet/weber.pdf). The model assumes two native √iSWAP gates per CX, applied to both depth and 2Q count; this conversion needs verification against a gate-decomposition reference. The datasheet's typical 1–5 kHz repetition rate is supporting provenance context; the reset-time assumption is unchanged. CALIBRATED_V2 uses the 53-qubit datasheet reference; larger capacity presets are exploratory overrides.
 * IonQ Forte (Trapped Ion): 36-qubit reference with all-to-all connectivity, high gate fidelity, and long coherence. The model removes SWAP routing layers but uses slower laser-driven gate execution; high fidelity does not mean noise-free execution.
 * FTQC Surface-Code Logical QPU (`ftqc_surface_code`): 1,024 logical workspace qubits, a representative d≈27 target, and 27 µs logical lattice-surgery 2Q gates/measurement (`27 × 1 µs`), compared with Heron's representative 68 ns physical entangler. The selector sets capacity to 1,024 and includes that preset. [Gidney 2025](https://arxiv.org/abs/2505.15917) assumes a 1 µs code cycle and 0.1% physical gate error; [Willow QEC](https://arxiv.org/abs/2408.13687) reports 1.1 µs cycles and Λ = 2.14 ± 0.02 suppression per distance increase of two. The d≈27 target, roughly 1,000 physical superconducting qubits per logical qubit, one-cycle initialization, and logical errors of 1e-10 (1Q) / 1e-9 (2Q/measurement) are model assumptions, not measured d=27 performance or a direct extrapolation of Willow. Supporting physical resources and magic-state factories are excluded. Under active syndrome extraction, idle memory errors are assumed folded into logical operation errors; `t1_us`/`t2_us` are `None` to avoid double-counting a separate relaxation penalty. This does not imply infinite physical coherence. All fields carry provenance retrieved on 2026-11-02.
 * Ideal Noise-Free: Theoretical reference with 100% modeled coherence for feasible execution. Capacity and routing limits still apply.
@@ -148,7 +193,7 @@ The zero-dependency limiter is **process-local**: quotas survive warm-process/mo
 
    Set the same nonempty `ENGINE_SECRET` in the FastAPI process environment and the Next.js server environment (locally, `frontend/.env.local`) to authenticate simulations. The proxy sends it as `X-Engine-Secret`; missing or incorrect credentials receive HTTP 401 before simulation dispatch. Without `ENGINE_ENV=production`, an unset or blank secret keeps local development open. Production requires a nonblank secret and refuses to start without one; see [production deployment](#production-deployment). Engine routes grant no browser CORS access because browsers use the Next.js proxy. Keep the secret out of `NEXT_PUBLIC_*` variables.
 
-   `GET /` is a public, uncached health probe in both development and configured production. It needs no secret, stays available when docs are disabled, performs no simulation, and does not wait for simulation worker threads. Each Next.js Node server startup pings it once with a three-second timeout; engine downtime does not fail frontend startup. A cold engine may still take longer to become ready.
+   `GET /` is a public, uncached health probe in both development and configured production. It needs no secret, stays available when docs are disabled, performs no simulation, and does not wait for simulation worker threads. Each Next.js Node server startup pings it once with a three-second timeout; engine downtime does not fail frontend startup. Each page mount also sends a non-blocking `GET /api/health` through Next.js to that probe with `cache: "no-store"`. The header shows a wake-up message until the engine responds, then “Engine connected”; a simulation pending for more than three seconds shows a cold-start notice. The proxy allows up to 60 seconds for the health check; simulation requests retain their existing timeout and controls stay usable while the engine wakes.
 
 3. In a separate terminal, create the Python environment and start the backend **from the repository root**:
 

@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 
 const title = "Q-Split | Hybrid Workload Simulator";
 const description = "Explore quantum-classical workload pipelines, hardware limitations, and simulation telemetry.";
-const canonicalUrl = "https://github.com/Mic-Sp/Q-split";
+const canonicalUrl = "https://q-split.vercel.app";
 
 export const metadata: Metadata = {
   metadataBase: new URL(canonicalUrl),
@@ -31,7 +31,7 @@ export const metadata: Metadata = {
     locale: "en_US",
   },
   twitter: {
-    card: "summary",
+    card: "summary_large_image",
     title,
     description,
   },

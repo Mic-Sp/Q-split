@@ -203,20 +203,41 @@ export default function Home() {
   // Separate submitted configuration from live edits; only an explicit run changes this effect input.
   const [submittedRequest, setSubmittedRequest] = useState<SimulationRequest | null>(null);
   const [restoreMessage, setRestoreMessage] = useState<string | null>(null);
+  const [engineConnection, setEngineConnection] = useState<"waking" | "connected" | "unavailable">("waking");
   const [state, dispatch] = useReducer(reducer, {
     loading: false, slow: false, error: null, snapshots: {}, history: [], completed: 0,
   });
 
   useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 65_000);
+    // Wake-up runs independently of controls and never submits a simulation.
+    void fetch("/api/health", { cache: "no-store", signal: controller.signal })
+      .then(async (response) => {
+        const body: unknown = await response.json();
+        if (!response.ok || !body || typeof body !== "object" || !("status" in body) || body.status !== "online") {
+          throw new Error("Engine health probe unavailable");
+        }
+        if (active) setEngineConnection("connected");
+      }).catch(() => {
+        // A delayed failed probe must not overwrite a successful simulation.
+        if (active) setEngineConnection(current => current === "connected" ? current : "unavailable");
+      }).finally(() => clearTimeout(timeout));
+    return () => { active = false; clearTimeout(timeout); controller.abort(); };
+  }, []);
+
+  useEffect(() => {
     if (!submittedRequest) return;
     let active = true;
     const controller = new AbortController();
-    const slowNotice = setTimeout(() => { if (active) dispatch({ type: "slow" }); }, 10000);
+    const slowNotice = setTimeout(() => { if (active) dispatch({ type: "slow" }); }, 3000);
     const timeout = setTimeout(() => controller.abort(new Error("The engine took too long to respond. Please retry; it may be waking up.")), 90000);
     // Keep one captured request with its result/UUID even if controls change before the response arrives.
     const request = submittedRequest;
     void simulate(request, controller.signal).then((data) => {
       if (active && !controller.signal.aborted) {
+        setEngineConnection("connected");
         const id = createClientId();
         const completedAt = new Date().toISOString();
         dispatch({ type: "success", snapshot: { id, completedAt, request, data } });
@@ -301,8 +322,11 @@ export default function Home() {
           </Link>
           <div className="flex items-center gap-2">
             <div role="status" className="flex items-center gap-2 rounded-full border border-slate-200 dark:border-slate-800 console-panel bg-white dark:bg-slate-900/70 px-3 py-1.5 text-xs text-slate-600 dark:text-slate-400">
-              <span className={["size-1.5 rounded-full", loading ? "animate-pulse bg-sky-600 dark:bg-sky-400" : error ? "bg-rose-600 dark:bg-rose-400" : data ? "bg-cyan-600 dark:bg-cyan-400" : "bg-slate-500"].join(" ")} />
-              {loading ? "Simulation in progress" : error ? "Request unsuccessful" : data ? "Engine connected" : "Ready to simulate"}
+              <span className={["size-1.5 shrink-0 rounded-full", loading || engineConnection === "waking" ? "animate-pulse bg-sky-600 dark:bg-sky-400" : error ? "bg-rose-600 dark:bg-rose-400" : engineConnection === "connected" ? "bg-cyan-600 dark:bg-cyan-400" : "bg-slate-500"].join(" ")} />
+              {loading && state.slow ? "Engine taking a moment · cold starts can take ~30–60s"
+                : engineConnection === "waking" ? "Waking up quantum engine (~30–60s on cold start)…"
+                  : loading ? "Simulation in progress" : error ? "Request unsuccessful"
+                    : engineConnection === "connected" ? "Engine connected" : "Engine not connected · run simulation to retry"}
             </div>
             <ThemeToggle />
           </div>
