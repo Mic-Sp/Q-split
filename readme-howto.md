@@ -1,9 +1,9 @@
-# 🧪 Q-Split — Quickstart Guide for Classmates
+# 🧪 Q-Split — Quickstart Guide
 
 **Live App:** [https://q-split.vercel.app/](https://q-split.vercel.app/)
 
 For local installation, environment variables, and test commands, see [README.md](README.md).
-For hosted engine configuration, see [production deployment](README.md#production-deployment): production requires a shared secret, while the root health probe remains public.
+For hosted engine configuration, see [production deployment](docs/deployment.md#production-deployment): production requires a shared secret, while the root health probe remains public.
 
 ## What are you looking at?
 
@@ -33,6 +33,7 @@ Your goal is to find the best hardware combo (`CPU`, `GPU`, or `QPU`) without ru
    * **IBM Heron (133-qubit cap, r3-era timing; representative):** A 133-qubit capacity cap paired with representative r3-era timings, superconducting gates, and sparse Heavy-Hex connectivity.
    * **Google Weber (2D Grid):** A 53-qubit reference from the 2021 datasheet, using 32 ns √iSWAP gates and their 0.9% typical isolated error. The model assumes two native entanglers per CX. The 72-qubit tier and larger capacities remain exploratory overrides.
    * **IonQ Forte (Trapped Ion):** 36-qubit reference with high gate fidelity, long coherence, and all-to-all connectivity. Laser-driven gates are slower in the model; high fidelity does not mean noise-free execution.
+   * **FTQC Surface-Code Logical QPU:** Representative 1,024-logical-qubit profile with a d≈27 target, a 1 µs code cycle, and 27 µs logical lattice-surgery gates/measurement. It models logical error suppression against slower gate execution; logical error rates and active error-correction memory treatment are assumptions, not measured hardware performance. See [sources, assumptions and caveats](docs/hardware-profiles.md#ftqc-surface-code).
    * **Ideal Noise-Free:** Theoretical reference with 100% modeled coherence for feasible execution. Capacity and routing limits still apply.
 4. **`04 / AVAILABLE QPU QUBITS` & `TIERS` — Trade Space for Speed:**
    * More available qubits unlock **Parallel Tiers** (`Sequential` $\rightarrow$ `Windowed` $\rightarrow$ `Carry-Lookahead / Multi-Oracle`) with shallower modeled circuits. Qubits above the workload's ceiling remain idle. Capacity overrides beyond a profile's reference are exploratory, not additional physical device qubits.
