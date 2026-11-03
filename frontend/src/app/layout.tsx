@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 const title = "Q-Split | Hybrid Workload Simulator";
-const description = "Explore quantum-classical workload pipelines, hardware limitations, and simulation telemetry.";
+const description = "Interactive hybrid quantum-classical workload profiler evaluating Shor's algorithm and Quantum-MIPS across physical NISQ hardware and fault-tolerant surface-code architectures.";
 const canonicalUrl = "https://q-split.vercel.app";
 
 export const metadata: Metadata = {
@@ -22,6 +22,7 @@ export const metadata: Metadata = {
   title,
   description,
   alternates: { canonical: canonicalUrl },
+  authors: [{ name: "Michael Sprague" }],
   openGraph: {
     type: "website",
     url: canonicalUrl,
@@ -34,6 +35,9 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title,
     description,
+  },
+  other: {
+    "article:published_time": "2026-11-02T00:00:00Z",
   },
 };
 
