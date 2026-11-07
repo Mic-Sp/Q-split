@@ -203,7 +203,7 @@ def test_estimators_reject_noninteger_resource_counts(spec, profile, field, esti
 
 @pytest.mark.parametrize("field", ["n_qubits_max", "t1_us", "t2_us", "t_1q_ns", "t_2q_ns",
                                    "t_meas_ns", "t_reset_ns", "err_1q", "err_2q", "err_meas",
-                                   "topology_factor", "native_2q_per_cx"])
+                                   "topology_factor", "native_2q_per_cx", "repetition_rate_hz"])
 @pytest.mark.parametrize("value", [True, False, math.nan, math.inf, -math.inf, -1])
 def test_qpu_rejects_invalid_physics_even_in_unvalidated_profile_copies(spec, profile, field, value):
     invalid = profile.model_copy(update={field: value})
@@ -241,7 +241,7 @@ def test_profiles_reject_invalid_physics(profile, field, value):
 
 def test_profiles_record_per_value_provenance_and_capacity_override_does_not_mutate():
     for profile in HARDWARE_PROFILES.values():
-        assert profile.provenance["retrieval_date"] == ("2026-11-02" if profile.id in {"google_weber_grid", "ftqc_surface_code"} else "2026-11-01")
+        assert profile.provenance["retrieval_date"] == ("2026-11-07" if profile.id == "ibm_nighthawk_r2" else "2026-11-02" if profile.id in {"google_weber_grid", "ftqc_surface_code"} else "2026-11-01")
         for field in ("t1_us", "t2_us", "t_1q_ns", "t_2q_ns", "t_meas_ns", "t_reset_ns", "err_1q", "err_2q", "err_meas", "native_2q_per_cx"):
             assert field in profile.provenance["value_types"]
     vendor = HARDWARE_PROFILES["google_weber_grid"]

@@ -1,11 +1,14 @@
 import { HARDWARE_PROFILE_IDS, type HardwareProfile } from "@/types/telemetry";
 
 // Published reference capacities and exploratory choices, including legacy 72-qubit runs.
-export const QUBIT_CAPACITY_PRESETS = [16, 36, 53, 72, 133, 1024, 1121, 2048, 4096, 16384];
+export const QUBIT_CAPACITY_PRESETS = [16, 36, 53, 72, 120, 133, 1024, 1121, 2048, 4096, 16384];
 
 export const HARDWARE_PROFILES = {
   ibm_heron_nisq: { label: "IBM Heron (133-qubit cap, r3-era timing; representative)", topology: "Heavy-Hex", referenceQubits: 133, depthMultiplier: 1, gateTimeMultiplier: 1, prepMs: 0.15, decayScale: 1200,
     description: "Superconducting transmons · Heavy-Hex connectivity · 133-qubit capacity cap with representative r3-era timing. Baseline routing depth and gate time: 1.0×; 0.15 ms state preparation; decay scale 1200. The N=15 sequential Aer reference retains its legacy 0.05 ms setup." },
+  ibm_nighthawk_r2: { label: "IBM Quantum System Two (Nighthawk r2)", topology: "4-degree Square Grid", referenceQubits: 120,
+    depthMultiplier: 1.2 / 1.5, gateTimeMultiplier: 40 / 250, prepMs: 2500 / 1e6, decayScale: null,
+    description: "Fixed-frequency superconducting transmons · four-neighbor grid · 120 programmable qubits, 218 tunable couplers and 120 dissipative reset gadgets (458 elements). Representative model: T1/T2 200/160 µs, 40 ns 2Q gates, 1 µs reset and 100 kHz peak shot rate (10 µs minimum shot period; longer circuits take longer). The 25× Heron throughput and 7,500+ demonstrated gates are benchmark context, not a universal speedup or depth limit. EPLG 0.0037 proxies native-gate error; supplied 1Q/readout errors are 0.00025/0.0075. Heron-derived 32 ns 1Q and 1.5 µs readout, 1.2× routing and one native entangler per CX are assumptions. Hyde Park Labs / NQAC and ORNL Umbra / NCSA DeltaAI are supplied deployment context; HPC execution is not simulated. No legacy depth-decay fit; new runs use CALIBRATED_V2." },
   google_weber_grid: { label: "Google Weber (2D Grid)", topology: "2D Square Grid", referenceQubits: 53, depthMultiplier: 0.78, gateTimeMultiplier: 0.45, prepMs: 0.12, decayScale: 850,
     description: "Superconducting transmons · four-neighbor square lattice · 53-qubit reference. The 2021 datasheet specifies 32 ns √iSWAP gates with 0.9% typical isolated error. The resource model assumes two native entanglers per CX; this conversion needs verification against a gate-decomposition reference. Larger capacities are exploratory overrides." },
   ionq_forte_trapped_ion: { label: "IonQ Forte (Trapped Ion)", topology: "All-to-All Ion Trap", referenceQubits: 36, depthMultiplier: 0.55, gateTimeMultiplier: 180, prepMs: 0.85, decayScale: 8500,
@@ -24,15 +27,17 @@ export const HARDWARE_PROFILES = {
 // Backend integration tests verify this trust-boundary map.
 export const RESOURCE_QPU_PROFILES = {
   ibm_heron_nisq: { referenceQubits: 133, depthMultiplier: 1.5, t1Us: 200, t2Us: 150, t1qNs: 32, t2qNs: 68,
-    measurementNs: 1500, resetNs: 200000, error1q: 0.0003, error2q: 0.003, errorMeasurement: 0.01, native2qPerCx: 1 },
+    measurementNs: 1500, resetNs: 200000, error1q: 0.0003, error2q: 0.003, errorMeasurement: 0.01, native2qPerCx: 1, repetitionRateHz: null },
+  ibm_nighthawk_r2: { referenceQubits: 120, depthMultiplier: 1.2, t1Us: 200, t2Us: 160, t1qNs: 32, t2qNs: 40,
+    measurementNs: 1500, resetNs: 1000, error1q: 0.00025, error2q: 0.0037, errorMeasurement: 0.0075, native2qPerCx: 1, repetitionRateHz: 100000 },
   google_weber_grid: { referenceQubits: 53, depthMultiplier: 1.2, t1Us: 15, t2Us: 20, t1qNs: 25, t2qNs: 32,
-    measurementNs: 4000, resetNs: 200000, error1q: 0.001, error2q: 0.009, errorMeasurement: 0.04, native2qPerCx: 2 },
+    measurementNs: 4000, resetNs: 200000, error1q: 0.001, error2q: 0.009, errorMeasurement: 0.04, native2qPerCx: 2, repetitionRateHz: null },
   ionq_forte_trapped_ion: { referenceQubits: 36, depthMultiplier: 1, t1Us: 100000000, t2Us: 1000000, t1qNs: 110000, t2qNs: 900000,
-    measurementNs: 250000, resetNs: 1000000, error1q: 0.0002, error2q: 0.004, errorMeasurement: 0.005, native2qPerCx: 1 },
+    measurementNs: 250000, resetNs: 1000000, error1q: 0.0002, error2q: 0.004, errorMeasurement: 0.005, native2qPerCx: 1, repetitionRateHz: null },
   ideal_sim: { referenceQubits: null, depthMultiplier: 1, t1Us: null, t2Us: null, t1qNs: 32, t2qNs: 250,
-    measurementNs: 1500, resetNs: 0, error1q: 0, error2q: 0, errorMeasurement: 0, native2qPerCx: 1 },
+    measurementNs: 1500, resetNs: 0, error1q: 0, error2q: 0, errorMeasurement: 0, native2qPerCx: 1, repetitionRateHz: null },
   ftqc_surface_code: { referenceQubits: 1024, depthMultiplier: 1, t1Us: null, t2Us: null, t1qNs: 1000, t2qNs: 27000,
-    measurementNs: 27000, resetNs: 1000, error1q: 1e-10, error2q: 1e-9, errorMeasurement: 1e-9, native2qPerCx: 1 },
+    measurementNs: 27000, resetNs: 1000, error1q: 1e-10, error2q: 1e-9, errorMeasurement: 1e-9, native2qPerCx: 1, repetitionRateHz: null },
 } satisfies Record<HardwareProfile, object>;
 
 /**
@@ -53,6 +58,7 @@ export function hardwareLabel(value: string) {
  * Explain topology savings separately from gate-time/coherence assumptions for nonbaseline profiles.
  */
 export function architectureTradeOff(profile: HardwareProfile, resourceVersion?: unknown) {
+  if (profile === "ibm_nighthawk_r2") return "4-degree Square Grid: 1.2× assumed routing, 40 ns native 2Q gates and one native entangler per CX. A 1 µs reset and conservative 100 kHz peak rate give a 10 µs minimum full-shot period; longer circuits remain gate-time limited. Repetition pacing is included in measurement/reset overhead, never coherent exposure. T1/T2 are 200/160 µs; 25 ns describes reset-only relaxation. The 25× throughput and 7,500+ demonstrated gates are benchmark context, not guaranteed runtime or a depth cutoff.";
   if (profile === "ftqc_surface_code") return "2D Surface-Code Lattice Surgery: d≈27 × 1 µs syndrome cycle = 27 µs logical 2Q/measurement latency, versus Heron's representative 68 ns physical entangler. Logical operation errors are assumed at 1e-10 / 1e-9 including active-QEC memory errors; separate T1/T2 decay is disabled to avoid double-counting. Batch latency includes shots, measurement/reset and launch; compare logical survival separately from gate time and native classical baselines. Capacity counts logical qubits; roughly 1,000 physical qubits per logical qubit and routing absorbed into bus timing are assumptions.";
   if (resourceVersion === 1 || resourceVersion === 2) {
     const physics = RESOURCE_QPU_PROFILES[profile];

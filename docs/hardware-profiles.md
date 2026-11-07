@@ -20,6 +20,7 @@ Display names below are the backend `QPUProfile.name` strings; selector labels m
 | Profile ID | Display name | Capacity | T1 (µs) | T2 (µs) | 1Q (ns) | 2Q (ns) | Meas. (ns) | Reset (ns) | Errors: 1Q / 2Q / meas. | `topology_factor` | `native_2q_per_cx` |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: |
 | `ibm_heron_nisq` | IBM Heron (133-qubit cap, r3-era timing; representative) | 133 | 200 | 150 | 32 | 68 | 1,500 | 200,000 | 0.0003 / 0.003 / 0.01 | 1.5 | 1 |
+| `ibm_nighthawk_r2` | IBM Quantum System Two (Nighthawk r2) | 120 | 200 | 160 | 32 | 40 | 1,500 | 1,000 | 0.00025 / 0.0037 / 0.0075 | 1.2 | 1 |
 | `google_weber_grid` | Google Weber / Sycamore (representative) | 53 | 15 | 20 | 25 | 32 | 4,000 | 200,000 | 0.001 / 0.009 / 0.04 | 1.2 | 2 |
 | `ionq_forte_trapped_ion` | IonQ Forte (representative) | 36 | 100,000,000 | 1,000,000 | 110,000 | 900,000 | 250,000 | 1,000,000 | 0.0002 / 0.004 / 0.005 | 1 | 1 |
 | `ftqc_surface_code` | FTQC Surface-Code Logical QPU (1 µs cycle, d≈27 target; representative) | 1,024 logical | `None` (disabled) | `None` (disabled) | 1,000 | 27,000 | 27,000 | 1,000 | 1e-10 / 1e-09 / 1e-09 | 1 | 1 |
@@ -29,7 +30,7 @@ Display names below are the backend `QPUProfile.name` strings; selector labels m
 
 ## Profiles and provenance
 
-Provenance distinguishes `vendor_or_literature_approximation` from `model_assumption` for every table parameter. All five profiles classify `native_2q_per_cx` as a model assumption; the shared provenance note says this conversion should be verified against a gate-decomposition reference. A linked source supplies context for an assumption, not evidence that the assumed value was measured.
+Provenance distinguishes `vendor_or_literature_approximation`, `user_supplied_specification`, and `model_assumption` for table parameters; supplied values are not presented as retrieved device calibrations. All six profiles classify `native_2q_per_cx` as a model assumption; the shared provenance note says this conversion should be verified against a gate-decomposition reference. A linked source supplies context for an assumption, not evidence that the assumed value was measured.
 
 ### IBM Heron
 
@@ -39,6 +40,16 @@ This is a representative Heavy-Hex superconducting profile combining a **133-qub
 - **Model assumptions:** `t2_us`, `t_1q_ns`, `t_meas_ns`, `t_reset_ns`, `err_1q`, `err_2q`, `err_meas`, `topology_factor`, and `native_2q_per_cx`.
 - **Statistic caveats:** T1 = 200 µs is a family-scale approximation; the 68 ns 2Q duration is an IBM Boston example. Neither establishes the calibration of the capacity-capped device. The profile's `statistics` dictionary is empty; the code gives no further per-field statistic types.
 - **Sources — retrieval date 2026-11-01:** [IBM noise and errors](https://eu-de.quantum.cloud.ibm.com/learning/en/courses/tools-for-quantum-advantage/noise-and-errors) (primary `source_url`), [IBM processor types](https://quantum.cloud.ibm.com/docs/en/guides/processor-types).
+
+### IBM Nighthawk r2
+
+The `ibm_nighthawk_r2` preset represents **IBM Quantum System Two (Nighthawk r2)**: fixed-frequency superconducting transmons on a four-degree square grid with high-dynamic-range tunable couplers and independent dissipative reset. Capacity is **120 programmable qubits**, excluding the 218 couplers and 120 reset gadgets (458 total physical elements). The supplied deployment context is Hyde Park Labs (Chicago / NQAC), with ORNL Umbra / NCSA DeltaAI as hybrid-node examples; these are metadata, not simulated execution targets.
+
+[IBM's r2 announcement](https://www.ibm.com/quantum/blog/nighthawk-r2) and [the compute-service changelog](https://eu-de.quantum.cloud.ibm.com/docs/en/guides/changelog-quantum-compute-service), retrieved 2026-11-07, support the capacity, topology, undisturbed T1≈200 µs, 1 µs inter-circuit delay, and 100,000+ circuits/s context. **T2=160 µs, native 2Q duration=40 ns, errors=0.00025/0.0037/0.0075** are the task-supplied specification and are marked `user_supplied_specification`, not independently retrieved device calibration. EPLG proxies native per-gate error; the combined readout/initialization value maps to `err_meas` once, without inventing a second initialization-error term.
+
+The model reuses Heron's **32 ns 1Q and 1,500 ns readout** assumptions. Routing 1.2 uses the existing square-grid multiplier, with one native entangler per CX. Degree is metadata; no graph-aware transpilation is added. **7,500+ demonstrated gates** is gate count, not layer depth or a safe maximum, and imposes no partitioning cutoff. The reset-only effective T1≈25 ns never replaces the computational T1=200 µs.
+
+The optional `repetition_rate_hz=100000` is a conservative peak-rate model: a complete shot takes `max(circuit_ns + readout_ns + reset_ns, 10000 ns)`. Reset is **1,000 ns**, counted once; any remaining pacing is reported as `repetition_delay_ms` inside the existing `measurement_reset_ms` I/O/control bucket. Long circuits exceed 10 µs and run below the peak rate. The 25× Heron comparison is benchmark context, not a universal speedup multiplier. Other profiles default to `repetition_rate_hz=None` and retain their previous timings. Neither pacing nor reset adds coherent exposure.
 
 ### Google Weber
 
@@ -114,11 +125,13 @@ Finite illustrative gate and readout durations mean repeated shots still cost ti
 
 1. **Routing and native conversion:** multiply CX-basis depth and 2Q count by `topology_factor × native_2q_per_cx`, then round each result up once. Do not expand an already expanded resource again. The stored 2Q time and error describe the same native gate; 1Q and measurement counts are not multiplied by these factors.
 2. **Circuit duration:** bill every resulting depth layer at `t_2q_ns`, including layers containing only 1Q gates. `t_1q_ns` is stored for future scheduling models and does not currently set production circuit time.
-3. **Batch latency:** charge launch once, then repeat circuit, measurement, and reset time for every shot. Measurement/reset are included in latency but excluded from coherent circuit exposure; launch is also excluded from exposure.
+3. **Batch latency:** charge launch once, then repeat circuit, measurement, reset and optional peak-rate pacing for every shot. Readout/reset/pacing are included in latency but excluded from coherent circuit exposure; launch is also excluded from exposure. The rate is in Hz; absent rates preserve timing-only behavior.
 
    ```text
-   latency_ms = launch_overhead_ms
-              + shots × (native_depth × t_2q_ns + t_meas_ns + t_reset_ns) / 1e6
+   physical_shot_ns = native_depth × t_2q_ns + t_meas_ns + t_reset_ns
+   shot_period_ns = max(physical_shot_ns, 1e9 / repetition_rate_hz)  # if rate set
+   shot_period_ns = physical_shot_ns                              # otherwise
+   latency_ms = launch_overhead_ms + shots × shot_period_ns / 1e6
    ```
 
 4. **Per-shot survival:** combine independent 1Q, expanded 2Q, and measurement error probabilities with memory decay. For finite T1, the point estimate charges **all circuit qubits for the full circuit duration**, using `exp(-n_qubits × circuit_us / t1_us)`; it does not identify scheduled idle periods. `None` disables that decay term. Shots repeat latency, not the per-shot survival exponent.

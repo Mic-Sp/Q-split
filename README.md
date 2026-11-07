@@ -25,7 +25,7 @@ A run follows classical preprocessing → quantum kernel → classical postproce
 ## Features
 
 - **Two workloads:** Shor's Algorithm (N = 15 up to RSA-2048) and Quantum-MIPS vector retrieval (M = 64 up to 1M).
-- **Five hardware profiles:** IBM Heron, Google Weber, IonQ Forte, a fault-tolerant surface-code logical QPU, and an ideal noise-free reference.
+- **Six hardware profiles:** IBM Heron, IBM Nighthawk r2, Google Weber, IonQ Forte, a fault-tolerant surface-code logical QPU, and an ideal noise-free reference.
 - **Dual simulation engine:** small reference circuits run in Qiskit Aer, and larger scales use analytical co-design models.
 - **Per-stage routing:** assign each pipeline stage to CPU, GPU or QPU.
 - **Telemetry:** latency breakdown, circuit depth, coherence survival and bottleneck detection.
@@ -57,6 +57,7 @@ A run follows classical preprocessing → quantum kernel → classical postproce
 ### Hardware Profiles
 
 * **IBM Heron:** Representative 133-qubit cap with r3-era timing and Heavy-Hex superconducting connectivity ([sources, assumptions and caveats](docs/hardware-profiles.md#ibm-heron)).
+* **IBM Quantum System Two (Nighthawk r2):** 120 programmable transmons on a four-degree grid; 40 ns 2Q, 1 µs reset and a conservative 100 kHz peak-rate model ([values, provenance and throughput interpretation](docs/hardware-profiles.md#ibm-nighthawk-r2)).
 * **Google Weber:** Representative 53-qubit 2D square-grid profile ([sources, assumptions and caveats](docs/hardware-profiles.md#google-weber)). CALIBRATED_V2 uses the 53-qubit datasheet reference; larger capacity presets are exploratory overrides.
 * **IonQ Forte:** Representative 36-qubit all-to-all trapped-ion profile ([sources, assumptions and caveats](docs/hardware-profiles.md#ionq-forte)).
 * **FTQC Surface-Code:** Representative logical QPU with 1,024 logical workspace qubits and a d≈27 target ([sources, assumptions and caveats](docs/hardware-profiles.md#ftqc-surface-code)).

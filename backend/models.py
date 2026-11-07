@@ -74,6 +74,8 @@ class QPUProfile(BaseModel):
     The estimator bills depth in two-qubit-duration units, retains a T1 point
     estimate, and uses T2 for its alternative idle-decay sensitivity scenario.
     Single-qubit duration is retained for future scheduling models.
+    repetition_rate_hz optionally sets a minimum complete shot period; pacing
+    extends wall-clock control overhead, never coherent circuit exposure.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True, allow_inf_nan=False,
@@ -93,4 +95,6 @@ class QPUProfile(BaseModel):
     err_meas: float = Field(ge=0, le=1)
     topology_factor: float = Field(ge=1)
     native_2q_per_cx: float = Field(default=1.0, ge=1)
+    # Optional peak shot rate in Hz. None preserves timing-only historical profiles.
+    repetition_rate_hz: float | None = Field(default=None, gt=0)
     provenance: dict[str, Any]

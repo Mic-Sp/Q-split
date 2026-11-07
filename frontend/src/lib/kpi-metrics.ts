@@ -7,7 +7,7 @@ const milliseconds = (value: unknown): number =>
  * Decompose modeled wall-clock latency into classical, quantum, and I/O buckets.
  * Skip infeasible/unsupported work. GPU latency already includes launch cost, so
  * subtract it from compute once. Current QPU batches include launch and measurement/
- * reset; split the explicit breakdown without adding I/O again. Legacy gate-only
+ * reset/repetition pacing; split the explicit breakdown without adding I/O again. Legacy gate-only
  * latency retains its separately reported prep/readout accounting.
  */
 export function pipelineLatencyBuckets(data: HybridTelemetryResponse) {

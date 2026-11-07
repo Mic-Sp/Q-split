@@ -14,6 +14,8 @@ FORTE_SPECS = "https://www.ionq.com/quantum-systems/forte"
 FORTE_PAPER = "https://arxiv.org/html/2308.05071v2"
 GIDNEY_2025_RSA = "https://arxiv.org/abs/2505.15917"
 GOOGLE_WILLOW_QEC = "https://arxiv.org/abs/2408.13687"
+IBM_NIGHTHAWK_R2 = "https://www.ibm.com/quantum/blog/nighthawk-r2"
+IBM_COMPUTE_CHANGELOG = "https://eu-de.quantum.cloud.ibm.com/docs/en/guides/changelog-quantum-compute-service"
 
 
 def _provenance(source_url, sources, published, notes, *, retrieval_date=RETRIEVED_ON, statistics=None):
@@ -25,6 +27,42 @@ def _provenance(source_url, sources, published, notes, *, retrieval_date=RETRIEV
             "statistics": statistics or {},
             "notes": notes + " The native_2q_per_cx conversion is a model assumption and should "
                              "be verified against a gate-decomposition reference."}
+
+
+def _nighthawk_provenance():
+    provenance = _provenance(IBM_NIGHTHAWK_R2, [IBM_NIGHTHAWK_R2, IBM_COMPUTE_CHANGELOG],
+        {"n_qubits_max", "t1_us", "t_reset_ns"},
+        "Nighthawk r2: fixed-frequency superconducting transmons, high-dynamic-range tunable "
+        "couplers and independent active dissipative reset. IBM reports 120 programmable "
+        "qubits, 218 couplers and 120 reset elements (458 physical elements), four-neighbor "
+        "square-grid connectivity, 100,000+ circuits/s and 1 us repetition delay. The 25x "
+        "throughput comparison with Heron's ~4 kHz is benchmark context, not a universal "
+        "runtime multiplier. Use undisturbed T1=200 us for coherent exposure; reset-only "
+        "effective T1~25 ns is not computational coherence. T2=160 us, 40 ns native 2Q, "
+        "1Q error 0.00025, EPLG 0.0037 and readout/initialization proxy 0.0075 are supplied "
+        "task specifications, not independently verified live calibrations. EPLG proxies "
+        "per-native-gate error and combined readout/initialization proxies err_meas once; "
+        "no separate initialization-error factor exists. 32 ns 1Q and 1500 ns measurement "
+        "reuse Heron's model baselines. Routing factor 1.2 reuses the square-grid assumption. "
+        "The 7,500+ gate demonstration is not a maximum circuit depth or fidelity guarantee. "
+        "No mid-circuit reset, HPC dispatch or measured hybrid-node latency is simulated.",
+        retrieval_date="2026-11-07")
+    for field in ("t2_us", "t_2q_ns", "err_1q", "err_2q", "err_meas"):
+        provenance["value_types"][field] = "user_supplied_specification"
+    provenance["value_types"]["repetition_rate_hz"] = "vendor_or_literature_approximation"
+    provenance["statistics"] = {
+        "repetition_rate_hz": {"value": 100_000, "unit": "Hz", "statistic_type": "conservative peak circuit throughput model",
+            "source_url": IBM_COMPUTE_CHANGELOG, "usage": "10 us minimum complete-shot period; longer circuits take longer"},
+        "t_reset_ns": {"value": 1000, "unit": "ns", "statistic_type": "default inter-circuit repetition/reset delay", "source_url": IBM_COMPUTE_CHANGELOG},
+        "err_2q": {"value": 0.0037, "statistic_type": "user-supplied EPLG used as a native-gate error proxy"},
+        "validated_gate_count": {"at_least": 7500, "statistic_type": "demonstrated total gate count, not depth cutoff", "source_url": IBM_NIGHTHAWK_R2},
+    }
+    provenance["architecture"] = {"modality": "Superconducting Transmon (fixed-frequency)",
+        "connectivity_degree": 4, "programmable_qubits": 120, "tunable_couplers": 218,
+        "dissipative_reset_gadgets": 120, "total_physical_elements": 458,
+        "reset_only_effective_t1_ns": 25,
+        "deployment_notes": "User-supplied deployment context: Hyde Park Labs (Chicago / NQAC); HPC hybrid pairing examples ORNL Umbra / NCSA DeltaAI. Not execution targets in this model."}
+    return provenance
 
 
 HARDWARE_PROFILES = {
@@ -39,6 +77,13 @@ HARDWARE_PROFILES = {
             "a family-scale approximation; 68 ns is an IBM Boston example, not a measured "
             "calibration of a 133-qubit device. Remaining timing/error values and "
             "the Heavy-Hex routing multiplier are explicit modeling assumptions.")),
+    "ibm_nighthawk_r2": QPUProfile(
+        id="ibm_nighthawk_r2", name="IBM Quantum System Two (Nighthawk r2)", n_qubits_max=120,
+        t1_us=200.0, t2_us=160.0, t_1q_ns=32.0, t_2q_ns=40.0,
+        t_meas_ns=1500.0, t_reset_ns=1000.0,
+        err_1q=0.00025, err_2q=0.0037, err_meas=0.0075,
+        topology_factor=1.2, native_2q_per_cx=1.0, repetition_rate_hz=100_000.0,
+        provenance=_nighthawk_provenance()),
     "google_weber_grid": QPUProfile(
         id="google_weber_grid", name="Google Weber / Sycamore (representative)", n_qubits_max=53,
         t1_us=15, t2_us=20, t_1q_ns=25, t_2q_ns=32,
@@ -139,7 +184,7 @@ HARDWARE_PROFILES = {
             "gate/readout durations are illustrative, so shot repetition still costs time.")),
 }
 
-TOPOLOGIES = {"ibm_heron_nisq": "Heavy-Hex", "google_weber_grid": "2D Square Grid",
+TOPOLOGIES = {"ibm_heron_nisq": "Heavy-Hex", "ibm_nighthawk_r2": "4-degree Square Grid", "google_weber_grid": "2D Square Grid",
               "ftqc_surface_code": "2D Surface-Code Lattice Surgery",
               "ionq_forte_trapped_ion": "All-to-All Ion Trap", "ideal_sim": "Noise-free reference"}
 

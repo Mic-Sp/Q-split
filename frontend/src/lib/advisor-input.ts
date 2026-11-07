@@ -98,6 +98,7 @@ function metrics(value: unknown, inheritedVersion?: 1 | 2): StageTelemetry["metr
     ["statevector_qubits", 0, MAX_QUBITS, true], ["planned_qubits", 0, MAX_QUBITS, true],
     ["compute_latency_ms", 0, ADVISOR_MAX_LATENCY_MS, false], ["depth_multiplier", 0, 1, false],
     ["launch_overhead_ms", 0, RESOURCE_MAX_LATENCY_MS, false],
+    ["repetition_delay_ms", 0, RESOURCE_MAX_LATENCY_MS, false],
     ["measurement_reset_ms", 0, RESOURCE_MAX_LATENCY_MS, false], ["gate_execution_ms", 0, RESOURCE_MAX_LATENCY_MS, false],
     ["measured_peak_probability", 0, 1, false], ["aer_runtime_ms", 0, ADVISOR_MAX_LATENCY_MS, false],
     ["qubits_required", 1, MAX_QUBITS, true], ["available_qubits", 1, MAX_QUBITS, true],

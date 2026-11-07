@@ -35,6 +35,7 @@ import type { HardwareProfile, RoutingConfig, SimulationRequest, StageNode, Stag
 const HARDWARE_SELECTION_LABELS: Partial<Record<HardwareProfile, string>> = {
   ftqc_surface_code: "FTQC Surface-Code Logical QPU",
   ibm_heron_nisq: "IBM Heron",
+  ibm_nighthawk_r2: "IBM Nighthawk r2",
   google_weber_grid: "Google Weber",
   ionq_forte_trapped_ion: "IonQ Forte",
 };
@@ -379,7 +380,7 @@ export default function Home() {
               <InfoPopover label="About QPU capacity">
                 <p className="font-semibold text-cyan-800 dark:text-cyan-200">Available QPU capacity</p>
                 <p className="mt-2">Per QPU stage. Select a tier threshold to explore the trade-off; changes apply on Run simulation.</p>
-                <p className="mt-2">36 references Forte; 53 references Weber. 133 is the Heron capacity cap with representative r3-era timing; 1,121 references the Condor milestone. FTQC uses 1,024 logical workspace qubits, each assumed to require roughly 1,000 physical superconducting qubits at d≈27; supporting resources are excluded. 72 and capacities above a profile’s reference are exploratory overrides. Extra capacity above the workload’s parallelization ceiling stays idle.</p>
+                <p className="mt-2">36 references Forte; 53 references Weber; 120 references Nighthawk r2. 133 is the Heron capacity cap with representative r3-era timing; 1,121 references the Condor milestone. FTQC uses 1,024 logical workspace qubits, each assumed to require roughly 1,000 physical superconducting qubits at d≈27; supporting resources are excluded. 72 and capacities above a profile’s reference are exploratory overrides. Extra capacity above the workload’s parallelization ceiling stays idle.</p>
                 <p className="mt-2">Shor N = 15 and Quantum-MIPS M = 64 in sequential mode run Qiskit Aer reference circuits. Parallel tiers and larger scales use an analytical hardware model. Quantum-MIPS emulation uses the selected ancilla tier and is limited by CPU/GPU RAM.</p>
               </InfoPopover>
             </div>

@@ -1,5 +1,5 @@
 export type StageStatus = "OPTIMAL" | "WARNING" | "CRITICAL_BOTTLENECK";
-export const HARDWARE_PROFILE_IDS = ["ibm_heron_nisq", "google_weber_grid", "ionq_forte_trapped_ion", "ftqc_surface_code", "ideal_sim"] as const;
+export const HARDWARE_PROFILE_IDS = ["ibm_heron_nisq", "ibm_nighthawk_r2", "google_weber_grid", "ionq_forte_trapped_ion", "ftqc_surface_code", "ideal_sim"] as const;
 export type HardwareProfile = typeof HARDWARE_PROFILE_IDS[number];
 export type WorkloadId = "shors_crypto" | "quantum_mips";
 export type StageNode = "CPU" | "GPU" | "QPU";
@@ -52,6 +52,8 @@ export interface QPUProfile {
   topology_factor: number;
   /** Omitted by historical profiles created before native-entangler conversion was introduced. */
   native_2q_per_cx?: number;
+  /** Optional peak shot rate (Hz); omitted/null keeps timing-only legacy behavior. */
+  repetition_rate_hz?: number | null;
   provenance: Record<string, JsonValue>;
 }
 
@@ -70,7 +72,10 @@ export interface StageMetrics extends Record<string, unknown> {
   circuit_spec?: CircuitSpec;
   qpu_profile?: QPUProfile;
   launch_overhead_ms?: number;
+  /** Readout/reset plus optional repetition pacing; already included in latency. */
   measurement_reset_ms?: number;
+  /** Subset of measurement_reset_ms, never an extra additive cost. */
+  repetition_delay_ms?: number;
   gate_execution_ms?: number;
   qpu_io_included_in_latency?: boolean;
   coherence_survival?: number;

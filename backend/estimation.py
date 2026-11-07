@@ -22,7 +22,9 @@ def estimate_qpu(spec: CircuitSpec, profile: QPUProfile, shots: int, launch_over
     Routing and native-entangler conversion multiply CX-basis depth and 2Q count
     together, rounded up once. Native 2Q time and error then apply to these
     expanded resources. Circuit time excludes measurement, reset and launch;
-    these repeat for latency, never for coherent exposure.
+    these repeat for latency, never for coherent exposure. Optional shot-rate
+    pacing is included in measurement_reset_ms; repetition_delay_ms reports its
+    subset separately so existing three-bucket consumers never double-count it.
 
     Three conservative choices remain explicit: every qubit is charged for the
     whole circuit (not a scheduled idle duration); every depth layer is billed
@@ -53,6 +55,11 @@ def estimate_qpu(spec: CircuitSpec, profile: QPUProfile, shots: int, launch_over
     n_2q = math.ceil(spec.n_2q * profile.topology_factor * profile.native_2q_per_cx)
     circuit_ns = depth * profile.t_2q_ns
     circuit_us = circuit_ns / 1000
+    physical_shot_ns = circuit_ns + profile.t_meas_ns + profile.t_reset_ns
+    # Peak throughput sets a complete-shot floor, not an extra reset or a
+    # multiplier on long circuits. Devices without a rate retain old timings.
+    shot_period_ns = max(physical_shot_ns, 1e9 / profile.repetition_rate_hz) if profile.repetition_rate_hz else physical_shot_ns
+    repetition_delay_ns = shot_period_ns - physical_shot_ns
     feasible = profile.n_qubits_max is None or spec.n_qubits <= profile.n_qubits_max
     terms = {}
     for name, count, error in [("one_qubit", spec.n_1q, profile.err_1q),
@@ -70,10 +77,12 @@ def estimate_qpu(spec: CircuitSpec, profile: QPUProfile, shots: int, launch_over
     return {
         "execution_feasible": feasible, "circuit_depth": depth, "n_2q": n_2q,
         "shots": shots, "t_circuit_us": circuit_us,
-        "latency_ms": launch_overhead_ms + shots * (circuit_ns + profile.t_meas_ns + profile.t_reset_ns) / 1e6 if feasible else 0.0,
+        "latency_ms": launch_overhead_ms + shots * shot_period_ns / 1e6 if feasible else 0.0,
         "gate_execution_ms": shots * circuit_ns / 1e6 if feasible else 0.0,
-        "measurement_reset_ms": shots * (profile.t_meas_ns + profile.t_reset_ns) / 1e6 if feasible else 0.0,
+        "measurement_reset_ms": shots * (profile.t_meas_ns + profile.t_reset_ns + repetition_delay_ns) / 1e6 if feasible else 0.0,
         "launch_overhead_ms": launch_overhead_ms if feasible else 0.0,
+        # Subset of measurement_reset_ms (I/O/control), not an additive bucket.
+        "repetition_delay_ms": shots * repetition_delay_ns / 1e6 if feasible else 0.0,
         "coherence_survival": survival, "coherence_survival_pct": 100 * survival,
         "coherence_survival_best": survival, "coherence_survival_worst": worst,
         "coherence_log_survival": (0.0 if point_log == 0 else point_log) if feasible and math.isfinite(point_log) else None,

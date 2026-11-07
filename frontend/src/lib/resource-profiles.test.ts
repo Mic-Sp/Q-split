@@ -31,7 +31,7 @@ print(json.dumps({key: {"profile": value.model_dump(), "telemetry": run_shors_pi
       t1Us: profile.t1_us, t2Us: profile.t2_us, t1qNs: profile.t_1q_ns, t2qNs: profile.t_2q_ns,
       measurementNs: profile.t_meas_ns, resetNs: profile.t_reset_ns,
       error1q: profile.err_1q, error2q: profile.err_2q, errorMeasurement: profile.err_meas,
-      native2qPerCx: profile.native_2q_per_cx,
+      native2qPerCx: profile.native_2q_per_cx, repetitionRateHz: profile.repetition_rate_hz,
     });
     const run = { id: "4d9c09fa-7843-4c63-9d2b-556f74c4e5ab", completedAt: "2026-11-01T12:00:00.000Z",
       request: { workload_id: "shors_crypto", scale_param: 2048, hardware_profile: id, available_qubits: 4099 }, telemetry } as CompletedRun;

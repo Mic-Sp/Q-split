@@ -33,10 +33,10 @@ function fixture(profile: HardwareProfile): CompletedRun {
     } } };
 }
 
-test("hardware registry exposes five profiles and explicit comparative assumptions", () => {
-  assert.equal(HARDWARE_PROFILE_IDS.length, 5);
+test("hardware registry exposes six profiles and explicit comparative assumptions", () => {
+  assert.equal(HARDWARE_PROFILE_IDS.length, 6);
   assert.deepEqual(HARDWARE_PROFILE_IDS.map(id => { const arch = HARDWARE_PROFILES[id]; return [arch.referenceQubits, arch.depthMultiplier, arch.gateTimeMultiplier, arch.prepMs, arch.decayScale]; }), [
-    [133, 1, 1, 0.15, 1200], [53, 0.78, 0.45, 0.12, 850], [36, 0.55, 180, 0.85, 8500], [1024, 1, 108, 0.028, null], [null, 1, 1, 0.15, null],
+    [133, 1, 1, 0.15, 1200], [120, 1.2 / 1.5, 40 / 250, 0.0025, null], [53, 0.78, 0.45, 0.12, 850], [36, 0.55, 180, 0.85, 8500], [1024, 1, 108, 0.028, null], [null, 1, 1, 0.15, null],
   ]);
   assert.match(HARDWARE_PROFILES.google_weber_grid.description, /53-qubit reference.*32 ns.*0\.9%/);
   assert.ok(QUBIT_CAPACITY_PRESETS.includes(53));
@@ -49,6 +49,7 @@ test("hardware registry exposes five profiles and explicit comparative assumptio
 test("profile selection defaults to native capacity or the current scale's full ideal register", () => {
   for (const [scale, ceiling] of [[15, 22], [21, 28], [35, 33], [512, 2816], [2048, 11264]]) {
     assert.equal(hardwareDefaultQubits("ibm_heron_nisq", scale), 133);
+    assert.equal(hardwareDefaultQubits("ibm_nighthawk_r2", scale), 120);
     assert.equal(hardwareDefaultQubits("google_weber_grid", scale), 53);
     assert.equal(hardwareDefaultQubits("ionq_forte_trapped_ion", scale), 36);
     assert.equal(hardwareDefaultQubits("ftqc_surface_code", scale), 1024);
@@ -131,7 +132,7 @@ test("architecture verdicts and fallback explain SWAP savings separately from io
   assert.match(deterministicInsight(ion, undefined, "missing_key").sections.optimizationRecommendation, /at least 13 qubits/);
 });
 
-test("advisor route uses four-profile system facts for live output and deterministic fallback", async t => {
+test("advisor route uses registry profile facts for live output and deterministic fallback", async t => {
   const oldKey = process.env.GEMINI_API_KEY, oldUrl = process.env.DATABASE_URL;
   process.env.DATABASE_URL = ""; process.env.GEMINI_API_KEY = "test-key";
   t.after(() => { if (oldKey === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = oldKey; if (oldUrl === undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL = oldUrl; });
