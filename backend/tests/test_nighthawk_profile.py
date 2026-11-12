@@ -95,7 +95,7 @@ def test_capacity_and_benchmark_gate_count_do_not_invent_a_depth_cutoff():
     assert estimate_qpu(circuit(depth=8000), profile, 1, 0)["execution_feasible"]
     assert execution_profile(profile, 133).n_qubits_max == 133
     assert profile.n_qubits_max == 120
-    assert all(p.repetition_rate_hz is None for key, p in HARDWARE_PROFILES.items() if key != PROFILE_ID)
+    assert all(p.repetition_rate_hz is None for key, p in HARDWARE_PROFILES.items() if key not in {PROFILE_ID, "ibm_nighthawk_r3", "ibm_nighthawk_r3_dual"})
 
 
 @pytest.mark.parametrize("rate", [0, -1, True, False, "100000", math.nan, math.inf, -math.inf])

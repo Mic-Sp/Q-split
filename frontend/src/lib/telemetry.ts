@@ -79,6 +79,11 @@ export function describeChanges(before: Snapshot, after: Snapshot): MetricDelta[
   add("Workload", before.data.workload_name, after.data.workload_name);
   add("Scale", before.data.scale_label, after.data.scale_label);
   add("Hardware", hardwareLabel(before.request.hardware_profile), hardwareLabel(after.request.hardware_profile));
+  if (before.request.hardware_profile === "ibm_nighthawk_r3_dual" || after.request.hardware_profile === "ibm_nighthawk_r3_dual") {
+    add("Module placement", before.request.interconnect?.placement ?? "auto", after.request.interconnect?.placement ?? "auto");
+    add("Transfer fidelity scenario", before.request.interconnect?.fidelity_scenario ?? "demonstrated", after.request.interconnect?.fidelity_scenario ?? "demonstrated");
+    add("Assumed transfer duration · ns", before.request.interconnect?.transfer_duration_ns ?? 100, after.request.interconnect?.transfer_duration_ns ?? 100);
+  }
   add("Available QPU qubits", before.request.available_qubits, after.request.available_qubits);
   add("Execution mode", before.data.execution_mode, after.data.execution_mode);
   add("Primary bottleneck", before.data.primary_bottleneck, after.data.primary_bottleneck);

@@ -33,10 +33,10 @@ function fixture(profile: HardwareProfile): CompletedRun {
     } } };
 }
 
-test("hardware registry exposes six profiles and explicit comparative assumptions", () => {
-  assert.equal(HARDWARE_PROFILE_IDS.length, 6);
+test("hardware registry exposes eight profiles and explicit comparative assumptions", () => {
+  assert.equal(HARDWARE_PROFILE_IDS.length, 8);
   assert.deepEqual(HARDWARE_PROFILE_IDS.map(id => { const arch = HARDWARE_PROFILES[id]; return [arch.referenceQubits, arch.depthMultiplier, arch.gateTimeMultiplier, arch.prepMs, arch.decayScale]; }), [
-    [133, 1, 1, 0.15, 1200], [120, 1.2 / 1.5, 40 / 250, 0.0025, null], [53, 0.78, 0.45, 0.12, 850], [36, 0.55, 180, 0.85, 8500], [1024, 1, 108, 0.028, null], [null, 1, 1, 0.15, null],
+    [133, 1, 1, 0.15, 1200], [120, 1.2 / 1.5, 40 / 250, 0.0025, null], [520, 1.2 / 1.5, 40 / 250, 0.0025, null], [1040, 1.2 / 1.5, 40 / 250, 0.0025, null], [53, 0.78, 0.45, 0.12, 850], [36, 0.55, 180, 0.85, 8500], [1024, 1, 108, 0.028, null], [null, 1, 1, 0.15, null],
   ]);
   assert.match(HARDWARE_PROFILES.google_weber_grid.description, /53-qubit reference.*32 ns.*0\.9%/);
   assert.ok(QUBIT_CAPACITY_PRESETS.includes(53));

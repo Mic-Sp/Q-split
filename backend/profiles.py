@@ -16,6 +16,17 @@ GIDNEY_2025_RSA = "https://arxiv.org/abs/2505.15917"
 GOOGLE_WILLOW_QEC = "https://arxiv.org/abs/2408.13687"
 IBM_NIGHTHAWK_R2 = "https://www.ibm.com/quantum/blog/nighthawk-r2"
 IBM_COMPUTE_CHANGELOG = "https://eu-de.quantum.cloud.ibm.com/docs/en/guides/changelog-quantum-compute-service"
+IBM_NIGHTHAWK_R3 = "https://newsroom.ibm.com/2026-11-11-ibm-quantum-nighthawk-demonstrates-new-levels-of-speed-and-quality%2C-with-plans-to-scale-beyond-1%2C000-qubits-in-2027"
+IBM_LINK_DEMONSTRATION = "https://arxiv.org/abs/2610.29986"
+SYSTEM_TWO_DEPLOYMENT = (
+    "IBM Quantum System Two is the modular cryogenic mainframe/chassis; Heron, Nighthawk r2 "
+    "and Nighthawk r3 are QPUs housed inside it. A single Nighthawk r2 (120Q) is the live "
+    "system today. Per IBM's November 11, 2026 announcement, the roadmap scales to a "
+    "single Nighthawk r3 QPU (520 programmable / 2,034 physical qubits, 10,000 target "
+    "operations, 10 installed l-couplers) and a dual-processor 2x Nighthawk r3 linked "
+    "system (1,040 programmable / 4,068 physical qubits bridged across 10 active "
+    "l-couplers across coupled cryogenic modules) in 2027. These are roadmap targets, "
+    "not demonstrated r3 system calibrations.")
 
 
 def _provenance(source_url, sources, published, notes, *, retrieval_date=RETRIEVED_ON, statistics=None):
@@ -61,8 +72,58 @@ def _nighthawk_provenance():
         "connectivity_degree": 4, "programmable_qubits": 120, "tunable_couplers": 218,
         "dissipative_reset_gadgets": 120, "total_physical_elements": 458,
         "reset_only_effective_t1_ns": 25,
-        "deployment_notes": "User-supplied deployment context: Hyde Park Labs (Chicago / NQAC); HPC hybrid pairing examples ORNL Umbra / NCSA DeltaAI. Not execution targets in this model."}
+        "deployment_notes": SYSTEM_TWO_DEPLOYMENT + " User-supplied deployment context: Hyde Park Labs (Chicago / NQAC); HPC hybrid pairing examples ORNL Umbra / NCSA DeltaAI. Not execution targets in this model."}
     return provenance
+
+
+def _r3_profile(*, dual: bool) -> QPUProfile:
+    """Roadmap capacity with explicitly inherited r2 physics, not new calibration."""
+    inherited = {"t1_us": 200.0, "t2_us": 160.0, "t_1q_ns": 32.0, "t_2q_ns": 40.0,
+                 "t_meas_ns": 1500.0, "t_reset_ns": 1000.0, "err_1q": 0.00025,
+                 "err_2q": 0.0037, "err_meas": 0.0075, "topology_factor": 1.2,
+                 "native_2q_per_cx": 1.0, "repetition_rate_hz": 100_000.0}
+    provenance = _provenance(IBM_NIGHTHAWK_R3,
+        [IBM_NIGHTHAWK_R3, IBM_NIGHTHAWK_R2, IBM_LINK_DEMONSTRATION], {"n_qubits_max"},
+        "November 11, 2026 r3 design / 2027 linked-system roadmap. All local timing, "
+        "T1/T2, error, routing, native-entangler and 100 kHz repetition parameters are "
+        "carried over from the r2 baseline as modeling assumptions. 10,000 operations "
+        "is an advisory design target, not a depth cutoff, hard feasibility cap or "
+        "fidelity guarantee. The 0.993 default extrapolates the r1 four-l-coupler "
+        "demonstration's peak (~0.9929; mean ~0.990) to ten r3 bridge channels; "
+        "0.999 is an optional 2027 target scenario, not achieved r3 fidelity. "
+        "100 ns per scheduled transfer round is a configurable architectural assumption. "
+        "V1 traffic packs one module first (or balances explicit dual placement), "
+        "assumes uniformly mixed CX operand pairs, two state transfers per remote CX, "
+        "and ideal pooled channel scheduling ceil(transfers/10), ignoring gate dependencies. "
+        "Transfers add coherent stalls and an independent fidelity proxy; this is not "
+        "a compiled interaction graph or a calibrated quantum channel model.",
+        retrieval_date="2026-11-12")
+    provenance["value_types"].update({key: "model_assumption_inherited_from_r2" for key in inherited})
+    provenance["value_types"].update({"n_physical_qubits": "vendor_roadmap_target" if not dual else "derived_2x_vendor_roadmap_target",
+        "max_operations": "vendor_roadmap_target", "module_count": "vendor_roadmap_target",
+        "qubits_per_module": "vendor_roadmap_target", "l_couplers_installed": "vendor_roadmap_target",
+        "l_couplers_active": "architectural_scenario", "state_transfer_fidelity": "extrapolated_r1_peak",
+        "state_transfer_target_fidelity": "roadmap_target", "transfer_duration_ns": "architectural_assumption"})
+    provenance["statistics"] = {
+        "inherited_r2_parameters": inherited,
+        "max_operations": {"value": 10000, "statistic_type": "design target; advisory, not depth limit", "source_url": IBM_NIGHTHAWK_R3},
+        "state_transfer_fidelity": {"peak": 0.993, "average": 0.990, "demonstrated_channels": 4,
+            "demonstrated_processor": "Nighthawk r1", "statistic_type": "r1 peak extrapolated to r3", "source_url": IBM_LINK_DEMONSTRATION},
+        "state_transfer_target_fidelity": {"value": 0.999, "statistic_type": "optional 2027 target scenario"},
+        "transfer_duration_ns": {"value": 100.0, "unit": "ns/round", "statistic_type": "configurable architectural assumption"}}
+    provenance["architecture"] = {"modality": "Superconducting Transmon (fixed-frequency)",
+        "connectivity_degree": 4, "programmable_qubits": 1040 if dual else 520,
+        "total_physical_qubits": 4068 if dual else 2034, "module_count": 2 if dual else 1,
+        "qubits_per_module": 520, "l_couplers_installed": 10, "l_couplers_active": 10 if dual else 0,
+        "deployment_notes": SYSTEM_TWO_DEPLOYMENT}
+    return QPUProfile(id="ibm_nighthawk_r3_dual" if dual else "ibm_nighthawk_r3",
+        name="IBM Quantum System Two (2x Nighthawk r3 Linked — 1,040Q)" if dual else "IBM Quantum System Two (Nighthawk r3 — 520Q)",
+        n_qubits_max=1040 if dual else 520, n_physical_qubits=4068 if dual else 2034,
+        max_operations=10000, module_count=2 if dual else 1, qubits_per_module=520,
+        l_couplers_installed=10, l_couplers_active=10 if dual else 0,
+        state_transfer_fidelity=0.993 if dual else None,
+        state_transfer_target_fidelity=0.999 if dual else None, transfer_duration_ns=100.0 if dual else None,
+        **inherited, provenance=provenance)
 
 
 HARDWARE_PROFILES = {
@@ -84,6 +145,8 @@ HARDWARE_PROFILES = {
         err_1q=0.00025, err_2q=0.0037, err_meas=0.0075,
         topology_factor=1.2, native_2q_per_cx=1.0, repetition_rate_hz=100_000.0,
         provenance=_nighthawk_provenance()),
+    "ibm_nighthawk_r3": _r3_profile(dual=False),
+    "ibm_nighthawk_r3_dual": _r3_profile(dual=True),
     "google_weber_grid": QPUProfile(
         id="google_weber_grid", name="Google Weber / Sycamore (representative)", n_qubits_max=53,
         t1_us=15, t2_us=20, t_1q_ns=25, t_2q_ns=32,
@@ -185,6 +248,7 @@ HARDWARE_PROFILES = {
 }
 
 TOPOLOGIES = {"ibm_heron_nisq": "Heavy-Hex", "ibm_nighthawk_r2": "4-degree Square Grid", "google_weber_grid": "2D Square Grid",
+              "ibm_nighthawk_r3": "4-degree Square Grid", "ibm_nighthawk_r3_dual": "Linked Square Grids (10 l-couplers)",
               "ftqc_surface_code": "2D Surface-Code Lattice Surgery",
               "ionq_forte_trapped_ion": "All-to-All Ion Trap", "ideal_sim": "Noise-free reference"}
 

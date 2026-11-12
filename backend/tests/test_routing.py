@@ -370,7 +370,8 @@ class RoutingTests(unittest.TestCase):
                     self.assertEqual(kernel.metrics["reference_circuit_depth"], reference)
                     self.assertEqual(kernel.metrics["circuit_depth"], depth)
                     self.assertAlmostEqual(kernel.latency_ms, 0.30 + 512 * (
-                        depth * architecture.t_2q_ns + architecture.t_meas_ns + architecture.t_reset_ns) / 1e6)
+                        depth * architecture.t_2q_ns + kernel.metrics.get("link_time_ns", 0)
+                        + architecture.t_meas_ns + architecture.t_reset_ns) / 1e6)
                     self.assertEqual(kernel.metrics["io_state_prep_ms"], 0)
                     self.assertEqual(kernel.metrics["qubits_allocated"], plan["qubits_allocated"])
                     spec = kernel.metrics["circuit_spec"]
@@ -380,7 +381,8 @@ class RoutingTests(unittest.TestCase):
                                      (1 - Decimal(str(architecture.err_2q)))**math.ceil(spec["n_2q"] * architecture.topology_factor * architecture.native_2q_per_cx) *
                                      (1 - Decimal(str(architecture.err_meas)))**spec["n_meas"])
                     if architecture.t1_us is not None:
-                        survival *= math.exp(-spec["n_qubits"] * depth * architecture.t_2q_ns / 1000 / architecture.t1_us)
+                        survival *= math.exp(-spec["n_qubits"] * (depth * architecture.t_2q_ns + kernel.metrics.get("link_time_ns", 0)) / 1000 / architecture.t1_us)
+                    survival *= math.exp(kernel.metrics.get("link_log_survival", 0))
                     self.assertAlmostEqual(kernel.metrics["coherence_survival_pct"], 100 * survival, delta=max(1e-300, 100 * survival * 1e-12))
                     self.assertEqual(kernel.metrics["capacity_override"], architecture.n_qubits_max is not None and capacity > architecture.n_qubits_max)
 

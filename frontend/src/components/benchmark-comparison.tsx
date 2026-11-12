@@ -16,6 +16,8 @@ export function BenchmarkComparison({ runs, onRemove }: { runs: SavedSimulationR
     <div className="console-header border-b border-slate-200 dark:border-slate-800 px-3 py-2">
       <h3 className="text-xs font-semibold text-cyan-900 dark:text-cyan-100">Side-by-side snapshot comparison</h3>
       <p className="mt-1 text-[10px] text-slate-600 dark:text-slate-400">Deltas use the first selected run as reference. {columns.length === 1 ? "Select another run to compare." : "Blocked runs show only executed work."}</p>
+      {columns.some(column => column.run.telemetry.stages.stage_2_quantum_kernel.metrics.interconnect_model_version) &&
+        <p className="mt-1 text-[10px] text-slate-600 dark:text-slate-400">l-coupler execution is already included in pure compute. Interconnect overhead tracks launch and I/O. Transfer durations and traffic are architectural assumptions.</p>}
     </div>
     <div role="region" aria-label="Comparison matrix" tabIndex={0} className="overflow-x-auto">
       <table className="w-full min-w-[640px] table-fixed text-left text-[10px]">

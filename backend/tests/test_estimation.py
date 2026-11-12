@@ -241,7 +241,7 @@ def test_profiles_reject_invalid_physics(profile, field, value):
 
 def test_profiles_record_per_value_provenance_and_capacity_override_does_not_mutate():
     for profile in HARDWARE_PROFILES.values():
-        assert profile.provenance["retrieval_date"] == ("2026-11-07" if profile.id == "ibm_nighthawk_r2" else "2026-11-02" if profile.id in {"google_weber_grid", "ftqc_surface_code"} else "2026-11-01")
+        assert profile.provenance["retrieval_date"] == ("2026-11-12" if profile.id in {"ibm_nighthawk_r3", "ibm_nighthawk_r3_dual"} else "2026-11-07" if profile.id == "ibm_nighthawk_r2" else "2026-11-02" if profile.id in {"google_weber_grid", "ftqc_surface_code"} else "2026-11-01")
         for field in ("t1_us", "t2_us", "t_1q_ns", "t_2q_ns", "t_meas_ns", "t_reset_ns", "err_1q", "err_2q", "err_meas", "native_2q_per_cx"):
             assert field in profile.provenance["value_types"]
     vendor = HARDWARE_PROFILES["google_weber_grid"]

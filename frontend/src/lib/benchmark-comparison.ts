@@ -28,6 +28,15 @@ export function benchmarkMetrics(run: SavedSimulationRun) {
     circuitDepth: run.circuitDepth ?? (Number.isSafeInteger(metrics.circuit_depth) ? String(metrics.circuit_depth) : null),
     coherenceSurvival: coherence.survival ?? null,
     coherenceStatus: coherence.status,
+    modulesUsed: finite(metrics.modules_used),
+    transfersPerShot: finite(metrics.transfers_per_shot),
+    transferRounds: finite(metrics.scheduled_transfer_rounds),
+    linkExecutionMs: finite(metrics.link_execution_ms),
+    transferFidelity: finite(metrics.selected_transfer_fidelity),
+    transferDurationNs: finite(metrics.transfer_duration_ns),
+    fidelityScenario: typeof metrics.fidelity_scenario === "string" ? metrics.fidelity_scenario : null,
+    modulePlacement: typeof metrics.module_placement === "string" ? metrics.module_placement : null,
+    interconnectModelVersion: finite(metrics.interconnect_model_version),
   };
 }
 
@@ -80,6 +89,7 @@ export function benchmarkComparison(runs: SavedSimulationRun[]) {
   const chosen = runs.slice(0, MAX_COMPARISON_RUNS);
   if (!chosen.length) return [];
   const reference = benchmarkMetrics(chosen[0]);
+  const showLinks = chosen.some(run => benchmarkMetrics(run).modulesUsed !== null);
   return chosen.map((run, index) => {
     const metrics = benchmarkMetrics(run);
     const compatible = sameModelVersion(chosen[0].telemetry, run.telemetry);
@@ -116,6 +126,16 @@ export function benchmarkComparison(runs: SavedSimulationRun[]) {
         coherence,
         categorical("Bottleneck status", `${run.bottleneckStatus} · ${run.primaryBottleneck}`, `${chosen[0].bottleneckStatus} · ${chosen[0].primaryBottleneck}`),
       ];
+    if (showLinks) rows.push(
+      numeric("Modules used", metrics.modulesUsed, reference.modulesUsed, "modules"),
+      numeric("State transfers / shot", metrics.transfersPerShot, reference.transfersPerShot, "transfers"),
+      numeric("Transfer rounds / shot", metrics.transferRounds, reference.transferRounds, "rounds"),
+      numeric("l-coupler execution (included)", metrics.linkExecutionMs, reference.linkExecutionMs, "ms"),
+      numeric("State transfer fidelity", metrics.transferFidelity, reference.transferFidelity, "probability"),
+      numeric("Assumed transfer duration", metrics.transferDurationNs, reference.transferDurationNs, "ns/round"),
+      categorical("Fidelity scenario", metrics.fidelityScenario ?? "Not reported", reference.fidelityScenario ?? "Not reported"),
+      categorical("Module placement", metrics.modulePlacement ?? "Not reported", reference.modulePlacement ?? "Not reported"),
+    );
     return {
       run, compatible, modelVersion: modelVersionLabel(resourceModelVersion(run.telemetry)),
       metrics: compatible ? rows : rows.map(row => ({ ...row, delta: null, rawDelta: undefined, changed: false })),

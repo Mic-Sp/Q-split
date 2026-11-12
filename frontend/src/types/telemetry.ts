@@ -1,5 +1,5 @@
 export type StageStatus = "OPTIMAL" | "WARNING" | "CRITICAL_BOTTLENECK";
-export const HARDWARE_PROFILE_IDS = ["ibm_heron_nisq", "ibm_nighthawk_r2", "google_weber_grid", "ionq_forte_trapped_ion", "ftqc_surface_code", "ideal_sim"] as const;
+export const HARDWARE_PROFILE_IDS = ["ibm_heron_nisq", "ibm_nighthawk_r2", "ibm_nighthawk_r3", "ibm_nighthawk_r3_dual", "google_weber_grid", "ionq_forte_trapped_ion", "ftqc_surface_code", "ideal_sim"] as const;
 export type HardwareProfile = typeof HARDWARE_PROFILE_IDS[number];
 export type WorkloadId = "shors_crypto" | "quantum_mips";
 export type StageNode = "CPU" | "GPU" | "QPU";
@@ -18,6 +18,14 @@ export interface SimulationRequest {
   hardware_profile: HardwareProfile;
   available_qubits?: number;
   routing?: Partial<RoutingConfig> | null;
+  interconnect?: InterconnectConfig | null;
+}
+
+export interface InterconnectConfig {
+  placement?: "auto" | "dual";
+  fidelity_scenario?: "demonstrated" | "target_2027";
+  /** Configurable architectural assumption; backend default is 100 ns per round. */
+  transfer_duration_ns?: number | null;
 }
 
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
@@ -33,6 +41,7 @@ export interface CircuitSpec {
   stage3_ms: number;
   native_classical_ms?: number | null;
   native_classical_name?: string | null;
+  interconnect?: InterconnectConfig | null;
 }
 
 /** Backend QPU characterization. Null capacity/coherence fields represent the ideal reference. */
@@ -54,6 +63,15 @@ export interface QPUProfile {
   native_2q_per_cx?: number;
   /** Optional peak shot rate (Hz); omitted/null keeps timing-only legacy behavior. */
   repetition_rate_hz?: number | null;
+  n_physical_qubits?: number | null;
+  max_operations?: number | null;
+  module_count?: number;
+  qubits_per_module?: number | null;
+  l_couplers_installed?: number;
+  l_couplers_active?: number;
+  state_transfer_fidelity?: number | null;
+  state_transfer_target_fidelity?: number | null;
+  transfer_duration_ns?: number | null;
   provenance: Record<string, JsonValue>;
 }
 
@@ -64,6 +82,8 @@ export interface LogSurvivalTerms {
   measurement: number | null;
   idle_t1: number | null;
   idle_t2: number | null;
+  /** Absent on historical five-term records. */
+  interconnect?: number | null;
 }
 
 /** Optional typed fields keep historical runs and workload-specific extra metrics readable. */
@@ -85,6 +105,18 @@ export interface StageMetrics extends Record<string, unknown> {
   /** Natural log of T1 point; retained through probability underflow, null for unavailable/certain failure. */
   coherence_log_survival?: number | null;
   log_survival_terms?: LogSurvivalTerms | null;
+  interconnect_model_version?: 1;
+  modules_used?: number;
+  transfers_per_shot?: number;
+  scheduled_transfer_rounds?: number;
+  link_time_ns?: number;
+  /** Subset of gate_execution_ms: coherent transfer/stall time over all shots. */
+  link_execution_ms?: number;
+  link_log_survival?: number;
+  selected_transfer_fidelity?: number | null;
+  fidelity_scenario?: "demonstrated" | "target_2027";
+  module_placement?: "auto" | "dual";
+  transfer_duration_ns?: number | null;
 }
 
 /** Per-stage wire telemetry: current GPU/QPU batch latency includes I/O; legacy fields remain supported. */

@@ -20,9 +20,10 @@ import { createClientId } from "@/lib/client-session";
 import { usePersistentRuns } from "@/hooks/use-persistent-runs";
 import { coherenceBudget, formatSurvivalPercent, pipelineTiming, type CoherenceBudgetStatus } from "@/lib/kpi-metrics";
 import { formatDuration, formatRawMilliseconds } from "@/lib/duration";
-import { HARDWARE_PROFILES, QUBIT_CAPACITY_PRESETS, hardwareLabel } from "@/lib/hardware-profiles";
+import { QUBIT_CAPACITY_PRESETS, hardwareLabel } from "@/lib/hardware-profiles";
 import { WORKLOADS, workloadScaleLabel } from "@/lib/workloads";
-import { HARDWARE_PROFILE_IDS } from "@/types/telemetry";
+import { HardwareSelector } from "@/components/hardware-selector";
+import { DEFAULT_INTERCONNECT, interconnectKey } from "@/lib/interconnect";
 import {
   Activity, ArrowDown, ArrowRight, Check, ChevronDown, CircleAlert, CircuitBoard, Cpu,
   GitCompareArrows, Layers3, LoaderCircle, Play, Radio, Workflow, Zap,
@@ -31,14 +32,7 @@ import {
   DEFAULT_AVAILABLE_QUBITS, DEFAULT_ROUTING, formatValue, hardwareDefaultQubits, isScalarMetricValue, PIPELINE, simulate,
   type Snapshot, type Transition,
 } from "@/lib/telemetry";
-import type { HardwareProfile, RoutingConfig, SimulationRequest, StageNode, StageStatus, StageTelemetry, WorkloadId } from "@/types/telemetry";
-const HARDWARE_SELECTION_LABELS: Partial<Record<HardwareProfile, string>> = {
-  ftqc_surface_code: "FTQC Surface-Code Logical QPU",
-  ibm_heron_nisq: "IBM Heron",
-  ibm_nighthawk_r2: "IBM Nighthawk r2",
-  google_weber_grid: "Google Weber",
-  ionq_forte_trapped_ion: "IonQ Forte",
-};
+import type { HardwareProfile, InterconnectConfig, RoutingConfig, SimulationRequest, StageNode, StageStatus, StageTelemetry, WorkloadId } from "@/types/telemetry";
 const summaryValue = (value: unknown) => typeof value === "number" && Math.abs(value) >= 1_000_000
   ? new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 2 }).format(value)
   : formatValue(value);
@@ -103,7 +97,11 @@ const metricLabels: Record<string, string> = {
   routing_model: "Latency estimate", routing_supported: "Route supported", execution_feasible: "Execution feasible",
   launch_transfer_overhead_ms: "Launch / transfer", compute_latency_factor: "Compute latency factor",
   launch_overhead_ms: "QPU launch", measurement_reset_ms: "Measurement / reset", gate_execution_ms: "Gate execution",
-  resource_model_version: "Model version",
+  resource_model_version: "Model version", interconnect_model_version: "Link model version",
+  modules_used: "Modules used", transfers_per_shot: "Transfers / shot", scheduled_transfer_rounds: "Transfer rounds / shot",
+  link_time_ns: "Coherent link time · ns / shot", link_execution_ms: "Link execution (included)",
+  selected_transfer_fidelity: "Transfer fidelity", transfer_duration_ns: "Assumed transfer round · ns",
+  fidelity_scenario: "Fidelity scenario", module_placement: "Module placement",
   simulation_method: "Simulation method", statevector_memory_required: "Statevector memory required",
   statevector_memory_budget_gib: "Memory budget · GiB",
   available_qubits: "Available QPU qubits", qubits_allocated: "Qubits allocated",
@@ -199,6 +197,7 @@ export default function Home() {
   const { saveRun } = persistentHistory;
   const [scale, setScale] = useState(15);
   const [hardware, setHardware] = useState<HardwareProfile>("ibm_heron_nisq");
+  const [interconnect, setInterconnect] = useState<InterconnectConfig>({ ...DEFAULT_INTERCONNECT });
   const [availableQubits, setAvailableQubits] = useState(String(DEFAULT_AVAILABLE_QUBITS));
   const [routing, setRouting] = useState<RoutingConfig>(DEFAULT_ROUTING);
   // Separate submitted configuration from live edits; only an explicit run changes this effect input.
@@ -271,10 +270,12 @@ export default function Home() {
   const limited = data && !data.primary_bottleneck.startsWith("NONE");
   const latest = history[0];
   const capacity = Number(availableQubits);
-  const validCapacity = Number.isSafeInteger(capacity) && capacity >= 1 && capacity <= 2_147_483_647;
+  const validCapacity = Number.isSafeInteger(capacity) && capacity >= 1 && capacity <= 2_147_483_647 &&
+    (hardware !== "ibm_nighthawk_r3_dual" || (Number.isFinite(interconnect.transfer_duration_ns) && interconnect.transfer_duration_ns! > 0 && interconnect.transfer_duration_ns! <= 1_000_000));
   const configurationChanged = snapshot && (
     snapshot.request.workload_id !== workload || snapshot.request.scale_param !== scale ||
-    snapshot.request.hardware_profile !== hardware || snapshot.request.available_qubits !== capacity || PIPELINE.some(({ routingKey }) =>
+    snapshot.request.hardware_profile !== hardware || snapshot.request.available_qubits !== capacity ||
+    (hardware === "ibm_nighthawk_r3_dual" && interconnectKey(snapshot.request.interconnect) !== interconnectKey(interconnect)) || PIPELINE.some(({ routingKey }) =>
       (snapshot.request.routing?.[routingKey] ?? DEFAULT_ROUTING[routingKey]) !== routing[routingKey])
   );
   /** Capture current controls for one execution; persistence receives that same captured request. */
@@ -284,6 +285,7 @@ export default function Home() {
     dispatch({ type: "start" });
     setSubmittedRequest({
       workload_id: workload, scale_param: scale, hardware_profile: hardware, available_qubits: capacity, routing: { ...routing },
+      ...(hardware === "ibm_nighthawk_r3_dual" ? { interconnect: { ...interconnect } } : {}),
     });
   };
   const updateNode = (key: keyof RoutingConfig, node: StageNode) => {
@@ -306,6 +308,7 @@ export default function Home() {
     const restored = restoredConfiguration(run);
     setWorkload(restored.workload_id); setScale(restored.scale_param); setHardware(restored.hardware_profile);
     setAvailableQubits(String(restored.available_qubits));
+    setInterconnect({ ...DEFAULT_INTERCONNECT, ...restored.interconnect, transfer_duration_ns: restored.interconnect?.transfer_duration_ns ?? 100 });
     setRouting({ ...DEFAULT_ROUTING, ...restored.routing });
     setRestoreMessage(`Restored ${run.snapshotName ?? run.scaleLabel} into the controls. Run simulation to execute this configuration.`);
     document.querySelector('[aria-label="Simulation controls"]')?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -359,16 +362,9 @@ export default function Home() {
               <legend className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">02 / Target scale</legend>
               <TargetScales key={workload} workload={workload} scale={scale} onSelect={setScale} />
             </fieldset>
-            <fieldset className="min-w-0">
+            <fieldset className="min-w-0 w-full lg:max-w-xl">
               <legend className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">03 / Hardware profile</legend>
-              <div className="grid grid-cols-2 gap-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 p-1">
-                {HARDWARE_PROFILE_IDS.map((value) => (
-                  <div key={value} className={`flex min-w-0 items-center rounded-md ${hardware === value ? "bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-sm" : "text-slate-600 dark:text-slate-400"}`}>
-                    <button type="button" aria-pressed={hardware === value} onClick={() => selectHardware(value)} className="min-h-7 min-w-0 flex-1 px-2 py-1.5 text-left text-[10px] transition-colors hover:text-cyan-800 dark:hover:text-cyan-200">{HARDWARE_SELECTION_LABELS[value] ?? hardwareLabel(value)}</button>
-                    <InfoPopover label={`About ${hardwareLabel(value)}`}><p className="font-semibold text-cyan-800 dark:text-cyan-200">{hardwareLabel(value)}</p><p className="mt-2">{HARDWARE_PROFILES[value].description}</p><p className="mt-2 text-[10px] text-slate-600 dark:text-slate-400">Selecting a profile sets its reference capacity; Ideal Noise-Free selects this workload’s parallelization ceiling. You can then override capacity manually or with presets and tiers. Restoring a snapshot preserves its saved capacity. Architecture assumptions are not device benchmarks.</p></InfoPopover>
-                  </div>
-                ))}
-              </div>
+              <HardwareSelector value={hardware} onChange={selectHardware} interconnect={interconnect} onInterconnectChange={setInterconnect} />
             </fieldset>
             <button type="button" disabled={loading || !validCapacity} onClick={runSimulation} className="flex min-h-9 shrink-0 items-center justify-center gap-2 rounded-lg bg-cyan-700 dark:bg-cyan-400 px-4 text-xs font-semibold text-white dark:text-slate-950 transition-colors hover:bg-cyan-800 dark:hover:bg-cyan-300 disabled:cursor-wait disabled:opacity-60">
               {loading ? <LoaderCircle size={15} className="animate-spin" /> : <Play size={15} fill="currentColor" />}

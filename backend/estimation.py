@@ -3,9 +3,11 @@
 import math
 
 if __package__:
-    from .models import CircuitSpec, QPUProfile
+    from .models import CircuitSpec, QPUProfile, InterconnectConfig
+    from .workloads import partition_transfer_count
 else:
-    from models import CircuitSpec, QPUProfile
+    from models import CircuitSpec, QPUProfile, InterconnectConfig
+    from workloads import partition_transfer_count
 
 
 STATEVECTOR_PROFILES = {
@@ -35,7 +37,7 @@ def estimate_qpu(spec: CircuitSpec, profile: QPUProfile, shots: int, launch_over
     when defined, then takes the lower of that result and the T1 point (T2 may
     exceed T1). These are sensitivity scenarios, not statistical confidence bounds.
     Log terms are nonpositive natural logs: add one_qubit, two_qubit, measurement
-    and idle_t1 to reproduce the point. idle_t2 is an ALTERNATIVE idle term,
+    and idle_t1 plus interconnect (when present) to reproduce the point. idle_t2 is an ALTERNATIVE idle term,
     never an additional charge; use the more negative idle term for worst.
     A null term denotes -infinity for certain failure. Infeasible execution has
     zero survival and no physical log breakdown. Ideal profiles have zero terms.
@@ -53,7 +55,31 @@ def estimate_qpu(spec: CircuitSpec, profile: QPUProfile, shots: int, launch_over
         raise ValueError("launch_overhead_ms must be finite and nonnegative")
     depth = math.ceil(spec.depth * profile.topology_factor * profile.native_2q_per_cx)
     n_2q = math.ceil(spec.n_2q * profile.topology_factor * profile.native_2q_per_cx)
-    circuit_ns = depth * profile.t_2q_ns
+    link = {}
+    link_ns = link_log = 0.0
+    if spec.interconnect is not None and profile.module_count == 1:
+        raise ValueError("Interconnect controls require a linked dual-module profile")
+    if profile.qubits_per_module is not None:
+        config = spec.interconnect or InterconnectConfig()
+        modules, transfers = (partition_transfer_count(spec.n_qubits, spec.n_2q, profile.qubits_per_module,
+                              force_dual=config.placement == "dual") if profile.module_count > 1 else (1, 0))
+        channels = profile.l_couplers_active
+        rounds = (transfers + channels - 1) // channels if transfers else 0
+        fidelity = (profile.state_transfer_target_fidelity if config.fidelity_scenario == "target_2027"
+                    else profile.state_transfer_fidelity)
+        if profile.module_count > 1 and fidelity is None:
+            raise ValueError("The selected transfer-fidelity scenario is unavailable")
+        duration = config.transfer_duration_ns or profile.transfer_duration_ns
+        link_ns = rounds * duration if rounds else 0.0
+        link_log = transfers * math.log(fidelity) if transfers else 0.0
+        # Pooled rounds assume ideal utilization of parallel channels, with no
+        # dependency stalls beyond ceil(transfers/channels). Explicit V1 assumption.
+        link = {"interconnect_model_version": 1, "modules_used": modules,
+                "transfers_per_shot": transfers, "scheduled_transfer_rounds": rounds,
+                "link_time_ns": link_ns, "link_log_survival": link_log,
+                "selected_transfer_fidelity": fidelity, "fidelity_scenario": config.fidelity_scenario,
+                "module_placement": config.placement, "transfer_duration_ns": duration}
+    circuit_ns = depth * profile.t_2q_ns + link_ns
     circuit_us = circuit_ns / 1000
     physical_shot_ns = circuit_ns + profile.t_meas_ns + profile.t_reset_ns
     # Peak throughput sets a complete-shot floor, not an extra reset or a
@@ -70,14 +96,19 @@ def estimate_qpu(spec: CircuitSpec, profile: QPUProfile, shots: int, launch_over
     terms["idle_t1"] = -exposure_us / profile.t1_us if profile.t1_us is not None else 0.0
     t2 = profile.t2_us if profile.t2_us is not None else profile.t1_us
     terms["idle_t2"] = -exposure_us / t2 if t2 is not None else 0.0
-    gate_log = terms["one_qubit"] + terms["two_qubit"] + terms["measurement"]
+    if link:
+        terms["interconnect"] = link_log
+    gate_log = terms["one_qubit"] + terms["two_qubit"] + terms["measurement"] + link_log
     point_log = gate_log + terms["idle_t1"]
     survival = math.exp(point_log) if feasible else 0.0
     worst = math.exp(gate_log + min(terms["idle_t1"], terms["idle_t2"])) if feasible else 0.0
     return {
+        **link,
+        **({"link_execution_ms": shots * link_ns / 1e6 if feasible else 0.0} if link else {}),
         "execution_feasible": feasible, "circuit_depth": depth, "n_2q": n_2q,
         "shots": shots, "t_circuit_us": circuit_us,
         "latency_ms": launch_overhead_ms + shots * shot_period_ns / 1e6 if feasible else 0.0,
+        # Link execution is a subset of this coherent execution bucket.
         "gate_execution_ms": shots * circuit_ns / 1e6 if feasible else 0.0,
         "measurement_reset_ms": shots * (profile.t_meas_ns + profile.t_reset_ns + repetition_delay_ns) / 1e6 if feasible else 0.0,
         "launch_overhead_ms": launch_overhead_ms if feasible else 0.0,

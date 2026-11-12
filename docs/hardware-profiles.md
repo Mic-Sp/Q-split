@@ -21,6 +21,8 @@ Display names below are the backend `QPUProfile.name` strings; selector labels m
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: |
 | `ibm_heron_nisq` | IBM Heron (133-qubit cap, r3-era timing; representative) | 133 | 200 | 150 | 32 | 68 | 1,500 | 200,000 | 0.0003 / 0.003 / 0.01 | 1.5 | 1 |
 | `ibm_nighthawk_r2` | IBM Quantum System Two (Nighthawk r2) | 120 | 200 | 160 | 32 | 40 | 1,500 | 1,000 | 0.00025 / 0.0037 / 0.0075 | 1.2 | 1 |
+| `ibm_nighthawk_r3` | IBM Quantum System Two (Nighthawk r3 — 520Q) | 520 | 200 | 160 | 32 | 40 | 1,500 | 1,000 | 0.00025 / 0.0037 / 0.0075 | 1.2 | 1 |
+| `ibm_nighthawk_r3_dual` | IBM Quantum System Two (2x Nighthawk r3 Linked — 1,040Q) | 1,040 | 200 | 160 | 32 | 40 | 1,500 | 1,000 | 0.00025 / 0.0037 / 0.0075 | 1.2 | 1 |
 | `google_weber_grid` | Google Weber / Sycamore (representative) | 53 | 15 | 20 | 25 | 32 | 4,000 | 200,000 | 0.001 / 0.009 / 0.04 | 1.2 | 2 |
 | `ionq_forte_trapped_ion` | IonQ Forte (representative) | 36 | 100,000,000 | 1,000,000 | 110,000 | 900,000 | 250,000 | 1,000,000 | 0.0002 / 0.004 / 0.005 | 1 | 1 |
 | `ftqc_surface_code` | FTQC Surface-Code Logical QPU (1 µs cycle, d≈27 target; representative) | 1,024 logical | `None` (disabled) | `None` (disabled) | 1,000 | 27,000 | 27,000 | 1,000 | 1e-10 / 1e-09 / 1e-09 | 1 | 1 |
@@ -30,7 +32,7 @@ Display names below are the backend `QPUProfile.name` strings; selector labels m
 
 ## Profiles and provenance
 
-Provenance distinguishes `vendor_or_literature_approximation`, `user_supplied_specification`, and `model_assumption` for table parameters; supplied values are not presented as retrieved device calibrations. All six profiles classify `native_2q_per_cx` as a model assumption; the shared provenance note says this conversion should be verified against a gate-decomposition reference. A linked source supplies context for an assumption, not evidence that the assumed value was measured.
+Provenance distinguishes `vendor_or_literature_approximation`, `user_supplied_specification`, and `model_assumption` for table parameters; supplied values are not presented as retrieved device calibrations. All eight profiles treat `native_2q_per_cx` as a model assumption (r3 records it as inherited from r2); the shared provenance note says this conversion should be verified against a gate-decomposition reference. A linked source supplies context for an assumption, not evidence that the assumed value was measured.
 
 ### IBM Heron
 
@@ -50,6 +52,37 @@ The `ibm_nighthawk_r2` preset represents **IBM Quantum System Two (Nighthawk r2)
 The model reuses Heron's **32 ns 1Q and 1,500 ns readout** assumptions. Routing 1.2 uses the existing square-grid multiplier, with one native entangler per CX. Degree is metadata; no graph-aware transpilation is added. **7,500+ demonstrated gates** is gate count, not layer depth or a safe maximum, and imposes no partitioning cutoff. The reset-only effective T1≈25 ns never replaces the computational T1=200 µs.
 
 The optional `repetition_rate_hz=100000` is a conservative peak-rate model: a complete shot takes `max(circuit_ns + readout_ns + reset_ns, 10000 ns)`. Reset is **1,000 ns**, counted once; any remaining pacing is reported as `repetition_delay_ms` inside the existing `measurement_reset_ms` I/O/control bucket. Long circuits exceed 10 µs and run below the peak rate. The 25× Heron comparison is benchmark context, not a universal speedup multiplier. Other profiles default to `repetition_rate_hz=None` and retain their previous timings. Neither pacing nor reset adds coherent exposure.
+
+### IBM Nighthawk r3 and linked dual system
+
+**Quantum System Two is the modular cryogenic mainframe/chassis; Heron and Nighthawk are its QPUs.** The live r2 system retains its name and physics. These r3 profiles represent the roadmap announced by IBM on November 11, 2026, including a linked system across coupled cryogenic modules in 2027.
+
+| Field | Single r3 | Linked 2x r3 |
+| --- | ---: | ---: |
+| Programmable capacity (`n_qubits_max`) | 520 | 1,040 |
+| Total physical qubits (`n_physical_qubits`) | 2,034 | 4,068 (2 × 2,034) |
+| Modules / programmable qubits per module | 1 / 520 | 2 / 520 |
+| Installed / active l-coupler bridge channels | 10 / 0 | 10 / 10 |
+| Operation design target (`max_operations`) | 10,000 | 10,000 |
+| Assumed peak complete-shot rate | 100,000 Hz | 100,000 Hz |
+
+The operation target is advisory, not a hard depth cutoff or a guarantee of circuit survival. All local T1/T2, gate/readout/reset timings, errors, topology/native-entangler conversion and repetition rate are copied from r2 as **modeling assumptions**, classified individually as `model_assumption_inherited_from_r2` in provenance.
+
+The linked system defaults to transfer fidelity **0.993**, extrapolated from the peak on four links between r1 processors, whose average was about **0.990**. **0.999** is an optional 2027 target scenario, not a demonstrated r3 calibration. Transfer duration defaults to **100 ns per scheduled round**, a configurable architectural assumption. Ten channels are counted once as bridge channels between the two modules.
+
+The categorized hardware selector exposes these controls only for the linked profile. The API accepts an optional `interconnect` object:
+
+```json
+{"placement": "dual", "fidelity_scenario": "target_2027", "transfer_duration_ns": 80.0}
+```
+
+Defaults are `placement="auto"`, `fidelity_scenario="demonstrated"`, and the profile's 100 ns duration. Null duration uses the profile default. Controls are saved/restored with the canonical profile ID and exported in JSON; CSV/comparisons also expose the selected scenario and link diagnostics. Single-module profiles reject interconnect controls.
+
+Auto placement uses **active circuit width**, not selected available capacity: ≤520 active qubits use one module and no transfers. Above 520, auto fills the first module then spills to the second. Explicit dual placement balances the active register across both modules. V1 traffic assumes uniformly mixed CX operand pairs: for partition widths L/R and q=L+R, remote CX count is `ceil(n_2q × 2LR / (q(q−1)))`, using the workload's pre-routing CX count. Each remote CX contributes two out-and-back state transfers; local gate resources remain charged. Rounds are `ceil(transfers / 10)`, an optimistic pooled schedule that ignores dependency stalls. Circuit width alone does not provide a measured interaction graph.
+
+Link stalls extend coherent exposure and complete-shot timing; transfer fidelity enters T1/T2 survival once. `link_execution_ms` is already included in `gate_execution_ms`. Physical counts do not increase programmable capacity. Exploratory capacity overrides retain the reference module/channel count and extrapolate storage capacity beyond the published geometry when needed; they do not describe an available physical system.
+
+Sources (retrieved 2026-11-12): [IBM announcement](https://newsroom.ibm.com/2026-11-11-ibm-quantum-nighthawk-demonstrates-new-levels-of-speed-and-quality%2C-with-plans-to-scale-beyond-1%2C000-qubits-in-2027), [r1 l-coupler demonstration](https://arxiv.org/abs/2610.29986), and the r2 baseline above. Provenance separates roadmap values, inherited assumptions and demonstrated r1 results.
 
 ### Google Weber
 

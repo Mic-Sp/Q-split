@@ -1,9 +1,9 @@
 """Hardware-independent circuit resources and explicit QPU characterization units."""
 
-from typing import Annotated, Any
-from typing_extensions import TypedDict
+from typing import Annotated, Any, Literal
+from typing_extensions import NotRequired, TypedDict
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 RESOURCE_MODEL_VERSION = 2
 ROUTING_MODEL = "CALIBRATED_V2"
@@ -17,6 +17,7 @@ class LogSurvivalTerms(TypedDict):
     measurement: Annotated[float | None, Field(le=0, allow_inf_nan=False)]
     idle_t1: Annotated[float | None, Field(le=0, allow_inf_nan=False)]
     idle_t2: Annotated[float | None, Field(le=0, allow_inf_nan=False)]
+    interconnect: NotRequired[Annotated[float | None, Field(le=0, allow_inf_nan=False)]]
 
 
 class StageMetrics(TypedDict, total=False):
@@ -32,12 +33,33 @@ class StageMetrics(TypedDict, total=False):
     coherence_survival_worst: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
     coherence_log_survival: Annotated[float | None, Field(le=0, allow_inf_nan=False)]
     log_survival_terms: LogSurvivalTerms | None
+    interconnect_model_version: Literal[1]
+    modules_used: Annotated[int, Field(ge=1, le=2)]
+    transfers_per_shot: Annotated[int, Field(ge=0)]
+    scheduled_transfer_rounds: Annotated[int, Field(ge=0)]
+    link_time_ns: Annotated[float, Field(ge=0, allow_inf_nan=False)]
+    link_execution_ms: Annotated[float, Field(ge=0, allow_inf_nan=False)]
+    link_log_survival: Annotated[float, Field(le=0, allow_inf_nan=False)]
+    selected_transfer_fidelity: Annotated[float | None, Field(gt=0, le=1, allow_inf_nan=False)]
+    fidelity_scenario: Literal["demonstrated", "target_2027"]
+    module_placement: Literal["auto", "dual"]
+    transfer_duration_ns: Annotated[float | None, Field(gt=0, allow_inf_nan=False)]
 
 
 # Pydantic supports TypedDict configuration through this attribute. Retain
 # dictionaries and explicit OpenAPI fields without requiring a newer decorator.
 setattr(StageMetrics, "__pydantic_config__", ConfigDict(extra="allow"))
 setattr(LogSurvivalTerms, "__pydantic_config__", ConfigDict(extra="forbid"))
+
+
+class InterconnectConfig(BaseModel):
+    """Exploratory linked-system controls; duration is an assumption, not calibration."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, allow_inf_nan=False,
+                              revalidate_instances="always")
+    placement: Literal["auto", "dual"] = "auto"
+    fidelity_scenario: Literal["demonstrated", "target_2027"] = "demonstrated"
+    transfer_duration_ns: float | None = Field(default=None, gt=0, le=1_000_000)
 
 
 class CircuitSpec(BaseModel):
@@ -60,6 +82,7 @@ class CircuitSpec(BaseModel):
     stage3_ms: float = Field(ge=0)
     native_classical_ms: float | None = Field(default=None, ge=0)
     native_classical_name: str | None = None
+    interconnect: InterconnectConfig | None = None
 
 
 class QPUProfile(BaseModel):
@@ -97,4 +120,25 @@ class QPUProfile(BaseModel):
     native_2q_per_cx: float = Field(default=1.0, ge=1)
     # Optional peak shot rate in Hz. None preserves timing-only historical profiles.
     repetition_rate_hz: float | None = Field(default=None, gt=0)
+    n_physical_qubits: int | None = Field(default=None, ge=1)
+    # Vendor operation target, advisory: not a depth cutoff or fidelity guarantee.
+    max_operations: int | None = Field(default=None, ge=1)
+    module_count: int = Field(default=1, ge=1, le=2)
+    qubits_per_module: int | None = Field(default=None, ge=1)
+    l_couplers_installed: int = Field(default=0, ge=0)
+    l_couplers_active: int = Field(default=0, ge=0)
+    state_transfer_fidelity: float | None = Field(default=None, gt=0, le=1)
+    state_transfer_target_fidelity: float | None = Field(default=None, gt=0, le=1)
+    transfer_duration_ns: float | None = Field(default=None, gt=0)
     provenance: dict[str, Any]
+
+    @model_validator(mode="after")
+    def validate_modules(self):
+        if self.l_couplers_active > self.l_couplers_installed:
+            raise ValueError("Active l-couplers cannot exceed installed channels")
+        if self.module_count > 1 and (self.qubits_per_module is None or not self.l_couplers_active
+                                     or self.state_transfer_fidelity is None or self.transfer_duration_ns is None):
+            raise ValueError("Linked modules require capacity, active channels, fidelity and duration")
+        if self.module_count == 1 and self.l_couplers_active:
+            raise ValueError("A single module cannot have active cross-module channels")
+        return self

@@ -43,7 +43,7 @@ def test_point_is_unchanged_and_range_is_ordered_for_every_profile(spec, profile
 def test_log_terms_reconstruct_point_and_pessimistic_scenario(spec, profile_id):
     actual = estimate_qpu(spec, HARDWARE_PROFILES[profile_id], 512, 0.3)
     terms = actual["log_survival_terms"]
-    assert set(terms) == {"one_qubit", "two_qubit", "measurement", "idle_t1", "idle_t2"}
+    assert set(terms) == {"one_qubit", "two_qubit", "measurement", "idle_t1", "idle_t2"} | ({"interconnect"} if profile_id in {"ibm_nighthawk_r3", "ibm_nighthawk_r3_dual"} else set())
     assert all(term <= 0 for term in terms.values())
     gate_log = sum(terms[key] for key in ("one_qubit", "two_qubit", "measurement"))
     # Idle terms are alternatives, so only idle_t1 belongs to the point sum.
@@ -158,7 +158,8 @@ def test_log_survival_preserves_underflow_without_nonfinite_json(spec):
 def test_openapi_documents_optional_survival_fields_and_legacy_metrics_stay_extensible():
     schema = app.openapi()["components"]["schemas"]
     assert {"coherence_survival_best", "coherence_survival_worst", "coherence_log_survival", "log_survival_terms"} <= set(schema["StageMetrics"]["properties"])
-    assert set(schema["LogSurvivalTerms"]["properties"]) == {"two_qubit", "one_qubit", "measurement", "idle_t1", "idle_t2"}
+    assert set(schema["LogSurvivalTerms"]["properties"]) == {"two_qubit", "one_qubit", "measurement", "idle_t1", "idle_t2", "interconnect"}
+    assert "interconnect" not in schema["LogSurvivalTerms"]["required"]
     legacy = StageTelemetry(name="Host", node="CPU", latency_ms=1, status="OPTIMAL", output_summary="", metrics={"legacy": "retained"})
     assert legacy.metrics == {"legacy": "retained"}
     with pytest.raises(ValidationError):

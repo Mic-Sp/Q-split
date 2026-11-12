@@ -4,7 +4,8 @@ import type { AdvisorRequest } from "@/types/advisor";
 import type { CompletedRun } from "@/types/run-history";
 import type { HybridTelemetryResponse, LogSurvivalTerms, RoutingConfig, SimulationRequest, StageTelemetry } from "@/types/telemetry";
 import { HARDWARE_PROFILE_IDS } from "@/types/telemetry";
-import { HARDWARE_PROFILES, RESOURCE_QPU_PROFILES } from "@/lib/hardware-profiles";
+import { HARDWARE_PROFILES, RESOURCE_QPU_PROFILES, MODULAR_QPU_PROFILES } from "@/lib/hardware-profiles";
+import { parseInterconnect } from "@/lib/interconnect";
 import { WORKLOADS, validWorkloadScale, workloadScaleLabel } from "@/lib/workloads";
 import { pipelineTiming } from "@/lib/kpi-metrics";
 import { resourceModelVersion, sameModelVersion, versionedTelemetry } from "@/lib/model-version";
@@ -76,7 +77,7 @@ function number(value: unknown, minimum: number, maximum: number, integer = fals
   return value;
 }
 
-// Only allowlisted primitives and a fixed five-number log breakdown survive.
+// Only allowlisted primitives and the legacy five terms plus optional link log survive.
 // Never copy arbitrary metric objects or explanatory prose from telemetry.
 /**
  * Rebuild an allowlisted, bounded primitive metric digest from untrusted telemetry.
@@ -99,6 +100,9 @@ function metrics(value: unknown, inheritedVersion?: 1 | 2): StageTelemetry["metr
     ["compute_latency_ms", 0, ADVISOR_MAX_LATENCY_MS, false], ["depth_multiplier", 0, 1, false],
     ["launch_overhead_ms", 0, RESOURCE_MAX_LATENCY_MS, false],
     ["repetition_delay_ms", 0, RESOURCE_MAX_LATENCY_MS, false],
+    ["modules_used", 1, 2, true],
+    ["transfers_per_shot", 0, Number.MAX_SAFE_INTEGER, true], ["scheduled_transfer_rounds", 0, Number.MAX_SAFE_INTEGER, true],
+    ["link_time_ns", 0, Number.MAX_SAFE_INTEGER, false], ["link_execution_ms", 0, RESOURCE_MAX_LATENCY_MS, false],
     ["measurement_reset_ms", 0, RESOURCE_MAX_LATENCY_MS, false], ["gate_execution_ms", 0, RESOURCE_MAX_LATENCY_MS, false],
     ["measured_peak_probability", 0, 1, false], ["aer_runtime_ms", 0, ADVISOR_MAX_LATENCY_MS, false],
     ["qubits_required", 1, MAX_QUBITS, true], ["available_qubits", 1, MAX_QUBITS, true],
@@ -131,6 +135,14 @@ function metrics(value: unknown, inheritedVersion?: 1 | 2): StageTelemetry["metr
     result.coherence_log_survival = source.coherence_log_survival === null ? null
       : number(source.coherence_log_survival, -Number.MAX_VALUE, 0);
   }
+  if (Object.hasOwn(source, "link_log_survival")) result.link_log_survival = number(source.link_log_survival, -Number.MAX_VALUE, 0);
+  if (Object.hasOwn(source, "interconnect_model_version")) result.interconnect_model_version = number(source.interconnect_model_version, 1, 1, true) as 1;
+  if (Object.hasOwn(source, "selected_transfer_fidelity")) result.selected_transfer_fidelity = source.selected_transfer_fidelity === null ? null
+    : number(source.selected_transfer_fidelity, Number.MIN_VALUE, 1);
+  if (Object.hasOwn(source, "transfer_duration_ns")) result.transfer_duration_ns = source.transfer_duration_ns === null ? null
+    : number(source.transfer_duration_ns, Number.MIN_VALUE, 1_000_000);
+  if (Object.hasOwn(source, "fidelity_scenario")) result.fidelity_scenario = choice(source.fidelity_scenario, ["demonstrated", "target_2027"] as const);
+  if (Object.hasOwn(source, "module_placement")) result.module_placement = choice(source.module_placement, ["auto", "dual"] as const);
   if (Object.hasOwn(source, "log_survival_terms")) {
     if (source.log_survival_terms === null) result.log_survival_terms = null;
     else {
@@ -139,6 +151,7 @@ function metrics(value: unknown, inheritedVersion?: 1 | 2): StageTelemetry["metr
       for (const key of ["two_qubit", "one_qubit", "measurement", "idle_t1", "idle_t2"] as const) {
         parsed[key] = terms[key] === null ? null : number(terms[key], -Number.MAX_SAFE_INTEGER, 0);
       }
+      if (Object.hasOwn(terms, "interconnect")) parsed.interconnect = terms.interconnect === null ? null : number(terms.interconnect, -Number.MAX_VALUE, 0);
       result.log_survival_terms = parsed;
     }
   }
@@ -183,6 +196,8 @@ function validateRun(value: unknown): CompletedRun {
     available_qubits: config.available_qubits === undefined ? DEFAULT_AVAILABLE_QUBITS : number(config.available_qubits, 1, MAX_QUBITS, true),
     routing,
   };
+  const interconnect = parseInterconnect(config.interconnect, request.hardware_profile);
+  if (interconnect !== undefined) request.interconnect = interconnect;
   // Derive trusted labels/architecture from validated selectors; never trust caller-supplied explanatory prose.
   const source = object(run.telemetry);
   const version = source.resource_model_version === undefined ? undefined : number(source.resource_model_version, 1, 2, true) as 1 | 2;
@@ -202,6 +217,13 @@ function validateRun(value: unknown): CompletedRun {
     if (node === "QPU") {
       const architecture = HARDWARE_PROFILES[request.hardware_profile];
       const resource = RESOURCE_QPU_PROFILES[request.hardware_profile];
+      if (request.hardware_profile === "ibm_nighthawk_r3_dual") {
+        const scenario = request.interconnect?.fidelity_scenario ?? "demonstrated";
+        const expected = { fidelity_scenario: scenario, module_placement: request.interconnect?.placement ?? "auto",
+          selected_transfer_fidelity: scenario === "target_2027" ? 0.999 : 0.993,
+          transfer_duration_ns: request.interconnect?.transfer_duration_ns ?? 100 };
+        for (const [field, value] of Object.entries(expected)) if (numeric[field] !== undefined && numeric[field] !== value) invalid();
+      }
       const expectedMetrics = numeric.resource_model_version !== undefined ? {
         connectivity_topology: architecture.topology, reference_qubits: resource.referenceQubits,
         routing_depth_multiplier: resource.depthMultiplier, gate_time_multiplier: null, coherence_decay_scale: null,
@@ -280,7 +302,12 @@ export function advisorDigest(run: CompletedRun) {
     ? { label, topology, ...RESOURCE_QPU_PROFILES[run.request.hardware_profile], resourceModelVersion: version,
         gateTimeMultiplier: null, prepMs: 0, decayScale: null }
     : { label, topology, referenceQubits, depthMultiplier, gateTimeMultiplier, prepMs, decayScale };
-  return { request: run.request, architecture, telemetry: {
+  const modular = run.request.hardware_profile === "ibm_nighthawk_r3" || run.request.hardware_profile === "ibm_nighthawk_r3_dual"
+    ? { ...MODULAR_QPU_PROFILES[run.request.hardware_profile], interconnectModelVersion: 1,
+        fidelityScenario: run.request.interconnect?.fidelity_scenario ?? "demonstrated",
+        modulePlacement: run.request.interconnect?.placement ?? "auto",
+        assumedTransferDurationNs: run.request.hardware_profile === "ibm_nighthawk_r3_dual" ? run.request.interconnect?.transfer_duration_ns ?? 100 : null } : {};
+  return { request: run.request, architecture: { ...architecture, ...modular }, telemetry: {
     resource_model_version: version, routing_model: run.telemetry.routing_model,
     execution_mode: run.telemetry.execution_mode,
     primary_bottleneck: run.telemetry.primary_bottleneck,

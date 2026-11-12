@@ -41,6 +41,28 @@ N=15 is a specialized swap permutation, not general ModExp.
 """
 
 
+def partition_transfer_count(n_qubits: int, n_2q: int, qubits_per_module: int, *, force_dual: bool = False) -> tuple[int, int]:
+    """Deterministic V1 traffic approximation, independent of hardware routing.
+
+    Auto packs the first module before spilling; explicit dual placement balances
+    the register. Assume uniformly mixed CX operand pairs, so 2*left*right /
+    (q*(q-1)) cross the partition. Each remote CX uses two state transfers
+    (out and back). Round the remote CX count up once. Existing local gate
+    resources remain charged; transfers add communication only. This is not a
+    compiler-derived interaction graph or a dependency-aware network schedule.
+    """
+    if n_qubits <= qubits_per_module and not force_dual:
+        return 1, 0
+    if n_qubits < 2:
+        raise ValueError("Dual placement requires at least two active qubits")
+    left = (n_qubits + 1) // 2 if force_dual else qubits_per_module
+    right = n_qubits - left
+    # Integer ceiling avoids floating-point drift at large resource counts.
+    denominator = n_qubits * (n_qubits - 1)
+    remote_cx = (n_2q * 2 * left * right + denominator - 1) // denominator
+    return 2, 2 * remote_cx
+
+
 QUANTUM_MIPS_CLASSICAL_PROFILES = {
     "stage_1_classical_pre": {
         "name": "LSH Projection & HNSW Bucket Pruning",

@@ -5,6 +5,7 @@ import type { SimulationRequest, StageStatus } from "@/types/telemetry";
 import { parseAdvisorInsight } from "@/lib/advisor";
 import { validWorkloadScale } from "@/lib/workloads";
 import { isHardwareProfile } from "@/lib/hardware-profiles";
+import { parseInterconnect } from "@/lib/interconnect";
 import { versionedTelemetry } from "@/lib/model-version";
 
 function invalid(message: string): never {
@@ -42,6 +43,7 @@ export function createRunRecord(value: unknown): Prisma.SimulationRunCreateInput
   if (request.available_qubits !== undefined && (!Number.isSafeInteger(request.available_qubits) ||
       request.available_qubits < 1 || request.available_qubits > 2_147_483_647)) invalid("Invalid available qubits.");
   const routing = { ...DEFAULT_ROUTING, ...request.routing };
+  const interconnect = parseInterconnect(request.interconnect, request.hardware_profile);
   const telemetry = versionedTelemetry(parseTelemetry(run.telemetry));
   if (telemetry.workload_id !== request.workload_id) invalid("Workload metadata does not match telemetry.");
   for (const { key, routingKey } of PIPELINE) {
@@ -73,8 +75,9 @@ export function createRunRecord(value: unknown): Prisma.SimulationRunCreateInput
     qubitsRequired: qubits, circuitDepth: depth === null ? null : BigInt(depth),
     coherenceSurvivalPct: coherence as number | null,
     requestPayload: { workload_id: request.workload_id, scale_param: request.scale_param, hardware_profile: request.hardware_profile, routing,
+      ...(interconnect === undefined ? {} : { interconnect }),
       ...(request.available_qubits === undefined ? {} : { available_qubits: request.available_qubits }),
-    } as Prisma.InputJsonValue,
+    } as unknown as Prisma.InputJsonValue,
     telemetry: telemetry as unknown as Prisma.InputJsonValue,
     ...(run.advisorInsight === undefined ? {} : { advisorInsight: parseAdvisorInsight(run.advisorInsight, run.id) as unknown as Prisma.InputJsonValue }),
   };

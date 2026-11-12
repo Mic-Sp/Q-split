@@ -8,6 +8,8 @@ export const BENCHMARK_CSV_HEADERS = [
   "Snapshot Name", "Timestamp (UTC)", "Workload", "Scale", "Hardware Profile", "Available Qubits", "Allocated Qubits", "Parallel Tier",
   "Stage 1 Node", "Stage 2 Node", "Stage 3 Node", "Pure Compute ms", "Interconnect & I/O Overhead ms", "Total Latency ms", "Circuit Depth",
   "Coherence Survival %", "Coherence Budget Status", "Primary Bottleneck", "AI Diagnostic Summary", "Bottleneck Status", "Run ID", "Model Version",
+  "Modules Used", "State Transfers Per Shot", "Scheduled Transfer Rounds", "l-coupler Execution ms (Included in Pure Compute)",
+  "Transfer Fidelity", "Fidelity Scenario", "Module Placement", "Assumed Transfer Duration ns", "Interconnect Model Version",
 ];
 
 /**
@@ -37,7 +39,9 @@ export function benchmarkCsv(runs: SavedSimulationRun[]) {
     return [run.snapshotName, run.completedAt, workloadLabel, run.scaleLabel, run.hardwareProfile,
       metrics.availableQubits, metrics.allocatedQubits, metrics.parallelTier,
       run.stage1Node, run.stage2Node, run.stage3Node, metrics.computeMs, metrics.overheadMs, metrics.totalMs, metrics.circuitDepth,
-      metrics.coherenceSurvival, metrics.coherenceStatus, run.primaryBottleneck, summary, run.bottleneckStatus, run.id, modelVersionLabel(resourceModelVersion(run.telemetry))];
+      metrics.coherenceSurvival, metrics.coherenceStatus, run.primaryBottleneck, summary, run.bottleneckStatus, run.id, modelVersionLabel(resourceModelVersion(run.telemetry)),
+      metrics.modulesUsed, metrics.transfersPerShot, metrics.transferRounds, metrics.linkExecutionMs, metrics.transferFidelity,
+      metrics.fidelityScenario, metrics.modulePlacement, metrics.transferDurationNs, metrics.interconnectModelVersion];
   });
   return [BENCHMARK_CSV_HEADERS, ...rows].map(row => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
 }
