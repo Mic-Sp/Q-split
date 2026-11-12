@@ -290,6 +290,17 @@ def resolve_profile(profile_id: str, custom_profile: CustomQPUProfileSpec | None
         "notes": "User-defined research profile, not vendor calibration. Null T1/T2 disables separate idle decay; memory errors must be included in operation errors by assumption. Linked execution uses the same V1 uniform-pair partition/traffic model as built-in r3. Capacity overrides extrapolate module geometry.",
         "architecture": {"module_count": spec.module_count, "qubits_per_module": spec.qubits_per_module,
             "deployment_notes": "Custom / theoretical QPU; no physical hardware is dispatched."}}
+    if spec.surface_code is not None:
+        provenance["surface_code"] = {**spec.surface_code.model_dump(),
+            "model": "Fowler round scaling, Q-Split reference-calibrated operation proxies",
+            "round_formula": "0.1 * (physical_2q_error / threshold_error)^((d+1)/2), clamped to [1e-18, 1]",
+            "operation_calibration": "err_1q=min(1,1e-10*epsilon/epsilon_ref); err_2q=err_meas=min(1,1e-9*epsilon/epsilon_ref); epsilon_ref is the d=27, p=0.001, threshold=0.01 round proxy (~1e-15)",
+            "footprint_formula": "2*d^2 data/syndrome qubits per logical patch; excludes routing, factories, decoder and link overhead",
+            "module_basis": "ceil(total_physical_qubits/520 programmable qubits per r3 chip); 2034 includes supporting physical elements",
+            "sources": ["https://arxiv.org/abs/1208.0928", "https://quantum.cloud.ibm.com/learning/en/courses/tools-for-quantum-advantage/error-correction-ii"],
+            "notes": "User-selected threshold and simulator calibration assumptions, not measured logical gate fidelity. The built-in FTQC ~1000-qubit footprint is a separate coarse approximation; this generator uses 1458 at d=27."}
+        for field in ("t1_us", "t2_us", "t_1q_ns", "t_2q_ns", "t_meas_ns", "t_reset_ns", "err_1q", "err_2q", "err_meas", "n_physical_qubits", "topology_factor", "native_2q_per_cx", "surface_code"):
+            provenance["value_types"][field] = "surface_code_calibrated_model_assumption"
     return QPUProfile(id="custom", **fields, provenance=provenance)
 
 

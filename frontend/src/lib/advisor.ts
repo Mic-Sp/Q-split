@@ -98,7 +98,8 @@ export function deterministicInsight(current: CompletedRun, previous: CompletedR
     usage: zeroUsage(),
     generatedAt: new Date().toISOString(), fallbackReason: reason, notice: notices[reason], sections: {
       routingDiagnosis: `${mips ? mipsRoutingContext(request.scale_param) + " " : ""}${telemetry.scale_label}, ${request.hardware_profile}: ${route}. Primary bottleneck: ${telemetry.primary_bottleneck}. ${unsupported ? "Classical host routines cannot execute on QPU. " : ""}${memoryBlocked ? "Statevector memory grows as 16 × 2^q bytes. " : ""}${stages.some((stage) => stage.node === "GPU") ? "GPU timings include illustrative launch/transfer overhead, not measured PCIe throughput. " : ""}${problems || "All stages report optimal status."}${delta}`,
-      spaceTimeTradeOff: (request.custom_profile ? `Custom profile: ${request.custom_profile.name}. Baseline: ${customBaselineLabel(request.custom_profile)}. User-defined assumptions. ` : "") + spaceTime.trim(),
+      spaceTimeTradeOff: (request.custom_profile ? `Custom profile: ${request.custom_profile.name}. Baseline: ${customBaselineLabel(request.custom_profile)}. User-defined assumptions. ` : "") +
+        (request.custom_profile?.surface_code ? `Surface code d=${request.custom_profile.surface_code.code_distance_d}, cycle ${request.custom_profile.surface_code.syndrome_cycle_ns} ns, physical error ${request.custom_profile.surface_code.physical_2q_error}, threshold ${request.custom_profile.surface_code.threshold_error}, ${request.custom_profile.surface_code.physical_qubits_per_logical} physical qubits per logical patch. Operation errors are reference-calibrated model proxies. ` : "") + spaceTime.trim(),
       optimizationRecommendation: recommendation,
     } };
 }

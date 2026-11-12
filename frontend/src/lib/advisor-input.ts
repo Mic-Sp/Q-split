@@ -318,7 +318,10 @@ export function advisorDigest(run: CompletedRun) {
     userDefined: true, parameters: custom, ...customResourcePhysics(custom), moduleCount: custom.module_count,
     qubitsPerModule: custom.qubits_per_module, activeLCouplers: custom.l_couplers_active,
     transferFidelity: custom.state_transfer_fidelity, targetTransferFidelity: custom.state_transfer_target_fidelity,
-    transferDurationNs: custom.transfer_duration_ns } : {};
+    transferDurationNs: custom.transfer_duration_ns,
+    ...(custom.surface_code ? { surfaceCode: { ...custom.surface_code },
+      surfaceCodeModel: "Fowler round scaling; operation proxies calibrated to the d=27 reference, not measured gate errors",
+      physicalFootprintBasis: "2*d^2 per logical patch, excluding factories/routing; r3 chip estimate uses 520 programmable qubits" } : {}) } : {};
   return { request: run.request, architecture: { ...architecture, ...modular, ...research }, telemetry: {
     resource_model_version: version, routing_model: run.telemetry.routing_model,
     execution_mode: run.telemetry.execution_mode,

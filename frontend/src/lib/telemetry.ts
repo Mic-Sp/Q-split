@@ -83,6 +83,10 @@ export function describeChanges(before: Snapshot, after: Snapshot): MetricDelta[
     const previous = before.request.custom_profile, current = after.request.custom_profile;
     const fields = new Set([...Object.keys(previous ?? {}), ...Object.keys(current ?? {})]);
     for (const field of fields) add(`Custom hardware · ${field.replaceAll("_", " ")}`, previous?.[field as keyof typeof previous], current?.[field as keyof typeof current]);
+    const previousSource = previous?.surface_code, currentSource = current?.surface_code;
+    for (const field of ["code_distance_d", "physical_2q_error", "threshold_error", "syndrome_cycle_ns", "logical_qubits_target", "physical_qubits_per_logical"] as const) {
+      add(`Surface code · ${field.replaceAll("_", " ")}`, previousSource?.[field], currentSource?.[field]);
+    }
   }
   if (before.request.hardware_profile === "ibm_nighthawk_r3_dual" || after.request.hardware_profile === "ibm_nighthawk_r3_dual") {
     add("Module placement", before.request.interconnect?.placement ?? "auto", after.request.interconnect?.placement ?? "auto");

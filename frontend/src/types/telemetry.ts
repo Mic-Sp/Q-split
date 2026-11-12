@@ -76,6 +76,20 @@ export interface QPUProfile {
   state_transfer_target_fidelity?: number | null;
   transfer_duration_ns?: number | null;
   provenance: Record<string, JsonValue>;
+  surface_code?: SurfaceCodeMetadata | null;
+}
+
+export interface SurfaceCodeInputs {
+  code_distance_d: number;
+  physical_2q_error: number;
+  threshold_error: number;
+  syndrome_cycle_ns: number;
+  logical_qubits_target: number;
+}
+
+export interface SurfaceCodeMetadata extends SurfaceCodeInputs {
+  model_version: 1;
+  physical_qubits_per_logical: number;
 }
 
 export interface CustomQPUProfileSpec extends Omit<QPUProfile, "id" | "provenance"> {

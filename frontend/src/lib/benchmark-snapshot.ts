@@ -35,7 +35,8 @@ export function snapshotPatch(value: unknown): { snapshotName: string | null; is
 export function restoredConfiguration(run: SavedSimulationRun): SimulationRequest {
   return { workload_id: run.request.workload_id, scale_param: run.request.scale_param,
     hardware_profile: run.request.hardware_profile,
-    ...(run.request.custom_profile == null ? {} : { custom_profile: { ...run.request.custom_profile } }),
+    ...(run.request.custom_profile == null ? {} : { custom_profile: { ...run.request.custom_profile,
+      ...(run.request.custom_profile.surface_code ? { surface_code: { ...run.request.custom_profile.surface_code } } : {}) } }),
     ...(run.request.interconnect == null ? {} : { interconnect: { ...run.request.interconnect } }),
     available_qubits: run.request.available_qubits ?? DEFAULT_AVAILABLE_QUBITS,
     routing: { ...DEFAULT_ROUTING, ...run.request.routing } };

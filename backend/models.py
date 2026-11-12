@@ -4,6 +4,12 @@ from typing import Annotated, Any, Literal
 from typing_extensions import NotRequired, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+import math
+
+if __package__:
+    from .surface_code import surface_code_parameters
+else:
+    from surface_code import surface_code_parameters
 
 BuiltinHardwareProfile = Literal["ibm_heron_nisq", "ibm_nighthawk_r2", "ibm_nighthawk_r3", "ibm_nighthawk_r3_dual", "google_weber_grid", "ionq_forte_trapped_ion", "ftqc_surface_code", "ideal_sim"]
 HardwareProfile = Literal[BuiltinHardwareProfile, "custom"]
@@ -144,12 +150,34 @@ class QPUPhysicsSpec(BaseModel):
         return self
 
 
+class SurfaceCodeMetadata(BaseModel):
+    """Versioned, reproducible generator inputs; footprint is verified, not trusted."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, allow_inf_nan=False, revalidate_instances="always")
+    model_version: Literal[1] = 1
+    code_distance_d: int = Field(ge=3)
+    physical_2q_error: float = Field(gt=0, lt=1)
+    threshold_error: float = Field(gt=0, lt=1)
+    syndrome_cycle_ns: float = Field(gt=0)
+    logical_qubits_target: int = Field(ge=1, le=2_147_483_647)
+    physical_qubits_per_logical: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def validate_generator(self):
+        derived = surface_code_parameters(self.code_distance_d, self.physical_2q_error, self.threshold_error,
+                                          self.syndrome_cycle_ns, self.logical_qubits_target)
+        if self.physical_qubits_per_logical != derived["physical_qubits_per_logical"]:
+            raise ValueError("Surface-code patch footprint must equal 2*d^2")
+        return self
+
+
 class QPUProfile(QPUPhysicsSpec):
     """Resolved execution profile; its provenance is generated on the server."""
 
     id: str = Field(min_length=1)
     name: str = Field(min_length=1)
     provenance: dict[str, Any]
+    surface_code: SurfaceCodeMetadata | None = None
 
 
 class CustomQPUProfileSpec(QPUPhysicsSpec):
@@ -161,6 +189,7 @@ class CustomQPUProfileSpec(QPUPhysicsSpec):
 
     name: str = Field(min_length=1, max_length=120)
     base_profile_id: BuiltinHardwareProfile | None = None
+    surface_code: SurfaceCodeMetadata | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -177,4 +206,17 @@ class CustomQPUProfileSpec(QPUPhysicsSpec):
             raise ValueError("Custom capacity must fit the supported int32 range")
         if self.qubits_per_module is not None and self.n_qubits_max is not None and self.n_qubits_max > self.module_count * self.qubits_per_module:
             raise ValueError("Custom capacity exceeds the declared module geometry")
+        if self.surface_code is not None:
+            source = self.surface_code
+            generated = surface_code_parameters(source.code_distance_d, source.physical_2q_error, source.threshold_error,
+                                                source.syndrome_cycle_ns, source.logical_qubits_target)
+            expected = {key: generated[key] for key in ("t_1q_ns", "t_2q_ns", "t_meas_ns", "t_reset_ns", "err_1q", "err_2q", "err_meas")}
+            expected.update(n_qubits_max=source.logical_qubits_target, n_physical_qubits=generated["total_physical_qubits"],
+                            topology_factor=1.0, native_2q_per_cx=1.0)
+            exact = {"n_qubits_max", "n_physical_qubits", "topology_factor", "native_2q_per_cx"}
+            if self.t1_us is not None or self.t2_us is not None or any(
+                (getattr(self, key) != value if key in exact else getattr(self, key) is None or not math.isclose(getattr(self, key), value, rel_tol=1e-10, abs_tol=0))
+                for key, value in expected.items()
+            ):
+                raise ValueError("Surface-code metadata does not match the generated profile; remove the generator tag after manual physics edits")
         return self

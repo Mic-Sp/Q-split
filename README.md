@@ -65,7 +65,7 @@ A run follows classical preprocessing → quantum kernel → classical postproce
 * **FTQC Surface-Code:** Representative logical QPU with 1,024 logical workspace qubits and a d≈27 target ([sources, assumptions and caveats](docs/hardware-profiles.md#ftqc-surface-code)).
 * **Ideal Noise-Free:** Theoretical reference with unlimited stored profile capacity and no modeled noise; explicit UI capacity limits still apply ([assumptions and caveats](docs/hardware-profiles.md#ideal-noise-free)).
 
-Custom / Research hardware adds a parameter builder with all eight clone baselines, scientific-notation inputs, logical-mode idle-decay control, and named browser-local presets. Custom configurations use the same estimator and remain attached to saved runs, advisor diagnostics, comparisons and exports. See [custom hardware contracts and limits](docs/hardware-profiles.md#custom--research-hardware).
+Custom / Research hardware adds a parameter builder with all eight clone baselines, scientific-notation inputs, logical-mode idle-decay control, and named browser-local presets. Logical mode also offers a [surface-code distance calculator](docs/hardware-profiles.md#surface-code-distance-calculator) with physical footprint and reference-calibrated operation errors. Custom configurations use the same estimator and remain attached to saved runs, advisor diagnostics, comparisons and exports. See [custom hardware contracts and limits](docs/hardware-profiles.md#custom--research-hardware).
 
 ## Quickstart
 

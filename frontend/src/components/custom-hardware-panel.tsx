@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { BUILTIN_HARDWARE_PROFILE_IDS, type BuiltinHardwareProfile, type CustomQPUProfileSpec, type InterconnectConfig } from "@/types/telemetry";
 import { HARDWARE_PROFILES } from "@/lib/hardware-profiles";
+import { SurfaceCodeCalculator } from "@/components/surface-code-calculator";
 import { cloneBuiltinProfile, customProfileFromDraft, CUSTOM_PRESET_STORAGE_KEY, encodeCustomPresets, readCustomPresets, saveCustomPreset,
   type CustomNumberField, type CustomPreset, type CustomProfileDraft } from "@/lib/custom-profile";
 
@@ -10,13 +11,14 @@ const control = "mt-1 min-h-9 w-full min-w-0 rounded-md border border-slate-300 
 const button = "min-h-9 rounded-md border border-cyan-700/30 dark:border-cyan-400/30 px-3 py-1 text-xs text-cyan-800 dark:text-cyan-300 disabled:opacity-40";
 const group = "min-w-0 rounded-lg border border-slate-200 dark:border-slate-700 p-3";
 
-export function CustomHardwarePanel({ draft, onChange, onApply, onUseCapacity, interconnect, onInterconnectChange }: {
+export function CustomHardwarePanel({ draft, onChange, onApply, onUseCapacity, interconnect, onInterconnectChange, activeCircuitQubits }: {
   draft: CustomProfileDraft;
   onChange: (draft: CustomProfileDraft) => void;
   onApply: (spec: CustomQPUProfileSpec) => void;
   onUseCapacity: (capacity: number) => void;
   interconnect: InterconnectConfig;
   onInterconnectChange: (value: InterconnectConfig) => void;
+  activeCircuitQubits?: number;
 }) {
   const [baseline, setBaseline] = useState<BuiltinHardwareProfile>("ibm_heron_nisq");
   const [presets, setPresets] = useState<CustomPreset[]>([]);
@@ -30,7 +32,7 @@ export function CustomHardwarePanel({ draft, onChange, onApply, onUseCapacity, i
   let profile: CustomQPUProfileSpec | null = null, error: string | null = null;
   try { profile = customProfileFromDraft(draft); } catch (reason) { error = reason instanceof Error ? reason.message : "Check custom parameters."; }
   const logical = draft.t1_us === "" && draft.t2_us === "";
-  const update = (field: keyof CustomProfileDraft, value: string) => onChange({ ...draft, [field]: value });
+  const update = (field: CustomNumberField | "name" | "base_profile_id", value: string) => onChange({ ...draft, [field]: value });
   const numberField = (field: CustomNumberField, label: string, optional = false, disabled = false) => <label key={field} className="min-w-0 text-[11px] text-slate-700 dark:text-slate-300">
     {label}{optional && <span className="ml-1 text-[9px] text-slate-500">(blank = none)</span>}
     <input aria-label={label} name={`custom-${field}`} type="text" inputMode="decimal" value={draft[field]} disabled={disabled}
@@ -61,6 +63,10 @@ export function CustomHardwarePanel({ draft, onChange, onApply, onUseCapacity, i
         </div>
       </div>
       {notice && <p role="status" className="text-[11px] text-cyan-800 dark:text-cyan-300">{notice}</p>}
+      <details open={logical} className="min-w-0 rounded-lg border border-cyan-700/20 dark:border-cyan-400/20">
+        <summary className="cursor-pointer px-3 py-2 text-xs font-semibold text-cyan-900 dark:text-cyan-200">Surface-Code Distance (d) Calculator</summary>
+        <SurfaceCodeCalculator key={`${draft.base_profile_id}:${JSON.stringify(draft.surface_code ?? null)}`} profile={profile} capacityText={draft.n_qubits_max} activeCircuitQubits={activeCircuitQubits} onApply={onApply} />
+      </details>
       <div className="grid min-w-0 gap-3 xl:grid-cols-2">
         <fieldset className={group}><legend className="px-1 text-xs font-semibold">Identity &amp; Capacity</legend>
           <div className="grid min-w-0 gap-3 sm:grid-cols-2">

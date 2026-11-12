@@ -23,7 +23,7 @@ import { formatDuration, formatRawMilliseconds } from "@/lib/duration";
 import { QUBIT_CAPACITY_PRESETS, hardwareLabel } from "@/lib/hardware-profiles";
 import { WORKLOADS, workloadScaleLabel } from "@/lib/workloads";
 import { CustomHardwarePanel } from "@/components/custom-hardware-panel";
-import { cloneBuiltinProfile, customProfileDraft, customProfileFromDraft, type CustomProfileDraft } from "@/lib/custom-profile";
+import { cloneBuiltinProfile, customProfileDraft, customProfileFromDraft, clearEditedSurfaceCode, type CustomProfileDraft } from "@/lib/custom-profile";
 import { HardwareSelector } from "@/components/hardware-selector";
 import { DEFAULT_INTERCONNECT, interconnectKey } from "@/lib/interconnect";
 import {
@@ -319,7 +319,7 @@ export default function Home() {
     setInterconnect({ placement: "auto", fidelity_scenario: "demonstrated" });
   };
   const updateCustomDraft = (draft: CustomProfileDraft) => {
-    setCustomDraft(draft);
+    setCustomDraft(clearEditedSurfaceCode(customDraft, draft));
     if (draft.transfer_duration_ns !== customDraft.transfer_duration_ns) setInterconnect(current => ({ placement: current.placement, fidelity_scenario: current.fidelity_scenario }));
     if (!draft.state_transfer_target_fidelity) setInterconnect(current => ({ ...current, fidelity_scenario: "demonstrated" }));
   };
@@ -399,7 +399,8 @@ export default function Home() {
               {loading ? "Simulating…" : "Run simulation"}
             </button>
           </div>
-          {hardware === "custom" && <CustomHardwarePanel draft={customDraft} onChange={updateCustomDraft} onApply={applyCustomProfile} onUseCapacity={value => setAvailableQubits(String(value))} interconnect={interconnect} onInterconnectChange={setInterconnect} />}
+          {hardware === "custom" && <CustomHardwarePanel draft={customDraft} onChange={updateCustomDraft} onApply={applyCustomProfile} onUseCapacity={value => setAvailableQubits(String(value))} interconnect={interconnect} onInterconnectChange={setInterconnect}
+            activeCircuitQubits={quantum?.node === "QPU" && quantum.metrics.execution_feasible !== false && quantum.metrics.qubits_allocated !== 0 ? quantum.metrics.circuit_spec?.n_qubits : undefined} />}
           <div className="mt-2 border-t border-slate-200 dark:border-slate-800 pt-1">
             <div className="mb-1 flex items-center gap-1"><label htmlFor="available-qubits" className="text-[10px] font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">04 / Available QPU Qubits</label>
               <InfoPopover label="About QPU capacity">

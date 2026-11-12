@@ -191,6 +191,40 @@ Resolved custom profiles have `id="custom"`; provenance marks each parameter `us
 
 Available-qubit overrides retain the existing exploratory semantics below; physical-count metadata and advisory operation targets are not extra programmable capacity or hard depth cutoffs.
 
+## Surface-code distance calculator
+
+The Custom Hardware Configuration Panel includes a Surface-Code Distance (d) Calculator, opened automatically by Logical FTQC Mode or manually as a dedicated subsection. It previews results until **Apply Surface-Code Parameters to Custom Profile** is selected. The slider covers odd distances 3–35 (quick choices 7/15/27); the numeric distance input also accepts larger odd distances when the footprint remains a safe integer. The target defaults to custom capacity, otherwise the last executed QPU width or one logical qubit. A separate readout interprets the last feasible QPU circuit's active register as logical patches; it does not count idle capacity as active work.
+
+Version 1 uses the requested Fowler-style round proxy:
+
+```text
+epsilon_round = clamp(0.1 * (physical_2q_error / threshold_error)^((d+1)/2), 1e-18, 1)
+physical_qubits_per_logical = 2*d^2
+total_physical_qubits = logical_qubits_target * physical_qubits_per_logical
+```
+
+The logarithmic implementation avoids overflow in the physical/threshold ratio. Below threshold, increasing d improves the round proxy until the numerical floor. At threshold it gives no exponential improvement; above threshold increasing d worsens the round proxy until saturation. The 1% threshold is an editable modeling assumption, dependent on circuit noise and decoder choices. Loading a profile's 2Q error explicitly treats it as a physical noise proxy; generated profiles retain their original physical input instead of reinterpreting the generated logical error as physical.
+
+**Round errors and operation errors are different model quantities.** At d=27, physical error 0.001 and threshold 0.01, the raw round proxy is about 1e-15. To reproduce the existing FTQC preset's assumed operation-error scale, the calculator uses fixed reference factors:
+
+```text
+scale = epsilon_round / epsilon_reference  # epsilon_reference ≈ 1e-15
+err_1q = min(1, 1e-10 * scale)
+err_2q = err_meas = min(1, 1e-9 * scale)
+t_1q_ns = t_reset_ns = syndrome_cycle_ns
+t_2q_ns = t_meas_ns = d * syndrome_cycle_ns
+```
+
+These operation-error factors (approximately 1e5 and 1e6 times the round proxy) are **Q-Split calibration assumptions**, not a measured fit, extra elapsed syndrome rounds, or a full lattice-surgery failure model. They stay fixed across distance, so clamped round/operation errors improve monotonically below threshold and can plateau at the floor. Changing cycle time changes latency while leaving the physical error per round fixed. At the reference, timings are 1,000/27,000 ns and operation errors are 1e-10/1e-9, matching `ftqc_surface_code` without changing that built-in profile.
+
+The footprint uses the explicit **2d² approximation for a rotated data/syndrome patch**, with no routing, factories, decoding or interconnect overhead. At d=27 it gives **1,458** physical qubits per logical patch; the preset's prior “roughly 1,000” value remains a separate coarse approximation. For 1,024 logical qubits, the calculator reports 1,492,992 physical data/syndrome qubits. R3 chip equivalents use `ceil(total / 520)` = 2,872 chips because only 520 qubits per r3 chip are programmable. Dividing by 2,034 yields 735 total-physical-element equivalents, displayed separately; coupler/reset elements cannot be treated as usable data/syndrome capacity. Chip counts are illustrative resource equivalents, not a feasible modular QEC design or a scheduled interconnect simulation.
+
+Apply writes the existing `n_physical_qubits` field from `total_physical_qubits`, the logical target into `n_qubits_max`, all generated gate/readout/reset timings and errors, T1/T2=null, and topology/native-CX factors=1. It switches to one logical workspace and clears inherited physical module/link configuration, repetition-rate constraints and operation targets. The chip-equivalent estimate is not converted into thousands of logical modules. Subsequent explicit custom edits can explore logical links independently.
+
+Optional `custom_profile.surface_code` metadata records `model_version=1`, `code_distance_d`, `physical_2q_error`, `threshold_error`, `syndrome_cycle_ns`, `logical_qubits_target`, and `physical_qubits_per_logical`. Presets, run history, restoration and full custom-parameter exports retain it. Server provenance repeats verified generator inputs and documents formulas, reference calibration and footprint basis. The advisor receives these validated inputs and identifies generated operation errors as model proxies. Backend validation mirrors the TypeScript helper and rejects generator tags that disagree with the actual derived physics; manual edits to generated fields clear the tag in the builder, while renaming preserves it. Historical custom profiles without this metadata remain valid.
+
+Sources for the round-scaling model and patch context: [Fowler et al., Surface codes: Towards practical large-scale quantum computation](https://arxiv.org/abs/1208.0928) and [IBM Quantum Learning, Error correction II](https://quantum.cloud.ibm.com/learning/en/courses/tools-for-quantum-advantage/error-correction-ii). The 2d² approximation, editable threshold and reference-operation calibration are the simulator choices described above.
+
 ## Capacity overrides
 
 The UI allows available qubits to exceed a profile's reference capacity. These overrides are exploratory hypothetical devices, not a claim that the referenced hardware has grown.
