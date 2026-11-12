@@ -1,6 +1,7 @@
 import { engineHeaders, engineUrl } from "@/lib/engine";
 import { parseSimulationRequest } from "@/lib/workloads";
 import { parseTelemetry } from "@/lib/telemetry";
+import { validateCustomTelemetryProfile } from "@/lib/custom-profile";
 
 /**
  * Validate cockpit controls and proxy one uncached simulation to FastAPI.
@@ -26,6 +27,9 @@ export async function POST(request: Request) {
     const body = await response.json();
     if (!response.ok) return Response.json({ detail: typeof body?.detail === "string" ? body.detail : "The engine rejected this simulation." }, { status: response.status, headers });
     const telemetry = parseTelemetry(body);
+    if (input.custom_profile) for (const stage of Object.values(telemetry.stages)) {
+      if (stage.node === "QPU") validateCustomTelemetryProfile(stage.metrics.qpu_profile, input.custom_profile);
+    }
     if (telemetry.workload_id !== input.workload_id) throw new Error("Workload mismatch.");
     return Response.json(telemetry, { headers });
   } catch {

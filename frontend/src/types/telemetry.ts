@@ -1,5 +1,7 @@
 export type StageStatus = "OPTIMAL" | "WARNING" | "CRITICAL_BOTTLENECK";
-export const HARDWARE_PROFILE_IDS = ["ibm_heron_nisq", "ibm_nighthawk_r2", "ibm_nighthawk_r3", "ibm_nighthawk_r3_dual", "google_weber_grid", "ionq_forte_trapped_ion", "ftqc_surface_code", "ideal_sim"] as const;
+export const BUILTIN_HARDWARE_PROFILE_IDS = ["ibm_heron_nisq", "ibm_nighthawk_r2", "ibm_nighthawk_r3", "ibm_nighthawk_r3_dual", "google_weber_grid", "ionq_forte_trapped_ion", "ftqc_surface_code", "ideal_sim"] as const;
+export type BuiltinHardwareProfile = typeof BUILTIN_HARDWARE_PROFILE_IDS[number];
+export const HARDWARE_PROFILE_IDS = [...BUILTIN_HARDWARE_PROFILE_IDS, "custom"] as const;
 export type HardwareProfile = typeof HARDWARE_PROFILE_IDS[number];
 export type WorkloadId = "shors_crypto" | "quantum_mips";
 export type StageNode = "CPU" | "GPU" | "QPU";
@@ -19,6 +21,7 @@ export interface SimulationRequest {
   available_qubits?: number;
   routing?: Partial<RoutingConfig> | null;
   interconnect?: InterconnectConfig | null;
+  custom_profile?: CustomQPUProfileSpec | null;
 }
 
 export interface InterconnectConfig {
@@ -73,6 +76,10 @@ export interface QPUProfile {
   state_transfer_target_fidelity?: number | null;
   transfer_duration_ns?: number | null;
   provenance: Record<string, JsonValue>;
+}
+
+export interface CustomQPUProfileSpec extends Omit<QPUProfile, "id" | "provenance"> {
+  base_profile_id?: BuiltinHardwareProfile | null;
 }
 
 /** Alternative idle terms in natural logs; null denotes negative infinity (certain failure). */

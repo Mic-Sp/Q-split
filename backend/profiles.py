@@ -1,9 +1,9 @@
 """Literature-grounded approximations; never substitute for current calibrations."""
 
 if __package__:
-    from .models import QPUProfile, RESOURCE_MODEL_VERSION
+    from .models import QPUProfile, CustomQPUProfileSpec, RESOURCE_MODEL_VERSION
 else:
-    from models import QPUProfile, RESOURCE_MODEL_VERSION
+    from models import QPUProfile, CustomQPUProfileSpec, RESOURCE_MODEL_VERSION
 
 
 RETRIEVED_ON = "2026-11-01"
@@ -265,9 +265,35 @@ def execution_profile(profile: QPUProfile, available_qubits: int) -> QPUProfile:
 
 def profile_metrics(profile: QPUProfile, available_qubits: int) -> dict:
     """Serialize provenance and units in one shared adapter for both workloads."""
-    return {"hardware_architecture": profile.id, "connectivity_topology": TOPOLOGIES[profile.id],
+    return {"hardware_architecture": profile.id, "connectivity_topology": profile_topology(profile),
             "resource_model_version": RESOURCE_MODEL_VERSION,
             **({"reference_qubits": profile.n_qubits_max} if profile.n_qubits_max is not None else {}),
             "capacity_override": profile.n_qubits_max is not None and available_qubits > profile.n_qubits_max,
             "routing_depth_multiplier": profile.topology_factor,
             "qpu_profile": profile.model_dump(mode="json")}
+
+
+def resolve_profile(profile_id: str, custom_profile: CustomQPUProfileSpec | None = None) -> QPUProfile:
+    """Resolve one request without mutating the global built-in registry."""
+    if profile_id != "custom":
+        if custom_profile is not None:
+            raise ValueError("custom_profile is only valid for custom hardware")
+        if profile_id not in HARDWARE_PROFILES:
+            raise ValueError("Unsupported hardware profile")
+        return HARDWARE_PROFILES[profile_id]
+    if custom_profile is None:
+        raise ValueError("custom_profile is required for custom hardware")
+    spec = CustomQPUProfileSpec.model_validate(custom_profile)
+    fields = spec.model_dump(exclude={"base_profile_id"})
+    provenance = {"source_url": None, "sources": [], "base_profile_id": spec.base_profile_id,
+        "value_types": {field: "user_defined_custom" for field in fields},
+        "notes": "User-defined research profile, not vendor calibration. Null T1/T2 disables separate idle decay; memory errors must be included in operation errors by assumption. Linked execution uses the same V1 uniform-pair partition/traffic model as built-in r3. Capacity overrides extrapolate module geometry.",
+        "architecture": {"module_count": spec.module_count, "qubits_per_module": spec.qubits_per_module,
+            "deployment_notes": "Custom / theoretical QPU; no physical hardware is dispatched."}}
+    return QPUProfile(id="custom", **fields, provenance=provenance)
+
+
+def profile_topology(profile: QPUProfile) -> str:
+    if profile.id == "custom":
+        return "User-defined linked modules" if profile.module_count > 1 else "User-defined routing"
+    return TOPOLOGIES[profile.id]

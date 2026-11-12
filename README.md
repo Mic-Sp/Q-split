@@ -25,7 +25,7 @@ A run follows classical preprocessing → quantum kernel → classical postproce
 ## Features
 
 - **Two workloads:** Shor's Algorithm (N = 15 up to RSA-2048) and Quantum-MIPS vector retrieval (M = 64 up to 1M).
-- **Eight hardware profiles:** IBM Heron, IBM Nighthawk r2, Nighthawk r3 single and linked dual roadmap systems, Google Weber, IonQ Forte, a fault-tolerant surface-code logical QPU, and an ideal noise-free reference.
+- **Eight built-in profiles plus custom research hardware:** IBM Heron, IBM Nighthawk r2, Nighthawk r3 single and linked dual roadmap systems, Google Weber, IonQ Forte, a fault-tolerant surface-code logical QPU, and an ideal noise-free reference.
 - **Dual simulation engine:** small reference circuits run in Qiskit Aer, and larger scales use analytical co-design models.
 - **Per-stage routing:** assign each pipeline stage to CPU, GPU or QPU.
 - **Telemetry:** latency breakdown, circuit depth, coherence survival and bottleneck detection.
@@ -64,6 +64,8 @@ A run follows classical preprocessing → quantum kernel → classical postproce
 * **IonQ Forte:** Representative 36-qubit all-to-all trapped-ion profile ([sources, assumptions and caveats](docs/hardware-profiles.md#ionq-forte)).
 * **FTQC Surface-Code:** Representative logical QPU with 1,024 logical workspace qubits and a d≈27 target ([sources, assumptions and caveats](docs/hardware-profiles.md#ftqc-surface-code)).
 * **Ideal Noise-Free:** Theoretical reference with unlimited stored profile capacity and no modeled noise; explicit UI capacity limits still apply ([assumptions and caveats](docs/hardware-profiles.md#ideal-noise-free)).
+
+Custom / Research hardware adds a parameter builder with all eight clone baselines, scientific-notation inputs, logical-mode idle-decay control, and named browser-local presets. Custom configurations use the same estimator and remain attached to saved runs, advisor diagnostics, comparisons and exports. See [custom hardware contracts and limits](docs/hardware-profiles.md#custom--research-hardware).
 
 ## Quickstart
 
@@ -115,7 +117,7 @@ A run follows classical preprocessing → quantum kernel → classical postproce
 
    ```sh
    npx tsc --noEmit
-   npm test
+   npm test  # Existing regression suite plus custom-profile Vitest tests
    ```
 
    The frontend tests include the 2,025-configuration backend integration matrix and use the Python environment installed above.

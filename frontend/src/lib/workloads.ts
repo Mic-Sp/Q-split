@@ -1,6 +1,7 @@
 import type { SimulationRequest, WorkloadId } from "@/types/telemetry";
 import { isHardwareProfile } from "@/lib/hardware-profiles";
 import { parseInterconnect } from "@/lib/interconnect";
+import { customProfileForRequest } from "@/lib/custom-profile";
 
 export const WORKLOADS = {
   shors_crypto: { label: "Shor's Algorithm", scales: [15, 21, 35, 512, 2048],
@@ -106,12 +107,14 @@ export function parseSimulationRequest(value: unknown): SimulationRequest {
   const scale = input.scale_param === undefined ? (workload === "quantum_mips" ? 64 : 15) : input.scale_param;
   if (!validWorkloadScale(workload, scale)) throw new Error("Invalid workload or target scale.");
   if (!isHardwareProfile(input.hardware_profile)) throw new Error("Invalid hardware profile.");
-  const interconnect = parseInterconnect(input.interconnect, input.hardware_profile);
+  const custom_profile = customProfileForRequest(input.hardware_profile, input.custom_profile);
+  const interconnect = parseInterconnect(input.interconnect, input.hardware_profile, custom_profile);
   if (input.available_qubits !== undefined && (!Number.isSafeInteger(input.available_qubits) || input.available_qubits < 1 || input.available_qubits > 2_147_483_647)) throw new Error("Invalid available qubits.");
   if (input.routing != null && (typeof input.routing !== "object" || Array.isArray(input.routing) ||
     Object.keys(input.routing).some(key => !["stage_1_node", "stage_2_node", "stage_3_node"].includes(key)) ||
     Object.values(input.routing).some(node => !["CPU", "GPU", "QPU"].includes(node)))) throw new Error("Invalid stage routing.");
   return { workload_id: workload, scale_param: scale, hardware_profile: input.hardware_profile,
+    ...(custom_profile === undefined ? {} : { custom_profile }),
     ...(interconnect === undefined ? {} : { interconnect }),
     ...(input.available_qubits === undefined ? {} : { available_qubits: input.available_qubits }),
     ...(input.routing == null ? {} : { routing: input.routing }) };

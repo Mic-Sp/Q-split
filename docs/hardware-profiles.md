@@ -173,6 +173,24 @@ Finite illustrative gate and readout durations mean repeated shots still cost ti
 
 The [layer-aware timing design](../backend/LAYER_TIMING_DESIGN.md) describes a separate reference diagnostic and a proposed versioned scheduling interface. It does not replace the current `CALIBRATED_V2` production formula or justify inferring a layer mix from gate totals.
 
+## Custom / Research hardware
+
+Select **Custom / Theoretical QPU (User-Defined)** to open the collapsible Custom Hardware Configuration Panel. Clone any of the eight built-in profiles, edit the grouped physics fields, and run explicitly. The baseline ID records lineage only; editing a custom profile never changes the built-in registry. Labels are limited to 120 printable characters.
+
+The API accepts `hardware_profile="custom"` with a required `custom_profile` object. Other hardware selectors reject this object. `CustomQPUProfileSpec` shares strict, frozen, finite-number physical validation with `QPUProfile`: positive 2Q timing and lifetimes, nonnegative other operation durations, errors in [0,1], routing/native-CX multipliers ≥1, optional positive repetition rate, and optional null lifetimes/capacity. Custom capacity is bounded to the public int32 range. Unknown keys, booleans in numeric fields, numeric strings, NaN and infinity are rejected; scientific notation is supported in JSON numbers and builder inputs. Finite parameters that overflow derived timing calculations return HTTP 422 rather than nonfinite telemetry.
+
+The fields are `name`, optional `base_profile_id`, `n_qubits_max`, `t1_us`, `t2_us`, `t_1q_ns`, `t_2q_ns`, `t_meas_ns`, `t_reset_ns`, `err_1q`, `err_2q`, `err_meas`, `topology_factor`, optional `native_2q_per_cx` and `repetition_rate_hz`, plus the existing module/link and physical-count metadata fields shown above. `base_profile_id` must be one of the eight built-in IDs. Missing optional fields receive the same defaults as `QPUProfile`; missing installed channel count is inferred from active channels.
+
+The existing V1 partition model supports **one or two modules**, with custom programmable qubits per module, installed/active channels, transfer fidelity, optional target fidelity, and ns per transfer round. Active channels cannot exceed installed channels; linked modules require capacity, active channels, fidelity and duration. Declared custom capacity cannot exceed the reference module geometry. Auto placement uses active circuit width and schedules `ceil(transfers / active_channels)` rounds. Optional `interconnect` placement and fidelity controls work on linked custom profiles; the target scenario requires a defined target fidelity. The historical wire token `target_2027` selects that alternate fidelity, without claiming the custom hardware has been demonstrated. All other link physics is shared with r3.
+
+**Logical FTQC Mode** writes `t1_us=null` and `t2_us=null`, disabling separate idle decay while retaining gate, readout and link survival penalties. Logical memory errors must then be included in operation-error assumptions; this is not a syndrome-level QEC simulation. Turning the toggle off restores the lifetimes held while the panel was open, or the initial representative lifetimes after loading a logical preset.
+
+Named presets are explicitly saved/loaded in localStorage under `q-split.custom-hardware-presets.v1`, limited to 30 names, with same-name saves replacing that preset. Presets contain physics and clone lineage; per-run placement/scenario controls are captured separately with each simulation. Browser storage errors do not prevent editing or simulation. Presets are local to this browser, whereas saved run history contains a complete immutable request and embedded resolved `qpu_profile`, so restoration works independently of local presets.
+
+Resolved custom profiles have `id="custom"`; provenance marks each parameter `user_defined_custom` and records `base_profile_id`. Advisor, proxy and persistence validation bound embedded physics and verify that it matches captured controls, instead of comparing it to static vendor constants. Custom names remain untrusted data in advisor prompts. Comparison rows show the custom name and cloned baseline, and CSV includes the name, baseline ID and complete custom-parameter JSON alongside existing link diagnostics. JSON exports retain the full request and telemetry.
+
+Available-qubit overrides retain the existing exploratory semantics below; physical-count metadata and advisory operation targets are not extra programmable capacity or hard depth cutoffs.
+
 ## Capacity overrides
 
 The UI allows available qubits to exceed a profile's reference capacity. These overrides are exploratory hypothetical devices, not a claim that the referenced hardware has grown.

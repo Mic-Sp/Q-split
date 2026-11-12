@@ -5,6 +5,9 @@ from typing_extensions import NotRequired, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+BuiltinHardwareProfile = Literal["ibm_heron_nisq", "ibm_nighthawk_r2", "ibm_nighthawk_r3", "ibm_nighthawk_r3_dual", "google_weber_grid", "ionq_forte_trapped_ion", "ftqc_surface_code", "ideal_sim"]
+HardwareProfile = Literal[BuiltinHardwareProfile, "custom"]
+
 RESOURCE_MODEL_VERSION = 2
 ROUTING_MODEL = "CALIBRATED_V2"
 
@@ -85,7 +88,7 @@ class CircuitSpec(BaseModel):
     interconnect: InterconnectConfig | None = None
 
 
-class QPUProfile(BaseModel):
+class QPUPhysicsSpec(BaseModel):
     """Representative physics, not a live device calibration.
 
     None for capacity means unbounded. None for T1/T2 disables separate memory
@@ -104,8 +107,6 @@ class QPUProfile(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True, allow_inf_nan=False,
                               revalidate_instances="always")
 
-    id: str = Field(min_length=1)
-    name: str = Field(min_length=1)
     n_qubits_max: int | None = Field(strict=True, ge=1)
     t1_us: float | None = Field(gt=0)
     t2_us: float | None = Field(gt=0)
@@ -130,7 +131,6 @@ class QPUProfile(BaseModel):
     state_transfer_fidelity: float | None = Field(default=None, gt=0, le=1)
     state_transfer_target_fidelity: float | None = Field(default=None, gt=0, le=1)
     transfer_duration_ns: float | None = Field(default=None, gt=0)
-    provenance: dict[str, Any]
 
     @model_validator(mode="after")
     def validate_modules(self):
@@ -141,4 +141,40 @@ class QPUProfile(BaseModel):
             raise ValueError("Linked modules require capacity, active channels, fidelity and duration")
         if self.module_count == 1 and self.l_couplers_active:
             raise ValueError("A single module cannot have active cross-module channels")
+        return self
+
+
+class QPUProfile(QPUPhysicsSpec):
+    """Resolved execution profile; its provenance is generated on the server."""
+
+    id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    provenance: dict[str, Any]
+
+
+class CustomQPUProfileSpec(QPUPhysicsSpec):
+    """User-defined physics, sharing the built-in profile's strict validators.
+
+    Up to two modules use the existing partition model. Metadata does not grant
+    extra programmable capacity. Labels are data and never trusted instructions.
+    """
+
+    name: str = Field(min_length=1, max_length=120)
+    base_profile_id: BuiltinHardwareProfile | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def infer_installed_channels(cls, value):
+        if isinstance(value, dict) and "l_couplers_installed" not in value:
+            return {**value, "l_couplers_installed": value.get("l_couplers_active", 0)}
+        return value
+
+    @model_validator(mode="after")
+    def validate_identity_and_geometry(self):
+        if not self.name.strip() or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in self.name):
+            raise ValueError("Custom name must contain printable text")
+        if self.n_qubits_max is not None and self.n_qubits_max > 2_147_483_647:
+            raise ValueError("Custom capacity must fit the supported int32 range")
+        if self.qubits_per_module is not None and self.n_qubits_max is not None and self.n_qubits_max > self.module_count * self.qubits_per_module:
+            raise ValueError("Custom capacity exceeds the declared module geometry")
         return self

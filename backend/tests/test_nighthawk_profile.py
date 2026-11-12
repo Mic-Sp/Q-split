@@ -21,7 +21,8 @@ def circuit(depth=10, qubits=3):
 
 def test_registered_profile_schema_units_and_separate_metadata():
     profile = HARDWARE_PROFILES[PROFILE_ID]
-    assert set(get_args(HardwareProfile)) == set(HARDWARE_PROFILES) == set(TOPOLOGIES)
+    assert set(get_args(HardwareProfile)) == set(HARDWARE_PROFILES) | {"custom"}
+    assert set(HARDWARE_PROFILES) == set(TOPOLOGIES)
     assert SimulationRequest(hardware_profile=PROFILE_ID).hardware_profile == PROFILE_ID
     assert QPUProfile.model_validate_json(profile.model_dump_json()) == profile
     assert profile.name == "IBM Quantum System Two (Nighthawk r2)"

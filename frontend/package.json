@@ -14,7 +14,8 @@
     "db:cleanup": "prisma db execute --file prisma/maintenance/purge-expired-runs.sql",
     "db:test:ttl": "node scripts/test-run-ttl.mjs",
     "typecheck": "next typegen && tsc --noEmit",
-    "test": "tsx --conditions=react-server --test src/lib/*.test.ts"
+    "test": "tsx --conditions=react-server --test src/lib/*.test.ts && npm run test:research",
+    "test:research": "vitest run"
   },
   "dependencies": {
     "@prisma/adapter-neon": "7.10.1",
@@ -40,6 +41,7 @@
     "prisma": "7.10.1",
     "tailwindcss": "^4",
     "tsx": "4.23.15",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.12"
   }
 }

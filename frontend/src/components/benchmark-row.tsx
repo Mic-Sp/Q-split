@@ -52,7 +52,7 @@ export function BenchmarkRow({ run, busy, selected, selectionDisabled, onSelect,
         <time dateTime={run.completedAt} className="mt-1 block text-[9px] text-slate-600 dark:text-slate-400">{timeFormatter.format(new Date(run.completedAt))}</time>
         <p className="mt-1 text-[9px] text-slate-600 dark:text-slate-400">{modelVersionLabel(resourceModelVersion(run.telemetry))}</p>
       </td>
-      <td className="p-2"><p>{run.scaleLabel}</p><p className="mt-1 text-[9px] text-slate-600 dark:text-slate-400">{hardwareLabel(run.hardwareProfile)}</p></td>
+      <td className="p-2"><p>{run.scaleLabel}</p><p className="mt-1 text-[9px] text-slate-600 dark:text-slate-400">{hardwareLabel(run.hardwareProfile, run.request.custom_profile)}</p></td>
       <td className="whitespace-nowrap p-2 font-mono">{run.stage1Node} → {run.stage2Node} → {run.stage3Node}</td>
       <td className="p-2"><p className="font-mono text-cyan-800 dark:text-cyan-200">{kernel.node === "QPU" ? `${formatValue(metrics.qubits_allocated)} / ${formatValue(metrics.available_qubits ?? run.request.available_qubits ?? DEFAULT_AVAILABLE_QUBITS)}` : "— (Classical)"}</p><p className="mt-1 text-[9px] text-slate-600 dark:text-slate-400">{kernel.node === "QPU" ? formatValue(metrics.parallelization_tier) : `${formatValue(metrics.qubits_required)} logical qubits`}</p></td>
       <td className="p-2 font-mono"><p title={formatRawMilliseconds(timing.computeMs)}>{formatDuration(timing.computeMs)} <span className="font-sans text-slate-600 dark:text-slate-400">compute</span></p><p title={formatRawMilliseconds(timing.overheadMs)} className="mt-1 text-amber-800 dark:text-amber-200">{formatDuration(timing.overheadMs)} <span className="font-sans text-slate-600 dark:text-slate-400">I/O</span></p></td>

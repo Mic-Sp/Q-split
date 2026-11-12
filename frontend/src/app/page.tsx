@@ -22,6 +22,8 @@ import { coherenceBudget, formatSurvivalPercent, pipelineTiming, type CoherenceB
 import { formatDuration, formatRawMilliseconds } from "@/lib/duration";
 import { QUBIT_CAPACITY_PRESETS, hardwareLabel } from "@/lib/hardware-profiles";
 import { WORKLOADS, workloadScaleLabel } from "@/lib/workloads";
+import { CustomHardwarePanel } from "@/components/custom-hardware-panel";
+import { cloneBuiltinProfile, customProfileDraft, customProfileFromDraft, type CustomProfileDraft } from "@/lib/custom-profile";
 import { HardwareSelector } from "@/components/hardware-selector";
 import { DEFAULT_INTERCONNECT, interconnectKey } from "@/lib/interconnect";
 import {
@@ -32,7 +34,7 @@ import {
   DEFAULT_AVAILABLE_QUBITS, DEFAULT_ROUTING, formatValue, hardwareDefaultQubits, isScalarMetricValue, PIPELINE, simulate,
   type Snapshot, type Transition,
 } from "@/lib/telemetry";
-import type { HardwareProfile, InterconnectConfig, RoutingConfig, SimulationRequest, StageNode, StageStatus, StageTelemetry, WorkloadId } from "@/types/telemetry";
+import type { HardwareProfile, InterconnectConfig, CustomQPUProfileSpec, RoutingConfig, SimulationRequest, StageNode, StageStatus, StageTelemetry, WorkloadId } from "@/types/telemetry";
 const summaryValue = (value: unknown) => typeof value === "number" && Math.abs(value) >= 1_000_000
   ? new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 2 }).format(value)
   : formatValue(value);
@@ -197,6 +199,7 @@ export default function Home() {
   const { saveRun } = persistentHistory;
   const [scale, setScale] = useState(15);
   const [hardware, setHardware] = useState<HardwareProfile>("ibm_heron_nisq");
+  const [customDraft, setCustomDraft] = useState<CustomProfileDraft>(() => customProfileDraft(cloneBuiltinProfile("ibm_heron_nisq")));
   const [interconnect, setInterconnect] = useState<InterconnectConfig>({ ...DEFAULT_INTERCONNECT });
   const [availableQubits, setAvailableQubits] = useState(String(DEFAULT_AVAILABLE_QUBITS));
   const [routing, setRouting] = useState<RoutingConfig>(DEFAULT_ROUTING);
@@ -270,22 +273,30 @@ export default function Home() {
   const limited = data && !data.primary_bottleneck.startsWith("NONE");
   const latest = history[0];
   const capacity = Number(availableQubits);
-  const validCapacity = Number.isSafeInteger(capacity) && capacity >= 1 && capacity <= 2_147_483_647 &&
+  let customProfile: CustomQPUProfileSpec | undefined;
+  try { if (hardware === "custom") customProfile = customProfileFromDraft(customDraft); } catch { /* The panel reports field errors. */ }
+  const capturedInterconnect = hardware === "custom" && customProfile?.module_count === 2
+    ? { ...interconnect, placement: interconnect.placement ?? "auto", fidelity_scenario: interconnect.fidelity_scenario ?? "demonstrated" }
+    : hardware === "ibm_nighthawk_r3_dual" ? { ...interconnect } : undefined;
+  const validCapacity = Number.isSafeInteger(capacity) && capacity >= 1 && capacity <= 2_147_483_647;
+  const validRun = validCapacity && (hardware !== "custom" || customProfile !== undefined) &&
     (hardware !== "ibm_nighthawk_r3_dual" || (Number.isFinite(interconnect.transfer_duration_ns) && interconnect.transfer_duration_ns! > 0 && interconnect.transfer_duration_ns! <= 1_000_000));
   const configurationChanged = snapshot && (
     snapshot.request.workload_id !== workload || snapshot.request.scale_param !== scale ||
     snapshot.request.hardware_profile !== hardware || snapshot.request.available_qubits !== capacity ||
-    (hardware === "ibm_nighthawk_r3_dual" && interconnectKey(snapshot.request.interconnect) !== interconnectKey(interconnect)) || PIPELINE.some(({ routingKey }) =>
+    ((hardware === "ibm_nighthawk_r3_dual" || hardware === "custom") && interconnectKey(snapshot.request.interconnect) !== interconnectKey(capturedInterconnect)) ||
+    (hardware === "custom" && JSON.stringify(snapshot.request.custom_profile) !== JSON.stringify(customProfile)) || PIPELINE.some(({ routingKey }) =>
       (snapshot.request.routing?.[routingKey] ?? DEFAULT_ROUTING[routingKey]) !== routing[routingKey])
   );
   /** Capture current controls for one execution; persistence receives that same captured request. */
   const runSimulation = () => {
-    if (!validCapacity) return;
+    if (!validRun) return;
     setRestoreMessage(null);
     dispatch({ type: "start" });
     setSubmittedRequest({
       workload_id: workload, scale_param: scale, hardware_profile: hardware, available_qubits: capacity, routing: { ...routing },
-      ...(hardware === "ibm_nighthawk_r3_dual" ? { interconnect: { ...interconnect } } : {}),
+      ...(capturedInterconnect ? { interconnect: capturedInterconnect } : {}),
+      ...(customProfile ? { custom_profile: customProfile } : {}),
     });
   };
   const updateNode = (key: keyof RoutingConfig, node: StageNode) => {
@@ -294,7 +305,23 @@ export default function Home() {
   /** Explicit profile clicks apply native/ideal defaults; restoration intentionally bypasses this handler. */
   const selectHardware = (profile: HardwareProfile) => {
     setHardware(profile);
-    setAvailableQubits(String(hardwareDefaultQubits(profile, scale, workload)));
+    if (profile === "custom") setInterconnect(current => ({ placement: current.placement ?? "auto", fidelity_scenario: "demonstrated" }));
+    if (profile === "ibm_nighthawk_r3_dual") setInterconnect(current => ({ ...DEFAULT_INTERCONNECT, ...current, transfer_duration_ns: current.transfer_duration_ns ?? 100 }));
+    let reference = hardwareDefaultQubits(profile, scale, workload);
+    if (profile === "custom") {
+      try { reference = customProfileFromDraft(customDraft).n_qubits_max ?? reference; } catch { /* Preserve an unfinished draft. */ }
+    }
+    setAvailableQubits(String(reference));
+  };
+  const applyCustomProfile = (spec: CustomQPUProfileSpec) => {
+    setCustomDraft(customProfileDraft(spec));
+    setAvailableQubits(String(spec.n_qubits_max ?? hardwareDefaultQubits("ideal_sim", scale, workload)));
+    setInterconnect({ placement: "auto", fidelity_scenario: "demonstrated" });
+  };
+  const updateCustomDraft = (draft: CustomProfileDraft) => {
+    setCustomDraft(draft);
+    if (draft.transfer_duration_ns !== customDraft.transfer_duration_ns) setInterconnect(current => ({ placement: current.placement, fidelity_scenario: current.fidelity_scenario }));
+    if (!draft.state_transfer_target_fidelity) setInterconnect(current => ({ ...current, fidelity_scenario: "demonstrated" }));
   };
   /** Switch control defaults without clearing the other workload's completed snapshots or pending saves. */
   const selectWorkload = (next: WorkloadId) => {
@@ -308,8 +335,9 @@ export default function Home() {
     const restored = restoredConfiguration(run);
     setWorkload(restored.workload_id); setScale(restored.scale_param); setHardware(restored.hardware_profile);
     setAvailableQubits(String(restored.available_qubits));
-    setInterconnect({ ...DEFAULT_INTERCONNECT, ...restored.interconnect, transfer_duration_ns: restored.interconnect?.transfer_duration_ns ?? 100 });
+    setInterconnect(restored.hardware_profile === "custom" ? { ...restored.interconnect } : { ...DEFAULT_INTERCONNECT, ...restored.interconnect, transfer_duration_ns: restored.interconnect?.transfer_duration_ns ?? 100 });
     setRouting({ ...DEFAULT_ROUTING, ...restored.routing });
+    if (restored.custom_profile) setCustomDraft(customProfileDraft(restored.custom_profile));
     setRestoreMessage(`Restored ${run.snapshotName ?? run.scaleLabel} into the controls. Run simulation to execute this configuration.`);
     document.querySelector('[aria-label="Simulation controls"]')?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
@@ -364,13 +392,14 @@ export default function Home() {
             </fieldset>
             <fieldset className="min-w-0 w-full lg:max-w-xl">
               <legend className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">03 / Hardware profile</legend>
-              <HardwareSelector value={hardware} onChange={selectHardware} interconnect={interconnect} onInterconnectChange={setInterconnect} />
+              <HardwareSelector value={hardware} onChange={selectHardware} interconnect={interconnect} onInterconnectChange={setInterconnect} customProfile={customProfile} />
             </fieldset>
-            <button type="button" disabled={loading || !validCapacity} onClick={runSimulation} className="flex min-h-9 shrink-0 items-center justify-center gap-2 rounded-lg bg-cyan-700 dark:bg-cyan-400 px-4 text-xs font-semibold text-white dark:text-slate-950 transition-colors hover:bg-cyan-800 dark:hover:bg-cyan-300 disabled:cursor-wait disabled:opacity-60">
+            <button type="button" disabled={loading || !validRun} onClick={runSimulation} className="flex min-h-9 shrink-0 items-center justify-center gap-2 rounded-lg bg-cyan-700 dark:bg-cyan-400 px-4 text-xs font-semibold text-white dark:text-slate-950 transition-colors hover:bg-cyan-800 dark:hover:bg-cyan-300 disabled:cursor-wait disabled:opacity-60">
               {loading ? <LoaderCircle size={15} className="animate-spin" /> : <Play size={15} fill="currentColor" />}
               {loading ? "Simulating…" : "Run simulation"}
             </button>
           </div>
+          {hardware === "custom" && <CustomHardwarePanel draft={customDraft} onChange={updateCustomDraft} onApply={applyCustomProfile} onUseCapacity={value => setAvailableQubits(String(value))} interconnect={interconnect} onInterconnectChange={setInterconnect} />}
           <div className="mt-2 border-t border-slate-200 dark:border-slate-800 pt-1">
             <div className="mb-1 flex items-center gap-1"><label htmlFor="available-qubits" className="text-[10px] font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">04 / Available QPU Qubits</label>
               <InfoPopover label="About QPU capacity">
@@ -420,7 +449,7 @@ export default function Home() {
 
         <section aria-label="Simulation results" aria-busy={loading} className="space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-1 text-[10px]">
-            <p className="text-slate-600 dark:text-slate-400">{data && snapshot ? <><span className="font-medium text-slate-800 dark:text-slate-200">{data.scale_label}</span><span className="mx-2 text-slate-300 dark:text-slate-700">/</span>{hardwareLabel(snapshot.request.hardware_profile)}</> : "Choose a configuration, then click Run simulation"}</p>
+            <p className="text-slate-600 dark:text-slate-400">{data && snapshot ? <><span className="font-medium text-slate-800 dark:text-slate-200">{data.scale_label}</span><span className="mx-2 text-slate-300 dark:text-slate-700">/</span>{hardwareLabel(snapshot.request.hardware_profile, snapshot.request.custom_profile)}</> : "Choose a configuration, then click Run simulation"}</p>
             <p className="flex items-center gap-1.5 text-slate-600 dark:text-slate-400">{loading
               ? <><LoaderCircle size={12} className="animate-spin" />{data ? "Updating · previous result shown" : "Waiting for engine telemetry"}</>
               : configurationChanged ? "Configuration changed · previous result shown" : data ? <><Check size={13} className="text-emerald-700 dark:text-emerald-400" />Simulation complete</> : "No simulation results yet"}</p>
@@ -474,7 +503,7 @@ export default function Home() {
               <div className="flex flex-wrap items-center gap-2">
                 <CaptureBenchmark key={snapshot?.id ?? "idle"} snapshot={snapshot} disabled={loading || !!(snapshot && persistentHistory.isDeleted(snapshot.id))} busy={!!(snapshot && persistentHistory.busyIds.includes(snapshot.id))} onCapture={persistentHistory.nameSnapshot} />
                 <p role="status" aria-label="Pipeline configuration status" className={`text-[10px] ${configurationChanged ? "text-amber-700 dark:text-amber-300" : "text-slate-600 dark:text-slate-400"}`}>{loading ? "Running submitted configuration…" : configurationChanged ? "Uncommitted changes" : data ? "Up to date" : "Ready to run"}</p>
-                <button type="button" aria-label={loading ? "Simulating from pipeline" : "Run simulation from pipeline"} disabled={loading || !validCapacity} onClick={runSimulation} className="inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-cyan-700/30 dark:border-cyan-400/30 bg-cyan-700/10 dark:bg-cyan-400/10 px-3 py-1.5 text-[11px] font-semibold text-cyan-800 dark:text-cyan-200 hover:bg-cyan-700/20 dark:hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-50">{loading ? <LoaderCircle size={12} className="animate-spin" /> : <Play size={12} />}{loading ? "Simulating…" : "Run simulation"}</button>
+                <button type="button" aria-label={loading ? "Simulating from pipeline" : "Run simulation from pipeline"} disabled={loading || !validRun} onClick={runSimulation} className="inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-cyan-700/30 dark:border-cyan-400/30 bg-cyan-700/10 dark:bg-cyan-400/10 px-3 py-1.5 text-[11px] font-semibold text-cyan-800 dark:text-cyan-200 hover:bg-cyan-700/20 dark:hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-50">{loading ? <LoaderCircle size={12} className="animate-spin" /> : <Play size={12} />}{loading ? "Simulating…" : "Run simulation"}</button>
               </div>
             </div>
             <div className="grid gap-3 lg:grid-cols-3">{PIPELINE.map(({ key, routingKey }, index) => (
@@ -503,7 +532,7 @@ export default function Home() {
                 <span className="rounded-md border border-slate-300 dark:border-slate-700 px-2 py-1 font-mono text-slate-700 dark:text-slate-300">{workloadScaleLabel(latest.before.request.scale_param, latest.before.request.workload_id)}</span>
                 <ArrowRight size={12} className="text-slate-600 dark:text-slate-400" />
                 <span className="rounded-md border border-cyan-700/25 dark:border-cyan-400/25 bg-cyan-700/10 dark:bg-cyan-400/10 px-2 py-1 font-mono text-cyan-700 dark:text-cyan-300">{workloadScaleLabel(latest.after.request.scale_param, latest.after.request.workload_id)}</span>
-                <span className="text-slate-600 dark:text-slate-400">{hardwareLabel(latest.after.request.hardware_profile)}</span>
+                <span className="text-slate-600 dark:text-slate-400">{hardwareLabel(latest.after.request.hardware_profile, latest.after.request.custom_profile)}</span>
               </div>
               <DeltaTable changes={latest.changes} />
               {history.length > 1 && <div className="mt-3 space-y-2">{history.slice(1).map((transition) => (

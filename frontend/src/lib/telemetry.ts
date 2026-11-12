@@ -78,7 +78,12 @@ export function describeChanges(before: Snapshot, after: Snapshot): MetricDelta[
   };
   add("Workload", before.data.workload_name, after.data.workload_name);
   add("Scale", before.data.scale_label, after.data.scale_label);
-  add("Hardware", hardwareLabel(before.request.hardware_profile), hardwareLabel(after.request.hardware_profile));
+  add("Hardware", hardwareLabel(before.request.hardware_profile, before.request.custom_profile), hardwareLabel(after.request.hardware_profile, after.request.custom_profile));
+  if (before.request.custom_profile || after.request.custom_profile) {
+    const previous = before.request.custom_profile, current = after.request.custom_profile;
+    const fields = new Set([...Object.keys(previous ?? {}), ...Object.keys(current ?? {})]);
+    for (const field of fields) add(`Custom hardware · ${field.replaceAll("_", " ")}`, previous?.[field as keyof typeof previous], current?.[field as keyof typeof current]);
+  }
   if (before.request.hardware_profile === "ibm_nighthawk_r3_dual" || after.request.hardware_profile === "ibm_nighthawk_r3_dual") {
     add("Module placement", before.request.interconnect?.placement ?? "auto", after.request.interconnect?.placement ?? "auto");
     add("Transfer fidelity scenario", before.request.interconnect?.fidelity_scenario ?? "demonstrated", after.request.interconnect?.fidelity_scenario ?? "demonstrated");

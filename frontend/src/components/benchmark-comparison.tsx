@@ -26,7 +26,7 @@ export function BenchmarkComparison({ runs, onRemove }: { runs: SavedSimulationR
           <th scope="col" className="w-36 p-2 font-semibold">Systems metric</th>
           {columns.map(({ run, compatible, modelVersion }, index) => <th scope="col" key={run.id} className="p-2 align-top font-semibold">
             <div className="flex items-start justify-between gap-2"><span className="min-w-0 [overflow-wrap:anywhere]">{run.snapshotName ?? run.scaleLabel}</span><button type="button" aria-label={`Remove ${run.snapshotName ?? run.scaleLabel} from comparison`} onClick={() => onRemove(run.id)} className="shrink-0 rounded p-1 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-cyan-800 dark:hover:text-cyan-200"><X size={12} /></button></div>
-            <span className="mt-1 block text-[9px] font-normal text-slate-600 dark:text-slate-400">{run.scaleLabel} · {hardwareLabel(run.hardwareProfile)} · {run.stage1Node} → {run.stage2Node} → {run.stage3Node}</span>
+            <span className="mt-1 block text-[9px] font-normal text-slate-600 dark:text-slate-400">{run.scaleLabel} · {hardwareLabel(run.hardwareProfile, run.request.custom_profile)} · {run.stage1Node} → {run.stage2Node} → {run.stage3Node}</span>
             <span className="mt-1 block text-[9px] font-normal text-cyan-700 dark:text-cyan-400">{modelVersion} · {index === 0 ? "Reference run" : compatible ? "Compared with reference" : "Different model version · comparison unavailable"}</span>
           </th>)}
         </tr></thead>

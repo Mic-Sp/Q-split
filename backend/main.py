@@ -26,19 +26,19 @@ from qiskit_aer import AerSimulator
 
 # Support both `uvicorn backend.main:app` and the container's `uvicorn main:app`.
 if __package__:
-    from .models import CircuitSpec, QPUProfile, StageMetrics, InterconnectConfig, RESOURCE_MODEL_VERSION, ROUTING_MODEL
+    from .models import CircuitSpec, QPUProfile, StageMetrics, InterconnectConfig, CustomQPUProfileSpec, HardwareProfile, RESOURCE_MODEL_VERSION, ROUTING_MODEL
     from .estimation import (estimate_qpu, estimate_classical, STATEVECTOR_PROFILES,
                              CLASSICAL_GPU_COMPUTE_FACTOR, CLASSICAL_GPU_OVERHEAD_MS)
-    from .profiles import HARDWARE_PROFILES, execution_profile, profile_metrics
+    from .profiles import HARDWARE_PROFILES, execution_profile, profile_metrics, resolve_profile
     from .workloads import (QUANTUM_MIPS_CLASSICAL_PROFILES, shors_spec, mips_spec,
                            mips_reference_depth, select_shors_base)
     from .circuits import (NATIVE_BASIS_GATES, AER_SEED, QUANTUM_MIPS_TARGET_INDEX, SHOR_SHOTS, QUANTUM_MIPS_AER_SHOTS,
                            c_amod15, build_shors_15_circuit, build_quantum_mips_grover_circuit, compile_reference_circuit)
 else:
-    from models import CircuitSpec, QPUProfile, StageMetrics, InterconnectConfig, RESOURCE_MODEL_VERSION, ROUTING_MODEL
+    from models import CircuitSpec, QPUProfile, StageMetrics, InterconnectConfig, CustomQPUProfileSpec, HardwareProfile, RESOURCE_MODEL_VERSION, ROUTING_MODEL
     from estimation import (estimate_qpu, estimate_classical, STATEVECTOR_PROFILES,
                             CLASSICAL_GPU_COMPUTE_FACTOR, CLASSICAL_GPU_OVERHEAD_MS)
-    from profiles import HARDWARE_PROFILES, execution_profile, profile_metrics
+    from profiles import HARDWARE_PROFILES, execution_profile, profile_metrics, resolve_profile
     from workloads import (QUANTUM_MIPS_CLASSICAL_PROFILES, shors_spec, mips_spec,
                           mips_reference_depth, select_shors_base)
     from circuits import (NATIVE_BASIS_GATES, AER_SEED, QUANTUM_MIPS_TARGET_INDEX, SHOR_SHOTS, QUANTUM_MIPS_AER_SHOTS,
@@ -91,7 +91,6 @@ async def require_engine_secret(secret: Optional[str] = Security(engine_secret_h
 # ==========================================
 StageNode = Literal["CPU", "GPU", "QPU"]
 WorkloadId = Literal["shors_crypto", "quantum_mips"]
-HardwareProfile = Literal["ibm_heron_nisq", "ibm_nighthawk_r2", "ibm_nighthawk_r3", "ibm_nighthawk_r3_dual", "google_weber_grid", "ionq_forte_trapped_ion", "ftqc_surface_code", "ideal_sim"]
 
 SHOR_SCALES = (15, 21, 35, 512, 2048)
 
@@ -180,6 +179,7 @@ class SimulationRequest(BaseModel):
     routing: Optional[RoutingConfig] = None
     available_qubits: int = Field(default=133, strict=True, ge=1, le=2_147_483_647)
     interconnect: InterconnectConfig | None = None
+    custom_profile: CustomQPUProfileSpec | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -201,8 +201,14 @@ class SimulationRequest(BaseModel):
 
         Raises:
             ValueError: The workload scale has no configured reference model."""
-        if self.interconnect is not None and self.hardware_profile != "ibm_nighthawk_r3_dual":
-            raise ValueError("Interconnect controls require ibm_nighthawk_r3_dual")
+        if (self.hardware_profile == "custom") != (self.custom_profile is not None):
+            raise ValueError("custom_profile is required exactly when hardware_profile is custom")
+        if self.interconnect is not None:
+            profile = resolve_profile(self.hardware_profile, self.custom_profile)
+            if profile.module_count < 2:
+                raise ValueError("Interconnect controls require a linked profile")
+            if self.interconnect.fidelity_scenario == "target_2027" and profile.state_transfer_target_fidelity is None:
+                raise ValueError("Target fidelity is not defined for this profile")
         if self.workload_id == "shors_crypto" and self.scale_param not in SHOR_SCALES:
             raise ValueError("Shor scale_param must be one of 15, 21, 35, 512, 2048.")
         if self.workload_id == "quantum_mips" and self.scale_param not in QUANTUM_MIPS_SCALES:
@@ -458,6 +464,7 @@ def _classical_cost(spec: CircuitSpec, node: str) -> Dict[str, Any]:
 def _run_default_shors_pipeline(
     scale_param: int, hardware_profile: str, qpu_plan: Optional[Dict[str, Any]] = None,
     interconnect: InterconnectConfig | None = None,
+    custom_profile: CustomQPUProfileSpec | None = None,
 ) -> HybridTelemetryResponse:
     """Build workload stages and delegate all device physics to estimate_qpu.
 
@@ -469,8 +476,9 @@ def _run_default_shors_pipeline(
     minimum = 8 if scale_param == 15 else 2 * n + 3
     depth = qpu_plan["circuit_depth"] if qpu_plan else int(4.5 * n**3)
     qubits = qpu_plan["qubits_allocated"] if qpu_plan else minimum
+    profile = resolve_profile(hardware_profile, custom_profile)
     spec = shors_spec(scale_param, qubits or minimum, depth)
-    estimated = (_qpu_metrics(spec, HARDWARE_PROFILES[hardware_profile], qpu_plan["available_qubits"], SHOR_SHOTS, interconnect)
+    estimated = (_qpu_metrics(spec, profile, qpu_plan["available_qubits"], SHOR_SHOTS, interconnect)
                  if qpu_plan and qubits else
                  {"latency_ms": 0.0, "circuit_depth": depth, "coherence_survival_pct": 100.0,
                   "circuit_spec": spec.model_dump(), "io_state_prep_ms": 0.0})
@@ -513,7 +521,7 @@ def _run_default_shors_pipeline(
     post_summary = (f"Continued Fractions output: {factor}" if reliable else
                     "STARVED: modeled QPU coherence is insufficient to extract reliable factors.")
     if measured:
-        hardware_projection = f"Modeled {HARDWARE_PROFILES[hardware_profile].name} survival {_fmt_pct(coherence)}"
+        hardware_projection = f"Modeled {profile.name} survival {_fmt_pct(coherence)}"
         kernel_summary = (
             f"Ideal Aer reference: peaks at {measured['top_measurements']}; Extracted period r = {measured['period_r']}. "
             f"{hardware_projection}; modeled depth {estimated['circuit_depth']:,}; {SHOR_SHOTS} shots."
@@ -704,7 +712,8 @@ def _block_quantum_mips_stage(stage: StageTelemetry, reason: str) -> StageTeleme
 def quantum_mips_kernel(scale_param: int, hardware_profile: HardwareProfile = "ibm_heron_nisq",
                         node: StageNode = "QPU", available_qubits: int = 133,
                         *, upstream_blocked_by: Optional[str] = None,
-                        interconnect: InterconnectConfig | None = None) -> StageTelemetry:
+                        interconnect: InterconnectConfig | None = None,
+                        custom_profile: CustomQPUProfileSpec | None = None) -> StageTelemetry:
     """Profile Stage 02 using a small Aer reference or analytical Grover depth.
 
     Args:
@@ -727,8 +736,7 @@ def quantum_mips_kernel(scale_param: int, hardware_profile: HardwareProfile = "i
     unreliable rather than claiming that a known marked candidate was verified."""
     if type(scale_param) is not int or scale_param not in QUANTUM_MIPS_SCALES:
         raise ValueError("Unsupported Quantum-MIPS candidate count.")
-    if not isinstance(hardware_profile, str) or hardware_profile not in HARDWARE_PROFILES:
-        raise ValueError("Unsupported hardware profile.")
+    architecture = resolve_profile(hardware_profile, custom_profile)
     if node not in ("CPU", "GPU", "QPU"):
         raise ValueError("Stage node must be CPU, GPU, or QPU.")
     plan = (quantum_mips_capacity_plan(scale_param, available_qubits) if node == "QPU"
@@ -753,7 +761,6 @@ def quantum_mips_kernel(scale_param: int, hardware_profile: HardwareProfile = "i
     stage = StageTelemetry(name="Quantum Inner-Product & Grover-Max Amplification", node=node, latency_ms=0.0,
                            status="OPTIMAL", output_summary="", metrics=metrics)
     metrics = stage.metrics
-    architecture = HARDWARE_PROFILES[hardware_profile]
     if node == "QPU":
         metrics.update(profile_metrics(architecture, available_qubits))
     else:
@@ -809,7 +816,8 @@ def quantum_mips_kernel(scale_param: int, hardware_profile: HardwareProfile = "i
 
 def run_quantum_mips_pipeline(scale_param: int, hardware_profile: HardwareProfile,
                               routing: Optional[RoutingConfig] = None, available_qubits: int = 133,
-                              interconnect: InterconnectConfig | None = None) -> HybridTelemetryResponse:
+                              interconnect: InterconnectConfig | None = None,
+                              custom_profile: CustomQPUProfileSpec | None = None) -> HybridTelemetryResponse:
     """Compose MIPS stages and propagate prerequisite/resource failures.
 
     Args:
@@ -826,7 +834,7 @@ def run_quantum_mips_pipeline(scale_param: int, hardware_profile: HardwareProfil
     pre = quantum_mips_preprocessing(scale_param, targets.stage_1_node)
     kernel = quantum_mips_kernel(scale_param, hardware_profile, targets.stage_2_node, available_qubits,
                                 upstream_blocked_by=pre.name if not pre.metrics["execution_feasible"] else None,
-                                interconnect=interconnect)
+                                interconnect=interconnect, custom_profile=custom_profile)
     post = quantum_mips_postprocessing(scale_param, targets.stage_3_node)
     if not pre.metrics["execution_feasible"] or not kernel.metrics["execution_feasible"]:
         source = pre.name if not pre.metrics["execution_feasible"] else kernel.name
@@ -871,6 +879,7 @@ def run_shors_pipeline(
     routing: Optional[RoutingConfig] = None,
     available_qubits: int = 133,
     interconnect: InterconnectConfig | None = None,
+    custom_profile: CustomQPUProfileSpec | None = None,
 ) -> HybridTelemetryResponse:
     """Apply independent node placements to Shor's reference-stage telemetry.
 
@@ -890,12 +899,12 @@ def run_shors_pipeline(
     CPU/GPU kernels retain deterministic coherence and minimum-register emulation.
     Capacity/tier changes model QPU workspace, not a physical-device allocation."""
     targets = routing or RoutingConfig()
-    if hardware_profile not in HARDWARE_PROFILES:
-        raise ValueError("Unsupported hardware profile")
+    architecture = resolve_profile(hardware_profile, custom_profile)
     plan = qpu_capacity_plan(scale_param, available_qubits)
     core_profile = hardware_profile if targets.stage_2_node == "QPU" else "ideal_sim"
     response = _run_default_shors_pipeline(
         scale_param, core_profile, plan if targets.stage_2_node == "QPU" else None, interconnect,
+        custom_profile if targets.stage_2_node == "QPU" else None,
     )
 
     reasons = {"stage_2_quantum_kernel": response.primary_bottleneck}
@@ -909,7 +918,6 @@ def run_shors_pipeline(
         stage.metrics["execution_feasible"] = True
 
         if target == "QPU":
-            architecture = HARDWARE_PROFILES[hardware_profile]
             stage.metrics.update(profile_metrics(architecture, available_qubits))
             # Only the quantum kernel has an implemented QPU algorithm. Other
             # QPU routes still get capacity validation before route validation.
@@ -1065,10 +1073,15 @@ def simulate_workload(req: SimulationRequest):
     The response model preserves canonical workload IDs and stage keys. Persistence,
     Neon advisor caching, and /api/analyze-telemetry validation live in the Next.js
     server, not in this FastAPI process."""
-    if req.workload_id == "shors_crypto":
-        return run_shors_pipeline(req.scale_param, req.hardware_profile, req.routing, req.available_qubits, req.interconnect)
-    elif req.workload_id == "quantum_mips":
-        return run_quantum_mips_pipeline(req.scale_param, req.hardware_profile, req.routing, req.available_qubits, req.interconnect)
+    try:
+        if req.workload_id == "shors_crypto":
+            return run_shors_pipeline(req.scale_param, req.hardware_profile, req.routing, req.available_qubits, req.interconnect, req.custom_profile)
+        elif req.workload_id == "quantum_mips":
+            return run_quantum_mips_pipeline(req.scale_param, req.hardware_profile, req.routing, req.available_qubits, req.interconnect, req.custom_profile)
+    except (ValueError, OverflowError) as error:
+        if req.hardware_profile == "custom":
+            raise HTTPException(status_code=422, detail="Custom parameters exceed the supported numerical range; reduce durations, routing multipliers or shot periods.") from error
+        raise
 
 
 def create_app() -> FastAPI:

@@ -17,7 +17,7 @@ import { parseTelemetry, describeChanges } from "./telemetry";
 import { WORKLOADS, workloadThresholds } from "./workloads";
 import type { CompletedRun, SavedSimulationRun } from "@/types/run-history";
 import type { SimulationRun } from "@/generated/prisma/client";
-import { HARDWARE_PROFILE_IDS } from "@/types/telemetry";
+import { BUILTIN_HARDWARE_PROFILE_IDS as HARDWARE_PROFILE_IDS } from "@/types/telemetry";
 
 const python = resolve("../backend/venv/bin/python");
 

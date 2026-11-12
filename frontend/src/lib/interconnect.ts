@@ -1,12 +1,13 @@
-import type { HardwareProfile, InterconnectConfig } from "@/types/telemetry";
+import type { HardwareProfile, InterconnectConfig, CustomQPUProfileSpec } from "@/types/telemetry";
 
 export const DEFAULT_INTERCONNECT = { placement: "auto", fidelity_scenario: "demonstrated", transfer_duration_ns: 100 } as const;
 
 /** Shared boundary for proxy, advisor and saved controls; never forward unknown keys. */
-export function parseInterconnect(value: unknown, profile: HardwareProfile): InterconnectConfig | undefined {
+export function parseInterconnect(value: unknown, profile: HardwareProfile, custom?: CustomQPUProfileSpec): InterconnectConfig | undefined {
   if (value === undefined || value === null) return undefined;
-  if (profile !== "ibm_nighthawk_r3_dual" || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid interconnect configuration.");
+  if ((profile !== "ibm_nighthawk_r3_dual" && !(profile === "custom" && custom?.module_count === 2)) || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid interconnect configuration.");
   const source = value as Record<string, unknown>;
+  if (profile === "custom" && source.fidelity_scenario === "target_2027" && custom?.state_transfer_target_fidelity == null) throw new Error("Custom target fidelity is not defined.");
   if (Object.keys(source).some(key => !["placement", "fidelity_scenario", "transfer_duration_ns"].includes(key)) ||
       (source.placement !== undefined && source.placement !== "auto" && source.placement !== "dual") ||
       (source.fidelity_scenario !== undefined && source.fidelity_scenario !== "demonstrated" && source.fidelity_scenario !== "target_2027") ||

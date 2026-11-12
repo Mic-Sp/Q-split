@@ -6,6 +6,7 @@ import type { HybridTelemetryResponse, LogSurvivalTerms, RoutingConfig, Simulati
 import { HARDWARE_PROFILE_IDS } from "@/types/telemetry";
 import { HARDWARE_PROFILES, RESOURCE_QPU_PROFILES, MODULAR_QPU_PROFILES } from "@/lib/hardware-profiles";
 import { parseInterconnect } from "@/lib/interconnect";
+import { customProfileForRequest, customResourcePhysics, customTopology, validateCustomTelemetryProfile } from "@/lib/custom-profile";
 import { WORKLOADS, validWorkloadScale, workloadScaleLabel } from "@/lib/workloads";
 import { pipelineTiming } from "@/lib/kpi-metrics";
 import { resourceModelVersion, sameModelVersion, versionedTelemetry } from "@/lib/model-version";
@@ -114,7 +115,7 @@ function metrics(value: unknown, inheritedVersion?: 1 | 2): StageTelemetry["metr
     ["launch_transfer_overhead_ms", 0, 60_000, false], ["compute_latency_factor", 0, 1000, false],
     ["statevector_memory_budget_gib", 1, 65_536, false],
     ["reference_circuit_depth", 0, ADVISOR_MAX_CIRCUIT_DEPTH, true], ["reference_qubits", 1, MAX_QUBITS, true],
-    ["routing_depth_multiplier", 0, 2, false], ["gate_time_multiplier", 0, 180, false],
+    ["routing_depth_multiplier", 0, Number.MAX_VALUE, false], ["gate_time_multiplier", 0, 180, false],
     ["coherence_decay_scale", 1, 1_000_000_000, false], ["io_readout_ms", 0, 60_000, false],
   ] as const;
   for (const [key, min, max, integer] of numeric) {
@@ -140,7 +141,7 @@ function metrics(value: unknown, inheritedVersion?: 1 | 2): StageTelemetry["metr
   if (Object.hasOwn(source, "selected_transfer_fidelity")) result.selected_transfer_fidelity = source.selected_transfer_fidelity === null ? null
     : number(source.selected_transfer_fidelity, Number.MIN_VALUE, 1);
   if (Object.hasOwn(source, "transfer_duration_ns")) result.transfer_duration_ns = source.transfer_duration_ns === null ? null
-    : number(source.transfer_duration_ns, Number.MIN_VALUE, 1_000_000);
+    : number(source.transfer_duration_ns, Number.MIN_VALUE, Number.MAX_VALUE);
   if (Object.hasOwn(source, "fidelity_scenario")) result.fidelity_scenario = choice(source.fidelity_scenario, ["demonstrated", "target_2027"] as const);
   if (Object.hasOwn(source, "module_placement")) result.module_placement = choice(source.module_placement, ["auto", "dual"] as const);
   if (Object.hasOwn(source, "log_survival_terms")) {
@@ -160,7 +161,7 @@ function metrics(value: unknown, inheritedVersion?: 1 | 2): StageTelemetry["metr
   if (Object.hasOwn(source, "parallelization_tier")) result.parallelization_tier = choice(source.parallelization_tier, TIERS);
   if (Object.hasOwn(source, "depth_complexity")) result.depth_complexity = choice(source.depth_complexity, DEPTHS);
   if (Object.hasOwn(source, "hardware_architecture")) result.hardware_architecture = choice(source.hardware_architecture, HARDWARE_PROFILE_IDS);
-  if (Object.hasOwn(source, "connectivity_topology")) result.connectivity_topology = choice(source.connectivity_topology, Object.values(HARDWARE_PROFILES).map(profile => profile.topology));
+  if (Object.hasOwn(source, "connectivity_topology")) result.connectivity_topology = choice(source.connectivity_topology, [...Object.values(HARDWARE_PROFILES).map(profile => profile.topology), "User-defined linked modules"]);
   return result;
 }
 
@@ -196,7 +197,9 @@ function validateRun(value: unknown): CompletedRun {
     available_qubits: config.available_qubits === undefined ? DEFAULT_AVAILABLE_QUBITS : number(config.available_qubits, 1, MAX_QUBITS, true),
     routing,
   };
-  const interconnect = parseInterconnect(config.interconnect, request.hardware_profile);
+  const custom = customProfileForRequest(request.hardware_profile, config.custom_profile);
+  if (custom) request.custom_profile = custom;
+  const interconnect = parseInterconnect(config.interconnect, request.hardware_profile, custom);
   if (interconnect !== undefined) request.interconnect = interconnect;
   // Derive trusted labels/architecture from validated selectors; never trust caller-supplied explanatory prose.
   const source = object(run.telemetry);
@@ -216,16 +219,18 @@ function validateRun(value: unknown): CompletedRun {
     if (node === "QPU" && numeric.hardware_architecture !== undefined && numeric.hardware_architecture !== request.hardware_profile) invalid();
     if (node === "QPU") {
       const architecture = HARDWARE_PROFILES[request.hardware_profile];
-      const resource = RESOURCE_QPU_PROFILES[request.hardware_profile];
-      if (request.hardware_profile === "ibm_nighthawk_r3_dual") {
+      if (custom) numeric.qpu_profile = validateCustomTelemetryProfile(object(stage.metrics).qpu_profile, custom);
+      const resource = request.hardware_profile === "custom" ? customResourcePhysics(custom!) : RESOURCE_QPU_PROFILES[request.hardware_profile];
+      const topology = custom ? customTopology(custom) : architecture.topology;
+      if (request.hardware_profile === "ibm_nighthawk_r3_dual" || custom?.module_count === 2) {
         const scenario = request.interconnect?.fidelity_scenario ?? "demonstrated";
         const expected = { fidelity_scenario: scenario, module_placement: request.interconnect?.placement ?? "auto",
-          selected_transfer_fidelity: scenario === "target_2027" ? 0.999 : 0.993,
-          transfer_duration_ns: request.interconnect?.transfer_duration_ns ?? 100 };
+          selected_transfer_fidelity: custom ? (scenario === "target_2027" ? custom.state_transfer_target_fidelity : custom.state_transfer_fidelity) : scenario === "target_2027" ? 0.999 : 0.993,
+          transfer_duration_ns: request.interconnect?.transfer_duration_ns ?? custom?.transfer_duration_ns ?? 100 };
         for (const [field, value] of Object.entries(expected)) if (numeric[field] !== undefined && numeric[field] !== value) invalid();
       }
       const expectedMetrics = numeric.resource_model_version !== undefined ? {
-        connectivity_topology: architecture.topology, reference_qubits: resource.referenceQubits,
+        connectivity_topology: topology, reference_qubits: resource.referenceQubits,
         routing_depth_multiplier: resource.depthMultiplier, gate_time_multiplier: null, coherence_decay_scale: null,
         capacity_override: resource.referenceQubits !== null && request.available_qubits! > resource.referenceQubits,
       } : { connectivity_topology: architecture.topology,
@@ -298,8 +303,10 @@ export function advisorDigest(run: CompletedRun) {
   const { label, topology, referenceQubits, depthMultiplier, gateTimeMultiplier, prepMs, decayScale } = HARDWARE_PROFILES[run.request.hardware_profile];
   const version = resourceModelVersion(run.telemetry);
   const resource = version === 2 || run.telemetry.stages.stage_2_quantum_kernel.metrics.resource_model_version === 1;
+  const custom = run.request.custom_profile;
+  const physics = run.request.hardware_profile === "custom" ? customResourcePhysics(custom!) : RESOURCE_QPU_PROFILES[run.request.hardware_profile];
   const architecture = resource
-    ? { label, topology, ...RESOURCE_QPU_PROFILES[run.request.hardware_profile], resourceModelVersion: version,
+    ? { label, topology, ...physics, resourceModelVersion: version,
         gateTimeMultiplier: null, prepMs: 0, decayScale: null }
     : { label, topology, referenceQubits, depthMultiplier, gateTimeMultiplier, prepMs, decayScale };
   const modular = run.request.hardware_profile === "ibm_nighthawk_r3" || run.request.hardware_profile === "ibm_nighthawk_r3_dual"
@@ -307,7 +314,12 @@ export function advisorDigest(run: CompletedRun) {
         fidelityScenario: run.request.interconnect?.fidelity_scenario ?? "demonstrated",
         modulePlacement: run.request.interconnect?.placement ?? "auto",
         assumedTransferDurationNs: run.request.hardware_profile === "ibm_nighthawk_r3_dual" ? run.request.interconnect?.transfer_duration_ns ?? 100 : null } : {};
-  return { request: run.request, architecture: { ...architecture, ...modular }, telemetry: {
+  const research = custom ? { label: custom.name, topology: customTopology(custom), baseProfileId: custom.base_profile_id ?? null,
+    userDefined: true, parameters: custom, ...customResourcePhysics(custom), moduleCount: custom.module_count,
+    qubitsPerModule: custom.qubits_per_module, activeLCouplers: custom.l_couplers_active,
+    transferFidelity: custom.state_transfer_fidelity, targetTransferFidelity: custom.state_transfer_target_fidelity,
+    transferDurationNs: custom.transfer_duration_ns } : {};
+  return { request: run.request, architecture: { ...architecture, ...modular, ...research }, telemetry: {
     resource_model_version: version, routing_model: run.telemetry.routing_model,
     execution_mode: run.telemetry.execution_mode,
     primary_bottleneck: run.telemetry.primary_bottleneck,

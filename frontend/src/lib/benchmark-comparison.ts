@@ -90,6 +90,7 @@ export function benchmarkComparison(runs: SavedSimulationRun[]) {
   if (!chosen.length) return [];
   const reference = benchmarkMetrics(chosen[0]);
   const showLinks = chosen.some(run => benchmarkMetrics(run).modulesUsed !== null);
+  const showCustom = chosen.some(run => run.request.custom_profile != null);
   return chosen.map((run, index) => {
     const metrics = benchmarkMetrics(run);
     const compatible = sameModelVersion(chosen[0].telemetry, run.telemetry);
@@ -126,6 +127,10 @@ export function benchmarkComparison(runs: SavedSimulationRun[]) {
         coherence,
         categorical("Bottleneck status", `${run.bottleneckStatus} · ${run.primaryBottleneck}`, `${chosen[0].bottleneckStatus} · ${chosen[0].primaryBottleneck}`),
       ];
+    if (showCustom) rows.push(
+      categorical("Research profile", run.request.custom_profile?.name ?? "Built-in", chosen[0].request.custom_profile?.name ?? "Built-in"),
+      categorical("Cloned baseline", run.request.custom_profile?.base_profile_id ?? "None", chosen[0].request.custom_profile?.base_profile_id ?? "None"),
+    );
     if (showLinks) rows.push(
       numeric("Modules used", metrics.modulesUsed, reference.modulesUsed, "modules"),
       numeric("State transfers / shot", metrics.transfersPerShot, reference.transfersPerShot, "transfers"),

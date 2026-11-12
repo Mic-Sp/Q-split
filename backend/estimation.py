@@ -59,7 +59,7 @@ def estimate_qpu(spec: CircuitSpec, profile: QPUProfile, shots: int, launch_over
     link_ns = link_log = 0.0
     if spec.interconnect is not None and profile.module_count == 1:
         raise ValueError("Interconnect controls require a linked dual-module profile")
-    if profile.qubits_per_module is not None:
+    if profile.qubits_per_module is not None or profile.id == "custom":
         config = spec.interconnect or InterconnectConfig()
         modules, transfers = (partition_transfer_count(spec.n_qubits, spec.n_2q, profile.qubits_per_module,
                               force_dual=config.placement == "dual") if profile.module_count > 1 else (1, 0))
@@ -93,6 +93,9 @@ def estimate_qpu(spec: CircuitSpec, profile: QPUProfile, shots: int, launch_over
                                ("measurement", spec.n_meas, profile.err_meas)]:
         terms[name] = (-math.inf if error == 1 else count * math.log1p(-error)) if count else 0.0
     exposure_us = spec.n_qubits * circuit_us
+    if not all(math.isfinite(value) for value in (circuit_ns, shot_period_ns, exposure_us,
+                                                 shots * shot_period_ns / 1e6)):
+        raise ValueError("Hardware parameters exceed the finite timing range")
     terms["idle_t1"] = -exposure_us / profile.t1_us if profile.t1_us is not None else 0.0
     t2 = profile.t2_us if profile.t2_us is not None else profile.t1_us
     terms["idle_t2"] = -exposure_us / t2 if t2 is not None else 0.0

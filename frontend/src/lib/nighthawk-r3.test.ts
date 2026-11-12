@@ -49,7 +49,7 @@ test("r3 categories retain IDs, exact system names and usable reference capaciti
   assert.equal(hardwareDefaultQubits("ibm_nighthawk_r3_dual", 512), 1040);
   assert.ok(QUBIT_CAPACITY_PRESETS.includes(520) && QUBIT_CAPACITY_PRESETS.includes(1040));
   const ids = HARDWARE_GROUPS.flatMap(group => group.ids);
-  assert.equal(new Set(ids).size, 8);
+  assert.equal(new Set(ids).size, 9);
   assert.ok(ids.includes("ibm_nighthawk_r3_dual"));
 });
 

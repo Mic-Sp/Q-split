@@ -1,17 +1,18 @@
 "use client";
 
 import { HARDWARE_GROUPS, HARDWARE_PROFILES, MODULAR_QPU_PROFILES } from "@/lib/hardware-profiles";
-import type { HardwareProfile, InterconnectConfig } from "@/types/telemetry";
+import type { HardwareProfile, InterconnectConfig, CustomQPUProfileSpec } from "@/types/telemetry";
 import { InfoPopover } from "@/components/info-popover";
 
 const control = "min-h-9 w-full min-w-0 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-2 py-1.5 text-[11px] text-slate-800 dark:text-slate-200";
 
 /** Categories keep one canonical ID selected, including when restoring saved runs. */
-export function HardwareSelector({ value, onChange, interconnect, onInterconnectChange }: {
+export function HardwareSelector({ value, onChange, interconnect, onInterconnectChange, customProfile }: {
   value: HardwareProfile;
   onChange: (profile: HardwareProfile) => void;
   interconnect: InterconnectConfig;
   onInterconnectChange: (config: InterconnectConfig) => void;
+  customProfile?: CustomQPUProfileSpec;
 }) {
   const profile = HARDWARE_PROFILES[value];
   const modular = value === "ibm_nighthawk_r3" || value === "ibm_nighthawk_r3_dual" ? MODULAR_QPU_PROFILES[value] : null;
@@ -23,7 +24,8 @@ export function HardwareSelector({ value, onChange, interconnect, onInterconnect
       </optgroup>)}
     </select>
     <div aria-label="Hardware summary" className="flex flex-wrap items-center gap-1 text-[9px] text-slate-600 dark:text-slate-400">
-      <span className="rounded border border-slate-300 dark:border-slate-700 px-1.5 py-0.5">{profile.referenceQubits?.toLocaleString("en-US") ?? "Exploratory"} {value === "ftqc_surface_code" ? "logical" : "programmable"} qubits</span>
+      <span className="rounded border border-slate-300 dark:border-slate-700 px-1.5 py-0.5">{(value === "custom" ? customProfile?.n_qubits_max : profile.referenceQubits)?.toLocaleString("en-US") ?? "Exploratory"} {value === "ftqc_surface_code" ? "logical" : "programmable"} qubits</span>
+      {value === "custom" && customProfile && <span>{customProfile.name} · {customProfile.module_count} module{customProfile.module_count === 1 ? "" : "s"} · User-defined</span>}
       {modular && <><span>{modular.physicalQubits.toLocaleString("en-US")} physical · {modular.moduleCount} module{modular.moduleCount === 1 ? "" : "s"}</span>
         <span>· {modular.activeLCouplers}/{modular.installedLCouplers} active l-couplers · 10,000 target operations</span></>}
       <InfoPopover label={`About ${profile.label}`}><p className="font-semibold">{profile.label}</p><p className="mt-2">{profile.description}</p><p className="mt-2">Selection sets reference capacity; manual overrides remain exploratory. Restoring a snapshot preserves its capacity and link controls.</p></InfoPopover>

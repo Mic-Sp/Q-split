@@ -9,7 +9,7 @@ export const BENCHMARK_CSV_HEADERS = [
   "Stage 1 Node", "Stage 2 Node", "Stage 3 Node", "Pure Compute ms", "Interconnect & I/O Overhead ms", "Total Latency ms", "Circuit Depth",
   "Coherence Survival %", "Coherence Budget Status", "Primary Bottleneck", "AI Diagnostic Summary", "Bottleneck Status", "Run ID", "Model Version",
   "Modules Used", "State Transfers Per Shot", "Scheduled Transfer Rounds", "l-coupler Execution ms (Included in Pure Compute)",
-  "Transfer Fidelity", "Fidelity Scenario", "Module Placement", "Assumed Transfer Duration ns", "Interconnect Model Version",
+  "Transfer Fidelity", "Fidelity Scenario", "Module Placement", "Assumed Transfer Duration ns", "Interconnect Model Version", "Custom Profile Name", "Cloned Baseline ID", "Custom Profile Parameters JSON",
 ];
 
 /**
@@ -41,7 +41,9 @@ export function benchmarkCsv(runs: SavedSimulationRun[]) {
       run.stage1Node, run.stage2Node, run.stage3Node, metrics.computeMs, metrics.overheadMs, metrics.totalMs, metrics.circuitDepth,
       metrics.coherenceSurvival, metrics.coherenceStatus, run.primaryBottleneck, summary, run.bottleneckStatus, run.id, modelVersionLabel(resourceModelVersion(run.telemetry)),
       metrics.modulesUsed, metrics.transfersPerShot, metrics.transferRounds, metrics.linkExecutionMs, metrics.transferFidelity,
-      metrics.fidelityScenario, metrics.modulePlacement, metrics.transferDurationNs, metrics.interconnectModelVersion];
+      metrics.fidelityScenario, metrics.modulePlacement, metrics.transferDurationNs, metrics.interconnectModelVersion,
+      run.request.custom_profile?.name ?? null, run.request.custom_profile?.base_profile_id ?? null,
+      run.request.custom_profile ? JSON.stringify(run.request.custom_profile) : null];
   });
   return [BENCHMARK_CSV_HEADERS, ...rows].map(row => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
 }

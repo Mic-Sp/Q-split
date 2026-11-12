@@ -1,5 +1,6 @@
 import { mipsRoutingContext, preferredMipsHost } from "@/lib/workloads";
 import { formatValue, PIPELINE, qubitThresholds } from "@/lib/telemetry";
+import { customBaselineLabel } from "@/lib/custom-profile";
 import { architectureTradeOff, hardwareLabel } from "@/lib/hardware-profiles";
 import { pipelineTiming } from "@/lib/kpi-metrics";
 import { formatDuration, formatDurationDelta } from "@/lib/duration";
@@ -89,7 +90,7 @@ export function deterministicInsight(current: CompletedRun, previous: CompletedR
   else recommendation = "Compare CPU → QPU → CPU with classical kernel emulation at the same scale. Keep capacity at the carry-lookahead ceiling when using QPU; extra qubits provide no further modeled speedup. Compare total pipeline latency, not only QPU time.";
   if (m.resource_model_version === 1 || m.resource_model_version === 2) recommendation = recommendation.replaceAll("180×", "modeled");
   const delta = previous
-    ? ` Previous ${previous.telemetry.scale_label}: total ${formatDuration(pipelineTiming(previous.telemetry).totalMs)} → ${formatDuration(pipelineTiming(telemetry).totalMs)} (Δ ${formatDurationDelta(pipelineTiming(telemetry).totalMs - pipelineTiming(previous.telemetry).totalMs)}).${previous.request.hardware_profile !== request.hardware_profile ? ` Hardware changed from ${hardwareLabel(previous.request.hardware_profile)} to ${hardwareLabel(request.hardware_profile)}.` : ""}${previous.request.workload_id !== request.workload_id ? " Workload changed; cross-workload timings are not an isolated speedup comparison." : previous.request.scale_param !== request.scale_param ? " Scale also changed; this is not an isolated hardware-speedup comparison." : ""}` : "";
+    ? ` Previous ${previous.telemetry.scale_label}: total ${formatDuration(pipelineTiming(previous.telemetry).totalMs)} → ${formatDuration(pipelineTiming(telemetry).totalMs)} (Δ ${formatDurationDelta(pipelineTiming(telemetry).totalMs - pipelineTiming(previous.telemetry).totalMs)}).${previous.request.hardware_profile !== request.hardware_profile ? ` Hardware changed from ${hardwareLabel(previous.request.hardware_profile, previous.request.custom_profile)} to ${hardwareLabel(request.hardware_profile, request.custom_profile)}.` : ""}${previous.request.workload_id !== request.workload_id ? " Workload changed; cross-workload timings are not an isolated speedup comparison." : previous.request.scale_param !== request.scale_param ? " Scale also changed; this is not an isolated hardware-speedup comparison." : ""}` : "";
   const spaceTime = mips ? mipsSpaceTime(current, thresholds) : quantum.node === "QPU"
     ? `Minimum ${formatValue(thresholds.minimum)} qubits (2n + 3; N = 15 uses 8). Allocated / available: ${formatValue(m.qubits_allocated)} / ${formatValue(available)}. Tier: ${formatValue(m.parallelization_tier)}; depth ${formatValue(m.circuit_depth)} (${formatValue(m.depth_complexity)}), QPU latency ${formatDuration(quantum.latency_ms)}, coherence ${formatValue(m.coherence_survival_pct)}%. Sequential / Windowed / Carry-Lookahead use minimum / 3n / ceil(5.5n) qubits. Capacity above ${formatValue(thresholds.ceiling)} stays idle. ${architectureTradeOff(request.hardware_profile, m.resource_model_version)}`
     : `The quantum kernel is emulated on ${quantum.node}; QPU capacity and ancilla tiers do not change this classical statevector path. Baseline width ${formatValue(m.qubits_required)} qubits; depth ${formatValue(m.circuit_depth)}; kernel latency ${formatDuration(quantum.latency_ms)}. Its relevant limit is CPU/GPU statevector memory, not physical QPU coherence; the selected architecture does not change CPU/GPU execution.`;
@@ -97,7 +98,7 @@ export function deterministicInsight(current: CompletedRun, previous: CompletedR
     usage: zeroUsage(),
     generatedAt: new Date().toISOString(), fallbackReason: reason, notice: notices[reason], sections: {
       routingDiagnosis: `${mips ? mipsRoutingContext(request.scale_param) + " " : ""}${telemetry.scale_label}, ${request.hardware_profile}: ${route}. Primary bottleneck: ${telemetry.primary_bottleneck}. ${unsupported ? "Classical host routines cannot execute on QPU. " : ""}${memoryBlocked ? "Statevector memory grows as 16 × 2^q bytes. " : ""}${stages.some((stage) => stage.node === "GPU") ? "GPU timings include illustrative launch/transfer overhead, not measured PCIe throughput. " : ""}${problems || "All stages report optimal status."}${delta}`,
-      spaceTimeTradeOff: spaceTime.trim(),
+      spaceTimeTradeOff: (request.custom_profile ? `Custom profile: ${request.custom_profile.name}. Baseline: ${customBaselineLabel(request.custom_profile)}. User-defined assumptions. ` : "") + spaceTime.trim(),
       optimizationRecommendation: recommendation,
     } };
 }

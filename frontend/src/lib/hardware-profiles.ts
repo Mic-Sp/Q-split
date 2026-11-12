@@ -1,4 +1,4 @@
-import { HARDWARE_PROFILE_IDS, type HardwareProfile } from "@/types/telemetry";
+import { HARDWARE_PROFILE_IDS, type HardwareProfile, type BuiltinHardwareProfile, type CustomQPUProfileSpec } from "@/types/telemetry";
 
 // Published reference capacities and exploratory choices, including legacy 72-qubit runs.
 export const QUBIT_CAPACITY_PRESETS = [16, 36, 53, 72, 120, 133, 520, 1024, 1040, 1121, 2048, 4096, 16384];
@@ -6,6 +6,9 @@ export const QUBIT_CAPACITY_PRESETS = [16, 36, 53, 72, 120, 133, 520, 1024, 1040
 const R3_ASSUMPTIONS = "IBM Quantum System Two is the modular cryogenic mainframe; Nighthawk is its QPU. IBM’s November 11, 2026 announcement sets a 10,000-operation design target, not a hard depth limit or fidelity guarantee. T1/T2 200/160 µs, 32/40 ns gates, 1.5 µs readout, 1 µs reset, errors 0.00025/0.0037/0.0075, 1.2× routing, one native entangler per CX and 100 kHz shot pacing are inherited r2 modeling assumptions, not r3 calibrations.";
 
 export const HARDWARE_PROFILES = {
+  custom: { label: "Custom / Theoretical QPU (User-Defined)", topology: "User-defined routing", referenceQubits: null,
+    depthMultiplier: 1, gateTimeMultiplier: 1, prepMs: 0, decayScale: null,
+    description: "Research parameters defined by you. Clone a built-in baseline, then adjust physics in the Custom Hardware Configuration Panel. Up to two modules use the shared link model. These assumptions are not vendor calibrations." },
   ibm_nighthawk_r3: { label: "IBM Quantum System Two (Nighthawk r3 — 520Q)", topology: "4-degree Square Grid", referenceQubits: 520,
     depthMultiplier: 1.2 / 1.5, gateTimeMultiplier: 40 / 250, prepMs: 2500 / 1e6, decayScale: null,
     description: "2027 roadmap · 520 programmable / 2,034 total physical qubits · one module · 10 installed l-couplers, zero active cross-module channels. " + R3_ASSUMPTIONS },
@@ -50,7 +53,7 @@ export const RESOURCE_QPU_PROFILES = {
     measurementNs: 1500, resetNs: 0, error1q: 0, error2q: 0, errorMeasurement: 0, native2qPerCx: 1, repetitionRateHz: null },
   ftqc_surface_code: { referenceQubits: 1024, depthMultiplier: 1, t1Us: null, t2Us: null, t1qNs: 1000, t2qNs: 27000,
     measurementNs: 27000, resetNs: 1000, error1q: 1e-10, error2q: 1e-9, errorMeasurement: 1e-9, native2qPerCx: 1, repetitionRateHz: null },
-} satisfies Record<HardwareProfile, object>;
+} satisfies Record<BuiltinHardwareProfile, object>;
 
 /** Trusted modular facts; separate from legacy constants and untrusted wire provenance. */
 export const MODULAR_QPU_PROFILES = {
@@ -65,6 +68,7 @@ export const HARDWARE_GROUPS = [
   { label: "2027 modular roadmap", ids: ["ibm_nighthawk_r3", "ibm_nighthawk_r3_dual"] },
   { label: "Fault-tolerant target", ids: ["ftqc_surface_code"] },
   { label: "Reference", ids: ["ideal_sim"] },
+  { label: "Custom / Research", ids: ["custom"] },
 ] satisfies { label: string; ids: HardwareProfile[] }[];
 
 /**
@@ -77,7 +81,8 @@ export function isHardwareProfile(value: unknown): value is HardwareProfile {
 /**
  * Resolve a known profile label while keeping unknown historical identifiers readable.
  */
-export function hardwareLabel(value: string) {
+export function hardwareLabel(value: string, custom?: CustomQPUProfileSpec | null) {
+  if (value === "custom" && custom) return custom.name;
   return isHardwareProfile(value) ? HARDWARE_PROFILES[value].label : value;
 }
 
@@ -85,6 +90,7 @@ export function hardwareLabel(value: string) {
  * Explain topology savings separately from gate-time/coherence assumptions for nonbaseline profiles.
  */
 export function architectureTradeOff(profile: HardwareProfile, resourceVersion?: unknown) {
+  if (profile === "custom") return "User-defined research hardware: timings, operation errors, coherence and link parameters are assumptions supplied with this run. Null T1/T2 folds logical memory error into operation errors. Compare identical workload, routing and capacity while changing one parameter at a time.";
   if (profile === "ibm_nighthawk_r3" || profile === "ibm_nighthawk_r3_dual") return HARDWARE_PROFILES[profile].description;
   if (profile === "ibm_nighthawk_r2") return "4-degree Square Grid: 1.2× assumed routing, 40 ns native 2Q gates and one native entangler per CX. A 1 µs reset and conservative 100 kHz peak rate give a 10 µs minimum full-shot period; longer circuits remain gate-time limited. Repetition pacing is included in measurement/reset overhead, never coherent exposure. T1/T2 are 200/160 µs; 25 ns describes reset-only relaxation. The 25× throughput and 7,500+ demonstrated gates are benchmark context, not guaranteed runtime or a depth cutoff.";
   if (profile === "ftqc_surface_code") return "2D Surface-Code Lattice Surgery: d≈27 × 1 µs syndrome cycle = 27 µs logical 2Q/measurement latency, versus Heron's representative 68 ns physical entangler. Logical operation errors are assumed at 1e-10 / 1e-9 including active-QEC memory errors; separate T1/T2 decay is disabled to avoid double-counting. Batch latency includes shots, measurement/reset and launch; compare logical survival separately from gate time and native classical baselines. Capacity counts logical qubits; roughly 1,000 physical qubits per logical qubit and routing absorbed into bus timing are assumptions.";
