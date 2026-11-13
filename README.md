@@ -31,6 +31,7 @@ A run follows classical preprocessing → quantum kernel → classical postproce
 - **Telemetry:** latency breakdown, circuit depth, coherence survival and bottleneck detection.
 - **Run history:** save, pin and name snapshots, compare up to three runs, and export to CSV or JSON.
 - **AI Telemetry Advisor:** Gemini-powered diagnostics with database caching and a deterministic fallback when the AI is unavailable.
+- **Custom inverse design:** locally verified 50%/80% survival targets, isolated subsystem ceilings, and minimum-distance surface-code alternatives with one-click application ([model details](docs/inverse-design.md)).
 - **Tested:** a 2,025-configuration backend integration matrix plus unit tests.
 
 ## Tech stack

@@ -8,6 +8,7 @@ import type { CompletedRun } from "@/types/run-history";
 import type { AdvisorInsight, AdvisorSections, FallbackReason } from "@/types/advisor";
 import { parseAdvisorTelemetry, parseAdvisorUsage, zeroUsage } from "@/lib/advisor-telemetry";
 import { sameModelVersion } from "@/lib/model-version";
+import { inverseDesignRecommendation } from "@/lib/inverse-design";
 
 /**
  * Read persisted/local diagnostic sections with legacy-compatible length bounds.
@@ -89,6 +90,7 @@ export function deterministicInsight(current: CompletedRun, previous: CompletedR
   else if (stages.some((stage, index) => index !== 1 && stage.node === "GPU")) recommendation = "Try CPU placement for the short classical pre/post routines: modeled GPU launch/transfer overhead can dominate these kernels. Compare total latency with the same scale and quantum routing.";
   else recommendation = "Compare CPU → QPU → CPU with classical kernel emulation at the same scale. Keep capacity at the carry-lookahead ceiling when using QPU; extra qubits provide no further modeled speedup. Compare total pipeline latency, not only QPU time.";
   if (m.resource_model_version === 1 || m.resource_model_version === 2) recommendation = recommendation.replaceAll("180×", "modeled");
+  if (!unsupported && !capacityBlocked && !memoryBlocked) recommendation = inverseDesignRecommendation(current) ?? recommendation;
   const delta = previous
     ? ` Previous ${previous.telemetry.scale_label}: total ${formatDuration(pipelineTiming(previous.telemetry).totalMs)} → ${formatDuration(pipelineTiming(telemetry).totalMs)} (Δ ${formatDurationDelta(pipelineTiming(telemetry).totalMs - pipelineTiming(previous.telemetry).totalMs)}).${previous.request.hardware_profile !== request.hardware_profile ? ` Hardware changed from ${hardwareLabel(previous.request.hardware_profile, previous.request.custom_profile)} to ${hardwareLabel(request.hardware_profile, request.custom_profile)}.` : ""}${previous.request.workload_id !== request.workload_id ? " Workload changed; cross-workload timings are not an isolated speedup comparison." : previous.request.scale_param !== request.scale_param ? " Scale also changed; this is not an isolated hardware-speedup comparison." : ""}` : "";
   const spaceTime = mips ? mipsSpaceTime(current, thresholds) : quantum.node === "QPU"

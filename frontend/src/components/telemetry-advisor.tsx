@@ -11,6 +11,8 @@ import type { AdvisorInsight, AdvisorResponse } from "@/types/advisor";
 import type { CompletedRun } from "@/types/run-history";
 import { sessionFetch } from "@/lib/client-session";
 import { sameModelVersion } from "@/lib/model-version";
+import { InverseDesignPanel } from "@/components/inverse-design-panel";
+import type { SimulationRequest } from "@/types/telemetry";
 
 /** Adapt an immutable session snapshot to the persistence/advisor wire shape without reading live controls. */
 const completedRun = (snapshot: Snapshot): CompletedRun => ({
@@ -24,7 +26,7 @@ const completedRun = (snapshot: Snapshot): CompletedRun => ({
  * requests, cancellation protects unmounted runs, and local fallback can be queued
  * for persistence independently from simulation loading.
  */
-export function TelemetryAdvisor({ snapshot, previous: previousCandidate, onInsight, onPersisted, savedInsight, saving, persistenceMessage, simulationLoading }: {
+export function TelemetryAdvisor({ snapshot, previous: previousCandidate, onInsight, onPersisted, savedInsight, saving, persistenceMessage, simulationLoading, onApplyTarget }: {
   snapshot: Snapshot | null;
   previous?: Snapshot;
   onInsight: (run: CompletedRun) => void;
@@ -33,6 +35,7 @@ export function TelemetryAdvisor({ snapshot, previous: previousCandidate, onInsi
   saving: boolean;
   persistenceMessage: string | null;
   simulationLoading: boolean;
+  onApplyTarget?: (request: SimulationRequest) => void;
 }) {
   const modelMismatch = snapshot && previousCandidate && !sameModelVersion(previousCandidate.data, snapshot.data);
   const previous = snapshot && previousCandidate?.request.workload_id === snapshot.request.workload_id && !modelMismatch ? previousCandidate : undefined;
@@ -100,6 +103,7 @@ export function TelemetryAdvisor({ snapshot, previous: previousCandidate, onInsi
       </button>
     </div>
     <div className="space-y-3 p-3">
+      {snapshot?.request.hardware_profile === "custom" && <InverseDesignPanel run={completedRun(snapshot)} onApply={onApplyTarget} disabled={simulationLoading} />}
       {modelMismatch && <p className="text-xs text-amber-800 dark:text-amber-200">Previous run uses a different model version; comparison unavailable.</p>}
       {snapshot && <p className="text-[10px] leading-4 text-slate-600 dark:text-slate-400">Analyzing {snapshot.data.scale_label} · {snapshot.request.hardware_profile} · {Object.values(snapshot.data.stages).map((stage) => stage.node).join(" → ")}. Uses completed-run settings even if controls have since changed.</p>}
       {previous && <label className="flex items-center gap-2 text-xs leading-5 text-slate-600 dark:text-slate-400"><input type="checkbox" checked={compare} onChange={(event) => setCompare(event.target.checked)} disabled={loading} className="size-4 shrink-0 accent-cyan-700 dark:accent-cyan-400" />Compare with previous completed run ({previous.data.scale_label})</label>}

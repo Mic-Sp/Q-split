@@ -46,7 +46,7 @@ export function CustomHardwarePanel({ draft, onChange, onApply, onUseCapacity, i
     <summary className="cursor-pointer px-3 py-2 text-xs font-semibold text-cyan-900 dark:text-cyan-200">Custom Hardware Configuration Panel</summary>
     <div className="space-y-3 border-t border-cyan-700/20 dark:border-cyan-400/20 p-3">
       <p className="text-[11px] text-slate-600 dark:text-slate-400">User-defined research assumptions use the same gate, idle-decay and link model as built-in profiles. Profile capacity is the reference; Available QPU Qubits below controls execution capacity. Changes apply when you run.</p>
-      <div className="grid gap-3 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         <div className="flex min-w-0 flex-wrap items-end gap-2">
           <label className="min-w-0 flex-1 text-[11px]">Clone Baseline From…<select aria-label="Clone baseline from" value={baseline} onChange={event => setBaseline(event.target.value as BuiltinHardwareProfile)} className={control}>
             {BUILTIN_HARDWARE_PROFILE_IDS.map(id => <option key={id} value={id}>{HARDWARE_PROFILES[id].label}</option>)}

@@ -318,6 +318,16 @@ export default function Home() {
     setAvailableQubits(String(spec.n_qubits_max ?? hardwareDefaultQubits("ideal_sim", scale, workload)));
     setInterconnect({ placement: "auto", fidelity_scenario: "demonstrated" });
   };
+  const applyAdvisorTarget = (request: SimulationRequest) => {
+    // Restore the immutable circuit's controls, including overrides and placement;
+    // changing capacity here could change the tier and invalidate the proof.
+    setWorkload(request.workload_id); setScale(request.scale_param); setHardware("custom");
+    setCustomDraft(customProfileDraft(request.custom_profile!));
+    setAvailableQubits(String(request.available_qubits ?? DEFAULT_AVAILABLE_QUBITS));
+    setRouting({ ...DEFAULT_ROUTING, ...request.routing });
+    setInterconnect({ ...request.interconnect });
+    setRestoreMessage("Applied verified inverse-design parameters and captured workload controls. Run simulation to verify.");
+  };
   const updateCustomDraft = (draft: CustomProfileDraft) => {
     setCustomDraft(clearEditedSurfaceCode(customDraft, draft));
     if (draft.transfer_duration_ns !== customDraft.transfer_duration_ns) setInterconnect(current => ({ placement: current.placement, fidelity_scenario: current.fidelity_scenario }));
@@ -375,7 +385,7 @@ export default function Home() {
         </div>
 
         <section aria-label="Simulation controls" className="mb-2 rounded-xl border border-slate-200 dark:border-slate-800 console-panel bg-white dark:bg-slate-900/50 p-2.5">
-          <div className="grid items-end gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(150px,1fr)_minmax(0,1.6fr)_auto_auto]">
+          <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(150px,1fr)_minmax(0,1.6fr)_auto_auto]">
             <div className="min-w-0">
               <label htmlFor="workload" className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">01 / Workload preset</label>
               <div className="relative">
@@ -518,6 +528,7 @@ export default function Home() {
 
         <div data-testid="analytics-row" className="mt-4 grid items-start gap-4 lg:grid-cols-2">
         <TelemetryAdvisor key={snapshot?.id ?? "idle"} snapshot={snapshot} previous={latest?.before}
+          onApplyTarget={applyAdvisorTarget}
           onInsight={saveRun} onPersisted={() => { void persistentHistory.refresh(); }} simulationLoading={loading} saving={persistentHistory.savingCount > 0}
           savedInsight={persistentHistory.runs.find((run) => run.id === snapshot?.id)?.advisorInsight}
           persistenceMessage={persistentHistory.message} />

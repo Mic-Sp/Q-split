@@ -10,6 +10,7 @@ import { customProfileForRequest, customResourcePhysics, customTopology, validat
 import { WORKLOADS, validWorkloadScale, workloadScaleLabel } from "@/lib/workloads";
 import { pipelineTiming } from "@/lib/kpi-metrics";
 import { resourceModelVersion, sameModelVersion, versionedTelemetry } from "@/lib/model-version";
+import { inverseDesignTargets, parseInverseCircuit } from "@/lib/inverse-design";
 
 export const ADVISOR_BODY_LIMIT = 65_536;
 export const ADVISOR_TEXT_LIMIT = 100;
@@ -219,7 +220,16 @@ function validateRun(value: unknown): CompletedRun {
     if (node === "QPU" && numeric.hardware_architecture !== undefined && numeric.hardware_architecture !== request.hardware_profile) invalid();
     if (node === "QPU") {
       const architecture = HARDWARE_PROFILES[request.hardware_profile];
-      if (custom) numeric.qpu_profile = validateCustomTelemetryProfile(object(stage.metrics).qpu_profile, custom);
+      if (custom) {
+        const raw = object(stage.metrics);
+        numeric.qpu_profile = validateCustomTelemetryProfile(raw.qpu_profile, custom);
+        // Retain sanitized resources through both validation passes. Historical
+        // records without them remain readable, with inverse design unavailable.
+        if (raw.circuit_spec !== undefined) numeric.circuit_spec = parseInverseCircuit(raw.circuit_spec);
+        for (const key of ["n_2q", "shots", "t_circuit_us"] as const) {
+          if (raw[key] !== undefined) numeric[key] = number(raw[key], 0, key === "t_circuit_us" ? Number.MAX_VALUE : Number.MAX_SAFE_INTEGER, key !== "t_circuit_us");
+        }
+      }
       const resource = request.hardware_profile === "custom" ? customResourcePhysics(custom!) : RESOURCE_QPU_PROFILES[request.hardware_profile];
       const topology = custom ? customTopology(custom) : architecture.topology;
       if (request.hardware_profile === "ibm_nighthawk_r3_dual" || custom?.module_count === 2) {
@@ -322,7 +332,8 @@ export function advisorDigest(run: CompletedRun) {
     ...(custom.surface_code ? { surfaceCode: { ...custom.surface_code },
       surfaceCodeModel: "Fowler round scaling; operation proxies calibrated to the d=27 reference, not measured gate errors",
       physicalFootprintBasis: "2*d^2 per logical patch, excluding factories/routing; r3 chip estimate uses 520 programmable qubits" } : {}) } : {};
-  return { request: run.request, architecture: { ...architecture, ...modular, ...research }, telemetry: {
+  return { request: run.request, architecture: { ...architecture, ...modular, ...research },
+    ...(custom ? { inverse_design_targets: inverseDesignTargets(run) } : {}), telemetry: {
     resource_model_version: version, routing_model: run.telemetry.routing_model,
     execution_mode: run.telemetry.execution_mode,
     primary_bottleneck: run.telemetry.primary_bottleneck,
