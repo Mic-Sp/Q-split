@@ -3,7 +3,7 @@ export const BUILTIN_HARDWARE_PROFILE_IDS = ["ibm_heron_nisq", "ibm_nighthawk_r2
 export type BuiltinHardwareProfile = typeof BUILTIN_HARDWARE_PROFILE_IDS[number];
 export const HARDWARE_PROFILE_IDS = [...BUILTIN_HARDWARE_PROFILE_IDS, "custom"] as const;
 export type HardwareProfile = typeof HARDWARE_PROFILE_IDS[number];
-export type WorkloadId = "shors_crypto" | "quantum_mips" | "skqd";
+export type WorkloadId = "shors_crypto" | "quantum_mips" | "skqd" | "gqe";
 export type StageNode = "CPU" | "GPU" | "QPU";
 
 /** Three sequential placement selectors; route labels describe projected costs, not physical dispatch. */
@@ -23,6 +23,47 @@ export interface SimulationRequest {
   interconnect?: InterconnectConfig | null;
   custom_profile?: CustomQPUProfileSpec | null;
   skqd?: SKQDParameters | null;
+  gqe?: GQEParameters | null;
+}
+
+export interface GQEParameters {
+  training_mode: "from_scratch" | "pretrained_finetune";
+  epochs: number;
+  circuits_per_epoch: number;
+  sequence_length: number;
+  vocabulary_size: number;
+  pauli_measurement_groups: number;
+  shots_per_group: number;
+  gradient_steps_per_epoch: number;
+  minibatch_size: number;
+  replay_buffer_capacity: number;
+}
+
+export interface GQEExecutionPlan {
+  model_version: 1;
+  epochs: number;
+  circuits_per_epoch: number;
+  pauli_measurement_groups: number;
+  shots_per_group: number;
+  total_generated_circuits: number;
+  total_circuit_evaluations: number;
+  total_shots: number;
+}
+
+export interface GQEAIMemory {
+  weights_bytes: number;
+  gradients_bytes: number;
+  optimizer_and_master_weights_bytes: number;
+  inference_kv_cache_bytes: number;
+  training_activations_and_logits_bytes: number;
+  replay_buffer_bytes: number;
+  operator_pool_bytes: number;
+  stage1_peak_memory_bytes: number;
+  stage3_peak_memory_bytes: number;
+  shared_classical_device: boolean;
+  coexisting_device_peak_memory_bytes: Partial<Record<"CPU" | "GPU", number>>;
+  persistent_device_memory_bytes: Partial<Record<"CPU" | "GPU", number>>;
+  memory_feasibility?: string;
 }
 
 export interface SKQDParameters {
@@ -138,6 +179,18 @@ export interface LogSurvivalTerms {
 
 /** Optional typed fields keep historical runs and workload-specific extra metrics readable. */
 export interface StageMetrics extends Record<string, unknown> {
+  gqe_parameters?: GQEParameters;
+  gqe_model_version?: 1;
+  ai_model_version?: 1;
+  execution_plan?: GQEExecutionPlan;
+  ai_memory?: GQEAIMemory;
+  ai_to_qpu_latency_ratio?: number | null;
+  qpu_evaluation_latency_ms?: number | null;
+  qpu_evaluation_comparison?: { comparison_only: boolean; latency_ms: number | null; coherence_survival_pct: number; survival_scope: "representative_per_shot" };
+  historical_offline_pretraining_reference?: { latency_ms: number | null; included_in_active_latency: false; reference_training_epochs: number; scope?: string };
+  coexisting_device_peak_including_emulation_bytes?: Partial<Record<"CPU" | "GPU", number>>;
+  survival_scope?: "representative_per_shot";
+  uniform_resource_assumption?: boolean;
   skqd_parameters?: SKQDParameters;
   skqd_model_version?: 1;
   family_model_version?: 1;
@@ -154,7 +207,7 @@ export interface StageMetrics extends Record<string, unknown> {
   requested_subspace_dimension?: number;
   classical_to_quantum_latency_ratio?: number | null;
   qpu_family_sampling_latency_ms?: number | null;
-  bottleneck_regime?: "quantum-sampling-bound" | "classical-diagonalization-bound" | "unavailable";
+  bottleneck_regime?: "quantum-sampling-bound" | "classical-diagonalization-bound" | "unavailable" | "qpu_evaluation_bound" | "classical_ai_bound";
   resource_model_version?: 1 | 2;
   circuit_spec?: CircuitSpec;
   qpu_profile?: QPUProfile;

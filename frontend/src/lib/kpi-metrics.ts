@@ -42,7 +42,9 @@ export function pipelineLatencyBuckets(data: HybridTelemetryResponse) {
           overheadMs += milliseconds(m.io_state_prep_ms) + milliseconds(m.io_readout_ms);
         }
       } else {
-        classicalMs += latency;
+        const overhead = data.workload_id === "gqe" ? Math.min(latency, milliseconds(stage.metrics.launch_transfer_overhead_ms)) : 0;
+        classicalMs += latency - overhead;
+        overheadMs += overhead;
       }
     }
   }

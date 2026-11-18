@@ -4,6 +4,7 @@ import { formatDuration } from "@/lib/duration";
 import { mipsRoutingContext } from "@/lib/workloads";
 import { architectureTradeOff } from "@/lib/hardware-profiles";
 import type { HybridTelemetryResponse, SimulationRequest } from "@/types/telemetry";
+import { GQE_SURVIVAL_SCOPE } from "@/lib/gqe";
 
 export interface OffloadVerdict {
   title: string;
@@ -21,6 +22,16 @@ export const SIGNIFICANT_OFFLOAD_SPEEDUP = 2;
 export function offloadVerdict(data: HybridTelemetryResponse, request: SimulationRequest): OffloadVerdict {
   const verdict = baseOffloadVerdict(data, request);
   const kernel = data.stages.stage_2_quantum_kernel;
+  if (request.workload_id === "gqe") {
+    const context = `${GQE_SURVIVAL_SCOPE} The register uses ${request.scale_param} qubits; extra capacity does not shorten token sequences.`;
+    const ratio = data.stages.stage_3_classical_post.metrics.ai_to_qpu_latency_ratio;
+    if (verdict.title === "Coherence Degraded") return { ...verdict, message: `Representative survival is degraded. Compare fewer tokens or different hardware with the same epoch schedule. ${context}` };
+    if (verdict.status !== "blocked" && kernel.node === "QPU" && finite(ratio)) return {
+      title: ratio >= 1 ? "Classical AI Bound" : "QPU Evaluation Bound", status: "warning",
+      message: `Accumulated generation/training time divided by QPU evaluation time is ${formatValue(ratio)}×. ${ratio >= 1 ? "Compare CPU/GPU host placement or fewer gradient steps." : "Compare fewer circuits, measurement groups or shots, noting the change in sampling coverage."} ${context}`,
+    };
+    return { ...verdict, message: `${verdict.message} ${context}` };
+  }
   if (request.workload_id === "skqd") {
     const ratio = data.stages.stage_3_classical_post.metrics.classical_to_quantum_latency_ratio;
     const context = `SKQD uses a fixed ${request.scale_param}-qubit register. QPU status is governed by the shot-weighted family mean; deepest-member survival is a separate diagnostic. Extra capacity does not reduce family depth.`;

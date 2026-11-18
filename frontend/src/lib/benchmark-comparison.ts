@@ -3,6 +3,7 @@ import { DEFAULT_AVAILABLE_QUBITS } from "@/lib/telemetry";
 import { formatDuration, formatDurationDelta, formatRawMilliseconds } from "@/lib/duration";
 import type { SavedSimulationRun } from "@/types/run-history";
 import { modelVersionLabel, resourceModelVersion, sameModelVersion } from "@/lib/model-version";
+import { GQE_FIELDS, GQE_MODE_LABELS, parseGqeParameters } from "@/lib/gqe";
 import { parseSkqdParameters } from "@/lib/skqd";
 
 export const MAX_COMPARISON_RUNS = 3;
@@ -24,6 +25,8 @@ export function benchmarkMetrics(run: SavedSimulationRun) {
   const family = metrics.family_survival ?? metrics.qpu_sampling_comparison?.family_survival;
   return {
     ...pipelineTiming(run.telemetry),
+    gqe: run.request.workload_id === "gqe" ? parseGqeParameters(run.request.scale_param, run.request.gqe) : null,
+    gqeTelemetry: gqeBenchmarkValues(run),
     availableQubits: finite(metrics.available_qubits) ?? run.request.available_qubits ?? DEFAULT_AVAILABLE_QUBITS,
     allocatedQubits: kernel.node === "QPU" ? finite(metrics.qubits_allocated) : null,
     parallelTier: kernel.node === "QPU" ? typeof metrics.parallelization_tier === "string" ? metrics.parallelization_tier : null : "Classical emulation",
@@ -54,6 +57,33 @@ export function benchmarkMetrics(run: SavedSimulationRun) {
     crossoverRatio: finite(post.metrics.classical_to_quantum_latency_ratio),
     crossoverRegime: typeof post.metrics.bottleneck_regime === "string" ? post.metrics.bottleneck_regime : null,
   };
+}
+
+/** Stable columns shared by the comparison matrix and CSV export. */
+export const GQE_BENCHMARK_FIELDS = [
+  ["Generated circuits", "circuits"], ["Basis evaluations", "evaluations"], ["Total physical shots", "shots"],
+  ["Representative logical depth", "layers"], ["QPU epoch launch overhead", "ms"],
+  ["Autoregressive generation", "ms"], ["Replay buffer updates", "ms"], ["Logit-matching gradients", "ms"],
+  ["AdamW optimizer", "ms"], ["Cross-device synchronization", "ms"], ["Historical offline pretraining (excluded)", "ms"],
+  ["Model weights", "bytes"], ["Model gradients", "bytes"], ["AdamW and master weights", "bytes"],
+  ["Inference KV cache", "bytes"], ["Training activations and logits", "bytes"], ["Replay buffer", "bytes"], ["Operator pool", "bytes"],
+  ["CPU coexisting AI peak", "bytes"], ["GPU coexisting AI peak", "bytes"],
+  ["Reused statevector", "bytes"], ["CPU evolution compute", "ms"], ["CPU group reductions", "ms"],
+  ["AI / QPU latency", "×"],
+] as const;
+function gqeBenchmarkValues(run: SavedSimulationRun): (number | null)[] {
+  if (run.request.workload_id !== "gqe") return GQE_BENCHMARK_FIELDS.map(() => null);
+  const first = run.telemetry.stages.stage_1_classical_pre.metrics, kernel = run.telemetry.stages.stage_2_quantum_kernel.metrics;
+  const post = run.telemetry.stages.stage_3_classical_post.metrics, memory = first.ai_memory;
+  const baseline = kernel.classical_cpu_baseline as Record<string, unknown> | undefined;
+  return [kernel.execution_plan?.total_generated_circuits, kernel.execution_plan?.total_circuit_evaluations, kernel.execution_plan?.total_shots,
+    kernel.circuit_spec?.depth, kernel.launch_overhead_ms, first.generation_compute_ms, post.replay_buffer_management_ms,
+    post.training_compute_ms, post.optimizer_compute_ms, post.cross_device_transfer_ms, first.historical_offline_pretraining_reference?.latency_ms,
+    memory?.weights_bytes, memory?.gradients_bytes, memory?.optimizer_and_master_weights_bytes, memory?.inference_kv_cache_bytes,
+    memory?.training_activations_and_logits_bytes, memory?.replay_buffer_bytes, memory?.operator_pool_bytes,
+    memory?.coexisting_device_peak_memory_bytes.CPU, memory?.coexisting_device_peak_memory_bytes.GPU,
+    baseline?.memory_required_bytes, baseline?.state_preparation_compute_ms, baseline?.measurement_groups_compute_ms,
+    post.ai_to_qpu_latency_ratio].map(finite);
 }
 
 /**
@@ -107,6 +137,7 @@ export function benchmarkComparison(runs: SavedSimulationRun[]) {
   const reference = benchmarkMetrics(chosen[0]);
   const showLinks = chosen.some(run => benchmarkMetrics(run).modulesUsed !== null);
   const showCustom = chosen.some(run => run.request.custom_profile != null);
+  const showGqe = chosen.some(run => run.request.workload_id === "gqe");
   const showSkqd = chosen.some(run => run.request.workload_id === "skqd");
   return chosen.map((run, index) => {
     const metrics = benchmarkMetrics(run);
@@ -147,6 +178,12 @@ export function benchmarkComparison(runs: SavedSimulationRun[]) {
     if (showCustom) rows.push(
       categorical("Research profile", run.request.custom_profile?.name ?? "Built-in", chosen[0].request.custom_profile?.name ?? "Built-in"),
       categorical("Cloned baseline", run.request.custom_profile?.base_profile_id ?? "None", chosen[0].request.custom_profile?.base_profile_id ?? "None"),
+    );
+    if (showGqe) rows.push(
+      categorical("GQE training mode", metrics.gqe ? GQE_MODE_LABELS[metrics.gqe.training_mode] : "Unavailable", reference.gqe ? GQE_MODE_LABELS[reference.gqe.training_mode] : "Unavailable"),
+      ...GQE_FIELDS.map(field => numeric(field.label, metrics.gqe?.[field.key] ?? null, reference.gqe?.[field.key] ?? null, "")),
+      ...GQE_BENCHMARK_FIELDS.map(([label, unit], field) => numeric(label, metrics.gqeTelemetry[field], reference.gqeTelemetry[field], unit)),
+      categorical("GQE bottleneck regime", metrics.gqe ? metrics.crossoverRegime ?? "Unavailable" : "Unavailable", reference.gqe ? reference.crossoverRegime ?? "Unavailable" : "Unavailable"),
     );
     if (showSkqd) rows.push(
       numeric("Krylov dimension d", metrics.skqd?.krylov_dimension ?? null, reference.skqd?.krylov_dimension ?? null, "states"),

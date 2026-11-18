@@ -3,6 +3,7 @@ import { isHardwareProfile } from "@/lib/hardware-profiles";
 import { parseInterconnect } from "@/lib/interconnect";
 import { customProfileForRequest } from "@/lib/custom-profile";
 import { parseSkqdParameters } from "@/lib/skqd";
+import { parseGqeParameters } from "@/lib/gqe";
 
 export const WORKLOADS = {
   shors_crypto: { label: "Shor's Algorithm", scales: [15, 21, 35, 512, 2048],
@@ -11,6 +12,8 @@ export const WORKLOADS = {
     stages: ["LSH Bucket Pruning", "Grover’s search / amplitude amplification", "Exact FP16 Dot-Product Reranking"] },
   skqd: { label: "SKQD · Sample-Based Krylov Quantum Diagonalization", scales: [12, 22, 85],
     stages: ["Hamiltonian & Reference Prep", "Krylov Quantum Sampling Family", "Subspace Projection & Diagonalization"] },
+  gqe: { label: "GQE / GPT-QE · Generative Quantum Eigensolver", scales: [4, 10, 12],
+    stages: ["Operator Pool & Autoregressive Generation", "Iterative QPU Energy Evaluation", "Replay Buffer & Transformer Training"] },
 } satisfies Record<WorkloadId, { label: string; scales: number[]; stages: string[] }>;
 
 const MIPS_LABELS: Record<number, string> = {
@@ -18,6 +21,11 @@ const MIPS_LABELS: Record<number, string> = {
 };
 
 export const SCALE_DESCRIPTIONS: Record<WorkloadId, Record<number, string>> = {
+  gqe: {
+    4: "4-qubit H2 STO-3G minimal basis. Defaults: 10 tokens, 80 operators, 5 measurement groups, 200 online epochs or 40 fine-tuning epochs.",
+    10: "10-qubit LiH Active Space. Defaults: 40 tokens, 416 operators, 25 measurement groups, 1,000 online epochs or 200 fine-tuning epochs.",
+    12: "12-qubit BeH2 / N2 Active Space. Defaults: 80 tokens, 592 operators, 45 measurement groups, 1,500 online epochs or 300 fine-tuning epochs. Analytical active-space benchmark.",
+  },
   skqd: {
     12: "12-qubit TFIM / Heisenberg validation. Fixed 12-qubit register; the retained classical basis is capped at 4,096 states.",
     22: "22-qubit Heisenberg XXZ benchmark (default). Configure Krylov powers, Trotter steps, sampling shots, and the retained classical subspace independently.",
@@ -51,6 +59,7 @@ export function validWorkloadScale(workload: unknown, scale: unknown): workload 
  * Label M-candidate searches separately from small N moduli and RSA bit-width selectors.
  */
 export function workloadScaleLabel(scale: number, workload: WorkloadId = "shors_crypto") {
+  if (workload === "gqe") return `${scale}-qubit ${scale === 4 ? "H2 STO-3G" : scale === 10 ? "LiH Active Space" : "BeH2 / N2 Active Space"}`;
   if (workload === "skqd") return `${scale}-qubit ${scale === 12 ? "TFIM / Heisenberg" : scale === 22 ? "Heisenberg XXZ" : "Impurity Model"}`;
   return workload === "quantum_mips" ? MIPS_LABELS[scale] ?? `M = ${scale.toLocaleString("en-US")}`
     : scale < 512 ? `N = ${scale}` : `RSA-${scale}`;
@@ -63,7 +72,7 @@ export function workloadScaleLabel(scale: number, workload: WorkloadId = "shors_
  * @returns Minimum, Windowed, and ceiling register widths, excluding physical QEC overhead.
  */
 export function workloadThresholds(scale: number, workload: WorkloadId = "shors_crypto") {
-  if (workload === "skqd") return { minimum: scale, windowed: scale, ceiling: scale };
+  if (workload === "skqd" || workload === "gqe") return { minimum: scale, windowed: scale, ceiling: scale };
   if (workload === "quantum_mips") {
     // Index bits address M candidates; ancillary workspaces add fixed and replicated register widths.
     const k = Math.ceil(Math.log2(scale));
@@ -114,19 +123,22 @@ export function parseSimulationRequest(value: unknown): SimulationRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid simulation configuration.");
   const input = value as SimulationRequest;
   const workload = input.workload_id === undefined ? "shors_crypto" : input.workload_id;
-  const scale = input.scale_param === undefined ? (workload === "quantum_mips" ? 64 : workload === "skqd" ? 22 : 15) : input.scale_param;
+  const scale = input.scale_param === undefined ? (workload === "quantum_mips" ? 64 : workload === "skqd" ? 22 : workload === "gqe" ? 4 : 15) : input.scale_param;
   if (!validWorkloadScale(workload, scale)) throw new Error("Invalid workload or target scale.");
   if (!isHardwareProfile(input.hardware_profile)) throw new Error("Invalid hardware profile.");
   const custom_profile = customProfileForRequest(input.hardware_profile, input.custom_profile);
   const interconnect = parseInterconnect(input.interconnect, input.hardware_profile, custom_profile);
   const skqd = workload === "skqd" ? parseSkqdParameters(input.skqd) : undefined;
   if (workload !== "skqd" && input.skqd != null) throw new Error("SKQD parameters require the SKQD workload.");
+  const gqe = workload === "gqe" ? parseGqeParameters(scale, input.gqe) : undefined;
+  if (workload !== "gqe" && input.gqe != null) throw new Error("GQE parameters require the GQE workload.");
   if (input.available_qubits !== undefined && (!Number.isSafeInteger(input.available_qubits) || input.available_qubits < 1 || input.available_qubits > 2_147_483_647)) throw new Error("Invalid available qubits.");
   if (input.routing != null && (typeof input.routing !== "object" || Array.isArray(input.routing) ||
     Object.keys(input.routing).some(key => !["stage_1_node", "stage_2_node", "stage_3_node"].includes(key)) ||
     Object.values(input.routing).some(node => !["CPU", "GPU", "QPU"].includes(node)))) throw new Error("Invalid stage routing.");
   return { workload_id: workload, scale_param: scale, hardware_profile: input.hardware_profile,
     ...(skqd ? { skqd } : {}),
+    ...(gqe ? { gqe } : {}),
     ...(custom_profile === undefined ? {} : { custom_profile }),
     ...(interconnect === undefined ? {} : { interconnect }),
     ...(input.available_qubits === undefined ? {} : { available_qubits: input.available_qubits }),

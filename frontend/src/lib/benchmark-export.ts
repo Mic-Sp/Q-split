@@ -1,5 +1,6 @@
 import { ADVISOR_HEADINGS } from "@/types/advisor";
-import { benchmarkMetrics } from "@/lib/benchmark-comparison";
+import { GQE_FIELDS } from "@/lib/gqe";
+import { GQE_BENCHMARK_FIELDS, benchmarkMetrics } from "@/lib/benchmark-comparison";
 import { modelVersionLabel, resourceModelVersion } from "@/lib/model-version";
 import { WORKLOADS } from "@/lib/workloads";
 import type { SavedSimulationRun } from "@/types/run-history";
@@ -14,6 +15,8 @@ export const BENCHMARK_CSV_HEADERS = [
   "Krylov Family Size", "Deepest Native Depth", "QPU Family Mean Survival %", "Deepest QPU Member Survival %",
   "Expected Surviving QPU Samples", "Stage 3 Subspace Peak Memory Bytes", "Stage 3 Runtime ms", "Configuration Recovery ms",
   "Sparse Projection ms", "Sparse Eigensolver ms", "Classical To QPU Latency Ratio", "SKQD Bottleneck Regime",
+  "GQE Training Mode", ...GQE_FIELDS.map(field => `GQE ${field.label}`),
+  ...GQE_BENCHMARK_FIELDS.map(([label, unit]) => `GQE ${label} ${unit}`), "GQE Bottleneck Regime", "GQE Survival Scope",
 ];
 
 /**
@@ -51,7 +54,9 @@ export function benchmarkCsv(runs: SavedSimulationRun[]) {
       metrics.skqd?.krylov_dimension ?? null, metrics.skqd?.trotter_steps ?? null, metrics.skqd?.shots_per_state ?? null,
       metrics.skqd?.retained_subspace_dimension ?? null, metrics.retainedSubspace, metrics.familySize, metrics.deepestDepth,
       metrics.familyMean, metrics.deepestSurvival, metrics.expectedSamples, metrics.subspaceMemoryBytes, metrics.postprocessingMs,
-      metrics.recoveryMs, metrics.projectionMs, metrics.eigensolverMs, metrics.crossoverRatio, metrics.crossoverRegime];
+      metrics.recoveryMs, metrics.projectionMs, metrics.eigensolverMs, metrics.crossoverRatio, metrics.skqd ? metrics.crossoverRegime : null,
+      metrics.gqe?.training_mode ?? null, ...GQE_FIELDS.map(field => metrics.gqe?.[field.key] ?? null),
+      ...metrics.gqeTelemetry, metrics.gqe ? metrics.crossoverRegime : null, metrics.gqe ? "representative_per_shot" : null];
   });
   return [BENCHMARK_CSV_HEADERS, ...rows].map(row => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
 }

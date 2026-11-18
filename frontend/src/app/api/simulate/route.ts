@@ -3,6 +3,7 @@ import { parseSimulationRequest } from "@/lib/workloads";
 import { parseTelemetry } from "@/lib/telemetry";
 import { validateCustomTelemetryProfile } from "@/lib/custom-profile";
 import { skqdKey } from "@/lib/skqd";
+import { assertGqeCapture } from "@/lib/gqe";
 
 /**
  * Validate cockpit controls and proxy one uncached simulation to FastAPI.
@@ -32,6 +33,7 @@ export async function POST(request: Request) {
       if (stage.node === "QPU" && stage.metrics.routing_supported !== false) validateCustomTelemetryProfile(stage.metrics.qpu_profile, input.custom_profile);
     }
     if (telemetry.workload_id !== input.workload_id) throw new Error("Workload mismatch.");
+    assertGqeCapture(telemetry.stages.stage_2_quantum_kernel.metrics, input);
     if (input.workload_id === "skqd" && (!telemetry.stages.stage_2_quantum_kernel.metrics.skqd_parameters || skqdKey(telemetry.stages.stage_2_quantum_kernel.metrics.skqd_parameters) !== skqdKey(input.skqd))) throw new Error("SKQD parameter mismatch.");
     return Response.json(telemetry, { headers });
   } catch {

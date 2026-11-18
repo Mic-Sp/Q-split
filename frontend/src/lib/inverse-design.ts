@@ -1,3 +1,4 @@
+import { GQE_SURVIVAL_SCOPE } from "@/lib/gqe";
 import type { CircuitSpec, CustomQPUProfileSpec, InterconnectConfig, LogSurvivalTerms, SimulationRequest } from "@/types/telemetry";
 import type { CompletedRun } from "@/types/run-history";
 import { parseCustomProfile, validateCustomTelemetryProfile } from "@/lib/custom-profile";
@@ -195,7 +196,7 @@ export function inverseDesignTargets(run: CompletedRun) {
     }
     if (m.coherence_log_survival !== undefined && !close(m.coherence_log_survival === null ? -Infinity : m.coherence_log_survival, forward.point_log)) throw new Error("Recorded point survival is inconsistent.");
     if (typeof m.coherence_survival_pct !== "number" || !close(m.coherence_survival_pct, forward.survival * 100)) throw new Error("Recorded survival percentage is inconsistent.");
-    return { version: 1 as const, status: "available" as const, survival_basis: "Per-shot T1 point estimate; T2 is an alternative worst sensitivity bound, not statistical confidence.",
+    return { version: 1 as const, status: "available" as const, survival_basis: (run.request.workload_id === "gqe" ? GQE_SURVIVAL_SCOPE + " " : "") + "Per-shot T1 point estimate; T2 is an alternative worst sensitivity bound, not statistical confidence.",
       source: { available_qubits: capacity, n_1q: spec.n_1q, N2: forward.N2, n_meas: spec.n_meas, n_qubits: spec.n_qubits, circuit_us: forward.circuit_us,
         exposure_us: forward.exposure_us, transfers_per_shot: forward.transfers_per_shot, current_survival: forward.survival,
         current_log_survival: wireLog(forward.point_log), log_survival_terms: Object.fromEntries(Object.entries(forward.terms).map(([key, value]) => [key, wireLog(value)])) as unknown as LogSurvivalTerms },

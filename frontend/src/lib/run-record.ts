@@ -9,6 +9,7 @@ import { parseInterconnect } from "@/lib/interconnect";
 import { customProfileForRequest, validateCustomTelemetryProfile } from "@/lib/custom-profile";
 import { versionedTelemetry } from "@/lib/model-version";
 import { parseSkqdParameters, skqdKey } from "@/lib/skqd";
+import { parseGqeParameters, assertGqeCapture } from "@/lib/gqe";
 
 function invalid(message: string): never {
   throw new Error(message);
@@ -38,6 +39,8 @@ export function createRunRecord(value: unknown): Prisma.SimulationRunCreateInput
   const request = run.request;
   const skqd = request?.workload_id === "skqd" ? parseSkqdParameters(request.skqd) : undefined;
   if (request?.workload_id !== "skqd" && request?.skqd != null) invalid("SKQD parameters require the SKQD workload.");
+  const gqe = request?.workload_id === "gqe" ? parseGqeParameters(request.scale_param, request.gqe) : undefined;
+  if (request?.workload_id !== "gqe" && request?.gqe != null) invalid("GQE parameters require the GQE workload.");
   if (!request || !validWorkloadScale(request.workload_id, request.scale_param) ||
       !isHardwareProfile(request.hardware_profile) ||
       !Number.isSafeInteger(request.scale_param) || request.scale_param < 1 || request.scale_param > 2_147_483_647) invalid("Invalid simulation configuration.");
@@ -51,6 +54,7 @@ export function createRunRecord(value: unknown): Prisma.SimulationRunCreateInput
   const interconnect = parseInterconnect(request.interconnect, request.hardware_profile, custom_profile);
   const telemetry = versionedTelemetry(parseTelemetry(run.telemetry));
   if (telemetry.workload_id !== request.workload_id) invalid("Workload metadata does not match telemetry.");
+  assertGqeCapture(telemetry.stages.stage_2_quantum_kernel.metrics, request);
   if (skqd && (!telemetry.stages.stage_2_quantum_kernel.metrics.skqd_parameters || skqdKey(telemetry.stages.stage_2_quantum_kernel.metrics.skqd_parameters) !== skqdKey(skqd))) invalid("SKQD parameters do not match telemetry.");
   for (const { key, routingKey } of PIPELINE) {
     if (custom_profile && telemetry.stages[key].node === "QPU" && telemetry.stages[key].metrics.routing_supported !== false) validateCustomTelemetryProfile(telemetry.stages[key].metrics.qpu_profile, custom_profile);
@@ -83,6 +87,7 @@ export function createRunRecord(value: unknown): Prisma.SimulationRunCreateInput
     coherenceSurvivalPct: coherence as number | null,
     requestPayload: { workload_id: request.workload_id, scale_param: request.scale_param, hardware_profile: request.hardware_profile, routing,
       ...(skqd ? { skqd } : {}),
+      ...(gqe ? { gqe } : {}),
       ...(custom_profile === undefined ? {} : { custom_profile }),
       ...(interconnect === undefined ? {} : { interconnect }),
       ...(request.available_qubits === undefined ? {} : { available_qubits: request.available_qubits }),

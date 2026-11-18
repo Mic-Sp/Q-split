@@ -16,6 +16,10 @@ export function ParallelizationTiers({ scale, availableQubits, onSelect, compact
   const n = workload === "shors_crypto" && (scale === 512 || scale === 2048) ? scale : Math.ceil(Math.log2(scale));
   const thresholds = qubitThresholds(scale, workload);
   const activeTier = activeParallelizationTier(scale, availableQubits, workload);
+  if (workload === "gqe") return <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-600 dark:text-slate-400">
+    <button type="button" aria-pressed={availableQubits === scale} onClick={() => onSelect(scale)} className="min-h-8 rounded-md border border-emerald-500/30 bg-emerald-500/5 px-2 font-mono text-emerald-800 dark:text-emerald-200">Fixed register · {scale} qubits</button>
+    <span>Extra qubits stay idle; token length determines representative depth.</span>
+  </div>;
   if (workload === "skqd") return <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-600 dark:text-slate-400">
     <button type="button" onClick={() => onSelect(scale)} aria-pressed={availableQubits === scale} className="min-h-8 rounded-md border border-violet-500/30 bg-violet-500/5 px-2 font-mono text-violet-800 dark:text-violet-200">Fixed register · {scale} qubits</button>
     <span>Extra capacity stays idle; d and m determine family depth.</span>

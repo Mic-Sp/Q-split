@@ -2,6 +2,14 @@ import type { StageMetrics } from "@/types/telemetry";
 import { SkqdFamilyDiagnostics } from "@/components/skqd-diagnostics";
 
 const SECTIONS = [
+  { key: "gqe_parameters", label: "Captured GQE parameters" },
+  { key: "execution_plan", label: "Epoch execution plan" },
+  { key: "ai_memory", label: "Coexisting AI memory" },
+  { key: "ai_accelerator_profile", label: "AI accelerator assumptions" },
+  { key: "ai_model_provenance", label: "Transformer model provenance" },
+  { key: "historical_offline_pretraining_reference", label: "Historical pretraining reference (excluded)" },
+  { key: "selected_classical_baselines", label: "Statevector reuse comparison" },
+  { key: "qpu_evaluation_comparison", label: "QPU epoch evaluation comparison" },
   { key: "circuit_spec", label: "Circuit resources" },
   { key: "qpu_profile", label: "QPU profile" },
   { key: "log_survival_terms", label: "Survival diagnostics" },

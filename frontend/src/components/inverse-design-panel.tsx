@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import type { CompletedRun } from "@/types/run-history";
 import type { SimulationRequest } from "@/types/telemetry";
 import { applyInverseDesignRecipe, inverseDesignTargets } from "@/lib/inverse-design";
+import { GQE_SURVIVAL_SCOPE } from "@/lib/gqe";
 
 const fmt = (value: number) => value === 0 ? "0" : value.toExponential(6);
 const button = "rounded-lg border border-cyan-700/30 px-3 py-2 text-xs font-semibold text-cyan-800 dark:text-cyan-200 disabled:opacity-50";
@@ -19,10 +20,11 @@ export function InverseDesignPanel({ run, onApply, disabled }: { run: CompletedR
       setMessage(`Applied ${target * 100}% ${path === "balanced" ? "balanced recipe" : "surface-code configuration"} to the captured workload and capacity. Run simulation to verify.`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "Recipe unavailable."); }
   };
-  if (result.status !== "available") return <div aria-label="Inverse hardware design" className="rounded-lg border border-slate-300 p-3 text-xs dark:border-slate-700"><strong>Inverse hardware design</strong><p className="mt-2">{result.reason}</p></div>;
+  if (result.status !== "available") return <div aria-label="Inverse hardware design" className="rounded-lg border border-slate-300 p-3 text-xs dark:border-slate-700"><strong>Inverse hardware design</strong>{run.request.workload_id === "gqe" && <p className="mt-2">{GQE_SURVIVAL_SCOPE}</p>}<p className="mt-2">{result.reason}</p></div>;
   const goal = result.targets.find(item => item.target_survival === target)!;
   const recipe = goal.balanced, surface = goal.surface_code, bottleneck = goal.single_bottleneck;
   return <div aria-label="Inverse hardware design" className="min-w-0 space-y-3 rounded-lg border border-cyan-700/25 bg-cyan-700/5 p-3 text-xs leading-5 [overflow-wrap:anywhere] dark:text-slate-200">
+    {run.request.workload_id === "gqe" && <p className="font-medium text-emerald-800 dark:text-emerald-200">{GQE_SURVIVAL_SCOPE}</p>}
     <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">Inverse hardware design · verified locally</h3>
       <label>Survival target <select aria-label="Inverse design survival target" value={target} onChange={event => { setTarget(Number(event.target.value)); setMessage(null); }} className="rounded border border-slate-400 bg-white p-1 dark:bg-slate-900"><option value={0.5}>50% viable target</option><option value={0.8}>80% stronger target</option></select></label>
     </div>

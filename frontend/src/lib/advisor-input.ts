@@ -12,6 +12,7 @@ import { pipelineTiming } from "@/lib/kpi-metrics";
 import { resourceModelVersion, sameModelVersion, versionedTelemetry } from "@/lib/model-version";
 import { inverseDesignTargets, parseInverseCircuit } from "@/lib/inverse-design";
 import { parseSkqdParameters, sanitizeSkqdMetrics, skqdKey } from "@/lib/skqd";
+import { parseGqeParameters, sanitizeGqeMetrics, assertGqeCapture } from "@/lib/gqe";
 
 export const ADVISOR_BODY_LIMIT = 65_536;
 export const ADVISOR_TEXT_LIMIT = 100;
@@ -23,13 +24,13 @@ export const ADVISOR_MAX_CIRCUIT_DEPTH = 100_000_000_000;
 const RESOURCE_MAX_LATENCY_MS = Number.MAX_SAFE_INTEGER;
 const MAX_QUBITS = 2_147_483_647; // Matches FastAPI's positive int32 capacity contract.
 const TIERS = ["Sequential Minimum", "Multi-Oracle Ceiling", "Blocked · statevector memory", "Space-Optimized Sequential", "Windowed Parallel", "Carry-Lookahead Parallel",
-  "Blocked · insufficient capacity", "Blocked · upstream stage unavailable", "Unavailable · unsupported QPU route", "Krylov family (fixed register width)"];
+  "Blocked · insufficient capacity", "Blocked · upstream stage unavailable", "Unavailable · unsupported QPU route", "Krylov family (fixed register width)", "GQE uniform representative (fixed register width)"];
 const DEPTHS = ["O(n^3)", "O(n^2 log n)", "O(n log^2 n)", "Not executed"];
 const BOTTLENECKS = ["NONE", "INSUFFICIENT QPU QUBIT CAPACITY", "UNSUPPORTED QPU ROUTING",
   "CPU STATEVECTOR MEMORY LIMIT", "GPU STATEVECTOR MEMORY LIMIT", "CPU STATEVECTOR EMULATION OVERHEAD",
   "GPU STATEVECTOR EMULATION OVERHEAD", "GPU LAUNCH/TRANSFER OVERHEAD", "NISQ TWO-QUBIT GATE NOISE",
   "CATASTROPHIC QPU DECOHERENCE", "QPU COHERENCE BUDGET DEGRADED", "CLASSICAL SIMULATION RAM WALL",
-  "CLASSICAL SUBSPACE DIAGONALIZATION", "QUANTUM FAMILY SAMPLING"];
+  "CLASSICAL SUBSPACE DIAGONALIZATION", "QUANTUM FAMILY SAMPLING", "CLASSICAL AI TRAINING AND GENERATION", "QPU ENERGY EVALUATION"];
 
 function invalid(): never { throw new Error("Invalid advisor request."); }
 function object(value: unknown): Record<string, unknown> {
@@ -91,7 +92,7 @@ function number(value: unknown, minimum: number, maximum: number, integer = fals
  * A blocked MIPS depth multiplier may be null
  * and is omitted, not coerced to a misleading numeric factor.
  */
-function metrics(value: unknown, inheritedVersion?: 1 | 2, skqd = false): StageTelemetry["metrics"] {
+function metrics(value: unknown, inheritedVersion?: 1 | 2, skqd = false, gqeScale?: number, node?: StageTelemetry["node"]): StageTelemetry["metrics"] {
   const source = object(value);
   const result: StageTelemetry["metrics"] = {};
   if (Object.hasOwn(source, "resource_model_version")) result.resource_model_version = number(source.resource_model_version, 1, 2, true) as 1 | 2;
@@ -125,7 +126,7 @@ function metrics(value: unknown, inheritedVersion?: 1 | 2, skqd = false): StageT
     if (Object.hasOwn(source, key) && !(key === "depth_multiplier" && source[key] === null)) {
       const resourceMetric = result.resource_model_version !== undefined &&
         (key === "compute_latency_ms" || key === "circuit_depth" || key === "reference_circuit_depth");
-      const limit = resourceMetric ? Number.MAX_SAFE_INTEGER : max;
+      const limit = gqeScale !== undefined && key.endsWith("_ms") ? Number.MAX_VALUE : resourceMetric ? Number.MAX_SAFE_INTEGER : max;
       result[key] = number(source[key], min, limit, integer);
     }
   }
@@ -166,6 +167,7 @@ function metrics(value: unknown, inheritedVersion?: 1 | 2, skqd = false): StageT
   if (Object.hasOwn(source, "hardware_architecture")) result.hardware_architecture = choice(source.hardware_architecture, HARDWARE_PROFILE_IDS);
   if (Object.hasOwn(source, "connectivity_topology")) result.connectivity_topology = choice(source.connectivity_topology, [...Object.values(HARDWARE_PROFILES).map(profile => profile.topology), "User-defined linked modules"]);
   if (skqd) Object.assign(result, sanitizeSkqdMetrics(source));
+  if (gqeScale !== undefined) Object.assign(result, sanitizeGqeMetrics(source, gqeScale, node));
   return result;
 }
 
@@ -191,7 +193,7 @@ function validateRun(value: unknown): CompletedRun {
       if (Object.hasOwn(source, key)) routing[key] = choice(source[key], ["CPU", "GPU", "QPU"]);
     }
   }
-  const workload = choice(config.workload_id, ["shors_crypto", "quantum_mips", "skqd"]);
+  const workload = choice(config.workload_id, ["shors_crypto", "quantum_mips", "skqd", "gqe"]);
   const scale = number(config.scale_param, 1, 1048576, true);
   if (!validWorkloadScale(workload, scale)) invalid();
   const request: SimulationRequest = {
@@ -203,6 +205,8 @@ function validateRun(value: unknown): CompletedRun {
   };
   if (workload === "skqd") request.skqd = parseSkqdParameters(config.skqd);
   else if (config.skqd != null) invalid();
+  if (workload === "gqe") request.gqe = parseGqeParameters(scale, config.gqe);
+  else if (config.gqe != null) invalid();
   const custom = customProfileForRequest(request.hardware_profile, config.custom_profile);
   if (custom) request.custom_profile = custom;
   const interconnect = parseInterconnect(config.interconnect, request.hardware_profile, custom);
@@ -212,7 +216,7 @@ function validateRun(value: unknown): CompletedRun {
   const version = source.resource_model_version === undefined ? undefined : number(source.resource_model_version, 1, 2, true) as 1 | 2;
   const routingModel = source.routing_model === undefined ? undefined : choice(source.routing_model,
     ["ILLUSTRATIVE_V1", "ILLUSTRATIVE_V1 (not device measurements)", "CALIBRATED_V2", "CALIBRATED_V2 (not device measurements)"]);
-  if (choice(source.workload_id, ["shors_crypto", "quantum_mips", "skqd"]) !== request.workload_id) invalid();
+  if (choice(source.workload_id, ["shors_crypto", "quantum_mips", "skqd", "gqe"]) !== request.workload_id) invalid();
   const stages = object(source.stages);
   if (Object.keys(stages).length !== PIPELINE.length || PIPELINE.some(({ key }) => !Object.hasOwn(stages, key))) invalid();
   const normalized: Record<string, StageTelemetry> = {};
@@ -221,7 +225,8 @@ function validateRun(value: unknown): CompletedRun {
     const node = choice(stage.node, ["CPU", "GPU", "QPU"]);
     if (node !== routing[routingKey]) invalid();
     for (const field of ["name", "output_summary"]) if (stage[field] !== undefined && typeof stage[field] !== "string") invalid();
-    const numeric = metrics(stage.metrics, version, workload === "skqd");
+    const numeric = metrics(stage.metrics, version, workload === "skqd", workload === "gqe" ? scale : undefined, node);
+    if (workload === "gqe" && key === "stage_2_quantum_kernel") assertGqeCapture(numeric, request);
     if (workload === "skqd" && key === "stage_2_quantum_kernel" && numeric.skqd_parameters && skqdKey(numeric.skqd_parameters) !== skqdKey(request.skqd)) invalid();
     if (node === "QPU" && numeric.hardware_architecture !== undefined && numeric.hardware_architecture !== request.hardware_profile) invalid();
     if (node === "QPU") {
@@ -270,7 +275,7 @@ function validateRun(value: unknown): CompletedRun {
     if (node === "QPU" && typeof numeric.qubits_allocated === "number" && typeof numeric.idle_qubits === "number" &&
         numeric.qubits_allocated + numeric.idle_qubits > (available as number)) invalid();
     normalized[key] = { name: WORKLOADS[workload].stages[PIPELINE.findIndex(stage => stage.key === key)] ?? label, node,
-      latency_ms: number(stage.latency_ms, 0, numeric.resource_model_version !== undefined ? RESOURCE_MAX_LATENCY_MS : ADVISOR_MAX_LATENCY_MS),
+      latency_ms: number(stage.latency_ms, 0, workload === "gqe" ? Number.MAX_VALUE : numeric.resource_model_version !== undefined ? RESOURCE_MAX_LATENCY_MS : ADVISOR_MAX_LATENCY_MS),
       status: choice(stage.status, ["OPTIMAL", "WARNING", "CRITICAL_BOTTLENECK"]),
       output_summary: "", metrics: numeric };
   }
@@ -288,7 +293,7 @@ function validateRun(value: unknown): CompletedRun {
     execution_mode: choice(source.execution_mode, ["LIVE_QISKIT_AER", "NISQ_ANALYTICAL_PROFILER"]),
     primary_bottleneck: bottleneck, stages: normalized,
   };
-  const latencyLimit = Object.values(normalized).some(stage => stage.metrics.resource_model_version !== undefined)
+  const latencyLimit = workload === "gqe" ? Number.MAX_VALUE : Object.values(normalized).some(stage => stage.metrics.resource_model_version !== undefined)
     ? RESOURCE_MAX_LATENCY_MS : ADVISOR_MAX_LATENCY_MS;
   if (totalLatency(telemetry) > latencyLimit || pipelineTiming(telemetry).totalMs > latencyLimit) invalid();
   return { id, completedAt, request, telemetry: versionedTelemetry(telemetry) };

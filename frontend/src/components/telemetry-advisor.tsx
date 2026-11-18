@@ -14,6 +14,7 @@ import { sameModelVersion } from "@/lib/model-version";
 import { InverseDesignPanel } from "@/components/inverse-design-panel";
 import type { SimulationRequest } from "@/types/telemetry";
 import { compactSkqdAdvisorRun } from "@/lib/skqd";
+import { compactGqeAdvisorRun } from "@/lib/gqe";
 
 /** Adapt an immutable session snapshot to the persistence/advisor wire shape without reading live controls. */
 const completedRun = (snapshot: Snapshot): CompletedRun => ({
@@ -70,7 +71,7 @@ export function TelemetryAdvisor({ snapshot, previous: previousCandidate, onInsi
       try {
         const response = await sessionFetch("/api/advisor", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ current: compactSkqdAdvisorRun(current), previous: prior ? compactSkqdAdvisorRun(prior) : undefined }),
+          body: JSON.stringify({ current: compactGqeAdvisorRun(compactSkqdAdvisorRun(current)), previous: prior ? compactGqeAdvisorRun(compactSkqdAdvisorRun(prior)) : undefined }),
           signal: AbortSignal.any([active.signal, AbortSignal.timeout(26_000)]),
         });
         if (!response.ok) throw new Error("Advisor request failed");

@@ -9,6 +9,7 @@ import type { AdvisorInsight, AdvisorSections, FallbackReason } from "@/types/ad
 import { parseAdvisorTelemetry, parseAdvisorUsage, zeroUsage } from "@/lib/advisor-telemetry";
 import { sameModelVersion } from "@/lib/model-version";
 import { inverseDesignRecommendation } from "@/lib/inverse-design";
+import { GQE_MODE_LABELS, GQE_SURVIVAL_SCOPE, parseGqeParameters } from "@/lib/gqe";
 import { parseSkqdParameters, formatBytes } from "@/lib/skqd";
 
 /**
@@ -67,6 +68,7 @@ const notices: Record<FallbackReason, string> = {
  */
 export function deterministicInsight(current: CompletedRun, previous: CompletedRun | undefined, reason: FallbackReason): AdvisorInsight {
   previous = previous?.request.workload_id === current.request.workload_id && sameModelVersion(previous.telemetry, current.telemetry) ? previous : undefined;
+  if (current.request.workload_id === "gqe") return gqeInsight(current, previous, reason);
   if (current.request.workload_id === "skqd") return skqdInsight(current, previous, reason);
   const { request, telemetry } = current;
   const stages = PIPELINE.map(({ key }) => telemetry.stages[key]);
@@ -170,4 +172,30 @@ function mipsSpaceTime(current: CompletedRun, thresholds: ReturnType<typeof qubi
   const prefix = `k = ceil(log2 M) = ${Math.ceil(Math.log2(request.scale_param))}. Sequential k+4 / Windowed 2k+8 / Multi-Oracle 4k+16 require ${thresholds.minimum} / ${thresholds.windowed} / ${thresholds.ceiling} qubits; depth factors 1.00× / 0.40× / 0.20×. Tier: ${formatValue(m.parallelization_tier)}; allocated ${formatValue(m.qubits_allocated)}, depth ${formatValue(m.circuit_depth)}. `;
   if (kernel.node !== "QPU") return prefix + `Classical ${kernel.node} emulation keeps 100% deterministic coherence and uses the selected tier's register RAM (16 × 2^q bytes), within 16 GiB CPU / 8 GiB GPU. Physical QPU capacity and topology do not limit this path, but selecting more ancillas increases statevector RAM.`;
   return prefix + `O(√M) Grover iterations rapidly erode NISQ coherence at large vector scales; Multi-Oracle depth reduction or long-coherence hardware can improve survival without guaranteeing viability. Modeled coherence ${formatValue(m.coherence_survival_pct)}%; gate latency ${formatDuration(kernel.latency_ms)}. Capacity above ${thresholds.ceiling} is idle. ${architectureTradeOff(request.hardware_profile, m.resource_model_version)} ${m.aer_executed === true ? "M = 64 Sequential executes a noise-free marked-state Aer reference; measured peak probability and CPU simulator time are separate from hardware projections." : "Analytical marked-candidate projection; no vector loading or adaptive maximum-finding oracle was executed."}`;
+}
+
+function gqeInsight(current: CompletedRun, previous: CompletedRun | undefined, reason: FallbackReason): AdvisorInsight {
+  const { request, telemetry } = current, p = parseGqeParameters(request.scale_param, request.gqe);
+  const stages = PIPELINE.map(({ key }) => telemetry.stages[key]), [first, kernel, post] = stages;
+  const ratio = post.metrics.ai_to_qpu_latency_ratio, survival = kernel.metrics.coherence_survival_pct;
+  let recommendation: string;
+  if (first.node === "QPU" || post.node === "QPU") recommendation = "Move operator pool/generation and replay/training stages to CPU or GPU. These host categories have no QPU implementation; the serial loop is blocked.";
+  else if (kernel.node === "QPU" && (request.available_qubits ?? 0) < request.scale_param) recommendation = `Use at least ${request.scale_param} QPU qubits. This is a fixed register; spare qubits do not shorten token circuits.`;
+  else if (kernel.metrics.execution_feasible === false) recommendation = "Resolve the reported preflight blocker before comparing latency. No serial epochs executed; memory figures remain requirements.";
+  else if (kernel.node === "QPU" && typeof survival === "number" && survival < 70) recommendation = p.sequence_length > 4
+    ? `Reduce token sequence length from ${p.sequence_length} to ${Math.max(4, p.sequence_length - 4)} and compare representative per-shot survival. This changes circuit expressivity; it does not guarantee chemical accuracy.`
+    : "Compare the Ideal Noise-Free profile to isolate noise. More epochs do not repair per-shot survival; spare capacity does not reduce depth.";
+  else if (first.node !== post.node) recommendation = "Compare placing Stage 1 and Stage 3 on the same GPU against the captured split. Include cross-device synchronization and coexisting memory; compare total loop latency with all GQE controls fixed.";
+  else if (typeof ratio === "number" && ratio >= 1) recommendation = first.node === "CPU"
+    ? "Compare GPU generation and training with the same molecule, mode and controls, including launch overhead and coexisting AI memory. No utilization percentage is measured."
+    : `Compare ${Math.max(1, p.gradient_steps_per_epoch - 1)} gradient steps per epoch against ${p.gradient_steps_per_epoch}. A smaller training budget changes optimization; compare runtime without claiming convergence.`;
+  else recommendation = `Compare ${Math.max(100, Math.floor(p.shots_per_group / 2))} shots per group against ${p.shots_per_group}, keeping epochs, generated circuits and groups fixed. Less sampling changes energy-estimation precision; no energy is computed here.`;
+  const inverse = kernel.metrics.execution_feasible !== false ? inverseDesignRecommendation(current) : null;
+  const historical = p.training_mode === "pretrained_finetune" ? "Checkpoint loading is active; historical offline pretraining is excluded from active latency." : "Online from-scratch training includes initialization and active gradient steps; no pretrained checkpoint is assumed.";
+  const change = previous ? ` Previous mode ${parseGqeParameters(previous.request.scale_param, previous.request.gqe).training_mode}; current ${p.training_mode}. Previous total ${formatDuration(pipelineTiming(previous.telemetry).totalMs)}; current ${formatDuration(pipelineTiming(telemetry).totalMs)}. Compare captured molecule, mode and epoch settings before attributing speedup.` : "";
+  return { runId: current.id, previousRunId: previous?.id ?? null, source: "fallback", model: null, usage: zeroUsage(), generatedAt: new Date().toISOString(), fallbackReason: reason, notice: notices[reason], sections: {
+    routingDiagnosis: `GQE / GPT-QE ${request.scale_param} qubits · ${GQE_MODE_LABELS[p.training_mode]}: ${stages.map(stage => stage.node).join(" → ")}. ${telemetry.primary_bottleneck}. AI / QPU evaluation latency: ${typeof ratio === "number" ? ratio.toPrecision(4) + "×" : "unavailable"}. ${historical}${change}`,
+    spaceTimeTradeOff: `Setup → [Generate → Evaluate → Update/Train] × ${p.epochs} epochs; ${p.circuits_per_epoch} circuits/epoch × ${p.pauli_measurement_groups} groups × ${p.shots_per_group} shots. One QPU batch launch per epoch. Fixed ${request.scale_param}-qubit register; ${p.sequence_length} tokens; representative survival ${formatValue(survival)}%. ${GQE_SURVIVAL_SCOPE} Classical emulation reuses one pre-measurement state across groups, with 16 × 2^q bytes per statevector. Coexisting AI peak: ${Object.entries(first.metrics.ai_memory?.coexisting_device_peak_memory_bytes ?? {}).map(([device, bytes]) => `${device} ${formatBytes(bytes)}`).join(", ")}. Analytical cost assumptions; no chemical energy or training convergence is simulated.`,
+    optimizationRecommendation: inverse ? inverse + " " + GQE_SURVIVAL_SCOPE : recommendation,
+  } };
 }
