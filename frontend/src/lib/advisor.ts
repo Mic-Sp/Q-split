@@ -9,6 +9,7 @@ import type { AdvisorInsight, AdvisorSections, FallbackReason } from "@/types/ad
 import { parseAdvisorTelemetry, parseAdvisorUsage, zeroUsage } from "@/lib/advisor-telemetry";
 import { sameModelVersion } from "@/lib/model-version";
 import { inverseDesignRecommendation } from "@/lib/inverse-design";
+import { parseSkqdParameters, formatBytes } from "@/lib/skqd";
 
 /**
  * Read persisted/local diagnostic sections with legacy-compatible length bounds.
@@ -66,6 +67,7 @@ const notices: Record<FallbackReason, string> = {
  */
 export function deterministicInsight(current: CompletedRun, previous: CompletedRun | undefined, reason: FallbackReason): AdvisorInsight {
   previous = previous?.request.workload_id === current.request.workload_id && sameModelVersion(previous.telemetry, current.telemetry) ? previous : undefined;
+  if (current.request.workload_id === "skqd") return skqdInsight(current, previous, reason);
   const { request, telemetry } = current;
   const stages = PIPELINE.map(({ key }) => telemetry.stages[key]);
   const quantum = stages[1];
@@ -102,6 +104,36 @@ export function deterministicInsight(current: CompletedRun, previous: CompletedR
       routingDiagnosis: `${mips ? mipsRoutingContext(request.scale_param) + " " : ""}${telemetry.scale_label}, ${request.hardware_profile}: ${route}. Primary bottleneck: ${telemetry.primary_bottleneck}. ${unsupported ? "Classical host routines cannot execute on QPU. " : ""}${memoryBlocked ? "Statevector memory grows as 16 × 2^q bytes. " : ""}${stages.some((stage) => stage.node === "GPU") ? "GPU timings include illustrative launch/transfer overhead, not measured PCIe throughput. " : ""}${problems || "All stages report optimal status."}${delta}`,
       spaceTimeTradeOff: (request.custom_profile ? `Custom profile: ${request.custom_profile.name}. Baseline: ${customBaselineLabel(request.custom_profile)}. User-defined assumptions. ` : "") +
         (request.custom_profile?.surface_code ? `Surface code d=${request.custom_profile.surface_code.code_distance_d}, cycle ${request.custom_profile.surface_code.syndrome_cycle_ns} ns, physical error ${request.custom_profile.surface_code.physical_2q_error}, threshold ${request.custom_profile.surface_code.threshold_error}, ${request.custom_profile.surface_code.physical_qubits_per_logical} physical qubits per logical patch. Operation errors are reference-calibrated model proxies. ` : "") + spaceTime.trim(),
+      optimizationRecommendation: recommendation,
+    } };
+}
+
+function skqdInsight(current: CompletedRun, previous: CompletedRun | undefined, reason: FallbackReason): AdvisorInsight {
+  const { request, telemetry } = current, params = parseSkqdParameters(request.skqd);
+  const stages = PIPELINE.map(({ key }) => telemetry.stages[key]), kernel = stages[1], post = stages[2];
+  const unsupported = stages.some((stage, index) => index !== 1 && stage.node === "QPU");
+  const capacity = request.available_qubits ?? kernel.metrics.available_qubits;
+  const ratio = post.metrics.classical_to_quantum_latency_ratio;
+  const survival = kernel.metrics.coherence_survival_pct;
+  let recommendation: string;
+  if (unsupported) recommendation = "Move Hamiltonian preparation and subspace diagonalization to CPU or GPU; keep the sampling family on QPU.";
+  else if (kernel.node === "QPU" && typeof capacity === "number" && capacity < request.scale_param) recommendation = `Increase available capacity to ${request.scale_param} qubits. SKQD uses this fixed register width; extra capacity does not shorten Krylov circuits.`;
+  else if (kernel.metrics.execution_feasible === false) recommendation = `Route Stage 2 to QPU with at least ${request.scale_param} qubits, or choose the 22-qubit preset. Sequential statevector reuse does not remove exponential RAM requirements.`;
+  else if (kernel.node === "QPU" && typeof survival === "number" && survival < 70) recommendation = params.trotter_steps > 1
+    ? `Reduce Trotter steps per power from ${params.trotter_steps} to ${params.trotter_steps - 1}, keep other controls fixed, and compare the family mean and deepest-member survival. This changes the evolution approximation.`
+    : "Compare the Ideal Noise-Free profile with the same family to isolate noise. Extra register capacity does not reduce depth; fewer Krylov powers changes the sampled subspace.";
+  else if (typeof ratio === "number" && ratio >= 1) recommendation = params.retained_subspace_dimension > 100
+    ? `Reduce requested R from ${params.retained_subspace_dimension} to ${Math.max(100, Math.floor(params.retained_subspace_dimension / 2))}; compare effective R, sparse memory and Stage 3 runtime. A smaller basis changes the reconstruction approximation.`
+    : "Compare CPU and GPU routing for Stage 3 at the same effective retained basis size, including the GPU launch cost.";
+  else recommendation = params.shots_per_state > 1000
+    ? `Reduce shots per Krylov state from ${params.shots_per_state} to ${Math.max(1000, Math.floor(params.shots_per_state / 2))}; compare family sampling latency and expected surviving samples. Fewer samples can reduce basis recovery.`
+    : "Compare hardware profiles at the same family settings and fixed register capacity. Extra qubits do not shorten this family.";
+  const route = stages.map(stage => stage.node).join(" → ");
+  const change = previous ? ` Previous total ${formatDuration(pipelineTiming(previous.telemetry).totalMs)}; current ${formatDuration(pipelineTiming(telemetry).totalMs)}. Routing ${PIPELINE.every(({ routingKey }) => (previous.request.routing?.[routingKey] ?? (routingKey === "stage_2_node" ? "QPU" : "CPU")) === (request.routing?.[routingKey] ?? (routingKey === "stage_2_node" ? "QPU" : "CPU"))) ? "unchanged" : "changed"}; compare captured family settings before attributing a speedup.` : "";
+  return { runId: current.id, previousRunId: previous?.id ?? null, source: "fallback", model: null,
+    generatedAt: new Date().toISOString(), fallbackReason: reason, notice: notices[reason], usage: zeroUsage(), sections: {
+      routingDiagnosis: `SKQD ${request.scale_param} qubits: ${route}. ${telemetry.primary_bottleneck}. Stage 3 / QPU family latency: ${typeof ratio === "number" ? ratio.toPrecision(4) + "×" : "unavailable"}.${change}`,
+      spaceTimeTradeOff: `Fixed ${request.scale_param}-qubit register; d=${params.krylov_dimension}, m=${params.trotter_steps}, ${params.shots_per_state} shots/state. Family shot-weighted mean survival: ${formatValue(survival)}%; CPU/GPU emulation uses the deterministic baseline. Effective R=${formatValue(post.metrics.retained_subspace_dimension)}, sparse matrix plus six complex128 solver vectors: ${formatBytes(post.metrics.subspace_peak_memory_bytes)}. Thirty Lanczos/Davidson iterations are an analytical cost assumption; no eigenvalue is computed.`,
       optimizationRecommendation: recommendation,
     } };
 }

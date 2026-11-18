@@ -1,10 +1,17 @@
 import type { StageMetrics } from "@/types/telemetry";
+import { SkqdFamilyDiagnostics } from "@/components/skqd-diagnostics";
 
 const SECTIONS = [
   { key: "circuit_spec", label: "Circuit resources" },
   { key: "qpu_profile", label: "QPU profile" },
   { key: "log_survival_terms", label: "Survival diagnostics" },
   { key: "classical_baselines", label: "Classical baselines" },
+  { key: "skqd_parameters", label: "Captured SKQD parameters" },
+  { key: "family_survival", label: "Family survival summary" },
+  { key: "krylov_members", label: "Krylov family diagnostics" },
+  { key: "qpu_sampling_comparison", label: "QPU sampling comparison" },
+  { key: "solver_provenance", label: "Sparse solver provenance" },
+  { key: "preparation_provenance", label: "Hamiltonian preparation provenance" },
 ] as const;
 
 /** Keep units visible while turning backend field names into readable labels. */
@@ -54,7 +61,7 @@ export function StructuredTelemetryDetails({ metrics }: { metrics: StageMetrics 
   const sections = SECTIONS.flatMap(section => {
     const value: unknown = metrics[section.key];
     // Guard wire data at runtime; TypeScript interfaces do not validate incoming JSON.
-    return value !== null && typeof value === "object" && !Array.isArray(value)
+    return value !== null && typeof value === "object"
       ? [{ ...section, value }]
       : [];
   });
@@ -64,7 +71,7 @@ export function StructuredTelemetryDetails({ metrics }: { metrics: StageMetrics 
     {sections.map(({ key, label, value }) => <details key={key} className="min-w-0 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60">
       <summary className="cursor-pointer rounded-md px-2 py-1.5 text-[10px] font-medium text-slate-600 dark:text-slate-400 focus-visible:outline-2 focus-visible:outline-cyan-600">{label}</summary>
       <div role="region" tabIndex={0} aria-label={`${label} details`} className="mx-2 mb-2 max-h-80 min-w-0 overflow-auto rounded border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-3 focus-visible:outline-2 focus-visible:outline-cyan-600">
-        <TelemetryGrid values={value as Record<string, unknown>} />
+        {key === "krylov_members" ? <SkqdFamilyDiagnostics metrics={metrics} tableOnly /> : <TelemetryValue value={value} />}
       </div>
     </details>)}
   </div>;

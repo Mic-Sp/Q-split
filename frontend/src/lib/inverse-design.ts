@@ -165,6 +165,7 @@ function surfaceBridge(spec: CircuitSpec, profile: CustomQPUProfileSpec, request
  * before allowing a verified recipe. Incoming inverse_design_targets are ignored. */
 export function inverseDesignTargets(run: CompletedRun) {
   const unavailable = (reason: string) => ({ version: 1 as const, status: "unavailable" as const, reason });
+  if (run.request.workload_id === "skqd") return unavailable("Unavailable for multi-circuit Krylov families");
   if (run.request.hardware_profile !== "custom") return unavailable("Inverse design requires a custom profile.");
   try {
     const stage = run.telemetry.stages.stage_2_quantum_kernel, m = stage.metrics;

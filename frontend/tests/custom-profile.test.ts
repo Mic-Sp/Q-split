@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 vi.mock("server-only", () => ({}));
-import { BUILTIN_HARDWARE_PROFILE_IDS, type CustomQPUProfileSpec } from "@/types/telemetry";
+import { BUILTIN_HARDWARE_PROFILE_IDS } from "@/types/telemetry";
 import { cloneBuiltinProfile, customProfileDraft, customProfileFromDraft, parseCustomProfile, readCustomPresets, saveCustomPreset, encodeCustomPresets } from "@/lib/custom-profile";
 import { parseSimulationRequest } from "@/lib/workloads";
 import { advisorDigest, validateAdvisorRequest } from "@/lib/advisor-input";
@@ -147,7 +147,11 @@ print(json.dumps(samples))
 
   it("forwards custom configuration through the simulation proxy", async () => {
     const run = runs[1];
-    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json(run.telemetry)); vi.stubGlobal("fetch", fetcher);
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toContain("/api/simulate");
+      expect(init?.method).toBe("POST");
+      return Response.json(run.telemetry);
+    }); vi.stubGlobal("fetch", fetcher);
     const response = await POST(new Request("http://localhost/api/simulate", { method: "POST", body: JSON.stringify(run.request) }));
     expect(response.status).toBe(200);
     const forwarded = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body));

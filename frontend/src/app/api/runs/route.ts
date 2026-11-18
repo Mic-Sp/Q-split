@@ -27,7 +27,7 @@ export async function GET(request: Request) {
   // The stored Shor ID remains backwards compatible with existing snapshots.
   const workload = requestedWorkload === "shors_factoring" ? "shors_crypto" : requestedWorkload;
   if (workload !== null && !Object.hasOwn(WORKLOADS, workload)) {
-    return Response.json({ message: "Workload must be shors_crypto or quantum_mips." }, { status: 400, headers });
+    return Response.json({ message: "Workload must be shors_crypto, quantum_mips, or skqd." }, { status: 400, headers });
   }
   const where = { sessionId, ...(workload === null ? {} : { workloadId: workload }) };
   try {
