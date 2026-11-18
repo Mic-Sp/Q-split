@@ -3,9 +3,9 @@
 import math
 
 if __package__:
-    from .models import CircuitSpec, SKQDParameters, KrylovCircuitMember, KrylovCircuitFamily, InterconnectConfig
+    from .models import CircuitSpec, SKQDParameters, KrylovCircuitMember, KrylovCircuitFamily, InterconnectConfig, GQEParameters, GQEExecutionPlan
 else:
-    from models import CircuitSpec, SKQDParameters, KrylovCircuitMember, KrylovCircuitFamily, InterconnectConfig
+    from models import CircuitSpec, SKQDParameters, KrylovCircuitMember, KrylovCircuitFamily, InterconnectConfig, GQEParameters, GQEExecutionPlan
 
 
 DEPTH_EXPANSION_FACTOR = 5.45
@@ -203,3 +203,50 @@ def skqd_family(n_qubits: int, parameters: SKQDParameters | None = None, *,
                 n_1q=n_qubits + 2 * n_qubits * steps, n_2q=3 * (n_qubits - 1) * steps,
                 n_meas=n_qubits, stage1_ms=0.0, stage3_ms=0.0, interconnect=interconnect)))
     return KrylovCircuitFamily(members=tuple(members), stage1_ms=stage1_ms, stage3_ms=stage3_ms)
+
+
+GQE_DEFAULT_SCALE = 4
+GQE_SCALES = {
+    4: {"label": "H2 · STO-3G minimal basis (4 qubits)", "sequence_length": 10,
+        "pauli_measurement_groups": 5, "epochs": 200, "finetune_epochs": 40},
+    10: {"label": "LiH · active space (10 qubits)", "sequence_length": 40,
+         "pauli_measurement_groups": 25, "epochs": 1000, "finetune_epochs": 200},
+    12: {"label": "BeH2 / N2 · active space (12 qubits)", "sequence_length": 80,
+         "pauli_measurement_groups": 45, "epochs": 1500, "finetune_epochs": 300},
+}
+
+
+def gqe_parameters(n_qubits: int, value: GQEParameters | dict | None = None) -> GQEParameters:
+    """Resolve preset and training-mode defaults without mutating caller input.
+
+    Explicit fields on parameter instances and partial dictionaries override
+    molecular defaults, including fine-tune epochs. API-resolved instances carry
+    their complete captured configuration and therefore keep every value.
+    """
+    if type(n_qubits) is not int or n_qubits not in GQE_SCALES:
+        raise ValueError("GQE scale_param must be one of 4, 10, 12.")
+    if isinstance(value, GQEParameters):
+        value = GQEParameters.model_validate(value).model_dump(exclude_unset=True)
+    if value is not None and not isinstance(value, dict):
+        raise ValueError("gqe must be a parameter object")
+    supplied = {} if value is None else value
+    preset = GQE_SCALES[n_qubits]
+    defaults = {"sequence_length": preset["sequence_length"], "vocabulary_size": 4 * n_qubits**2 + 16,
+                "pauli_measurement_groups": preset["pauli_measurement_groups"],
+                "epochs": preset["finetune_epochs"] if supplied.get("training_mode") == "pretrained_finetune" else preset["epochs"]}
+    return GQEParameters.model_validate({**defaults, **supplied})
+
+
+def gqe_plan(n_qubits: int, parameters: GQEParameters | dict | None = None, *,
+             interconnect: InterconnectConfig | None = None) -> GQEExecutionPlan:
+    """Uniform logical token model, without Shor/MIPS toy expansion factors.
+
+    Every group has the same charged basis-rotation layer. Gate counts and depth
+    describe one representative shot; epochs/circuits/groups never inflate them.
+    """
+    p = gqe_parameters(n_qubits, parameters)
+    spec = CircuitSpec(n_qubits=n_qubits, depth=2 + 4 * p.sequence_length,
+                       n_2q=4 * p.sequence_length,
+                       n_1q=n_qubits // 2 + n_qubits * p.sequence_length + n_qubits,
+                       n_meas=n_qubits, stage1_ms=0.0, stage3_ms=0.0, interconnect=interconnect)
+    return GQEExecutionPlan(n_qubits=n_qubits, parameters=p, circuit_spec=spec)

@@ -26,23 +26,27 @@ from qiskit_aer import AerSimulator
 
 # Support both `uvicorn backend.main:app` and the container's `uvicorn main:app`.
 if __package__:
-    from .models import CircuitSpec, QPUProfile, StageMetrics, InterconnectConfig, CustomQPUProfileSpec, HardwareProfile, RESOURCE_MODEL_VERSION, ROUTING_MODEL, SKQDParameters
+    from .models import CircuitSpec, QPUProfile, StageMetrics, InterconnectConfig, CustomQPUProfileSpec, HardwareProfile, RESOURCE_MODEL_VERSION, ROUTING_MODEL, SKQDParameters, GQEParameters
     from .skqd import build_skqd_pipeline
+    from .gqe import build_gqe_pipeline
     from .estimation import (estimate_qpu, estimate_classical, STATEVECTOR_PROFILES,
                              CLASSICAL_GPU_COMPUTE_FACTOR, CLASSICAL_GPU_OVERHEAD_MS)
     from .profiles import HARDWARE_PROFILES, execution_profile, profile_metrics, resolve_profile
     from .workloads import (QUANTUM_MIPS_CLASSICAL_PROFILES, shors_spec, mips_spec,
-                           mips_reference_depth, select_shors_base, SKQD_DEFAULT_SCALE, SKQD_SCALES)
+                           mips_reference_depth, select_shors_base, SKQD_DEFAULT_SCALE, SKQD_SCALES,
+                           GQE_DEFAULT_SCALE, GQE_SCALES, gqe_parameters, gqe_plan)
     from .circuits import (NATIVE_BASIS_GATES, AER_SEED, QUANTUM_MIPS_TARGET_INDEX, SHOR_SHOTS, QUANTUM_MIPS_AER_SHOTS,
                            c_amod15, build_shors_15_circuit, build_quantum_mips_grover_circuit, compile_reference_circuit)
 else:
-    from models import CircuitSpec, QPUProfile, StageMetrics, InterconnectConfig, CustomQPUProfileSpec, HardwareProfile, RESOURCE_MODEL_VERSION, ROUTING_MODEL, SKQDParameters
+    from models import CircuitSpec, QPUProfile, StageMetrics, InterconnectConfig, CustomQPUProfileSpec, HardwareProfile, RESOURCE_MODEL_VERSION, ROUTING_MODEL, SKQDParameters, GQEParameters
     from skqd import build_skqd_pipeline
+    from gqe import build_gqe_pipeline
     from estimation import (estimate_qpu, estimate_classical, STATEVECTOR_PROFILES,
                             CLASSICAL_GPU_COMPUTE_FACTOR, CLASSICAL_GPU_OVERHEAD_MS)
     from profiles import HARDWARE_PROFILES, execution_profile, profile_metrics, resolve_profile
     from workloads import (QUANTUM_MIPS_CLASSICAL_PROFILES, shors_spec, mips_spec,
-                          mips_reference_depth, select_shors_base, SKQD_DEFAULT_SCALE, SKQD_SCALES)
+                          mips_reference_depth, select_shors_base, SKQD_DEFAULT_SCALE, SKQD_SCALES,
+                          GQE_DEFAULT_SCALE, GQE_SCALES, gqe_parameters, gqe_plan)
     from circuits import (NATIVE_BASIS_GATES, AER_SEED, QUANTUM_MIPS_TARGET_INDEX, SHOR_SHOTS, QUANTUM_MIPS_AER_SHOTS,
                           c_amod15, build_shors_15_circuit, build_quantum_mips_grover_circuit, compile_reference_circuit)
 
@@ -92,7 +96,7 @@ async def require_engine_secret(secret: Optional[str] = Security(engine_secret_h
 # 1. UNIFIED PYDANTIC CONTRACT
 # ==========================================
 StageNode = Literal["CPU", "GPU", "QPU"]
-WorkloadId = Literal["shors_crypto", "quantum_mips", "skqd"]
+WorkloadId = Literal["shors_crypto", "quantum_mips", "skqd", "gqe"]
 
 SHOR_SCALES = (15, 21, 35, 512, 2048)
 
@@ -167,14 +171,14 @@ class SimulationRequest(BaseModel):
     """Validated workload controls shared by OpenAPI and the dispatcher.
 
     Attributes:
-        workload_id: Canonical Shor, Quantum-MIPS or SKQD identifier.
-        scale_param: Shor modulus/RSA bits, MIPS candidates or SKQD register width.
+        workload_id: Canonical Shor, Quantum-MIPS, SKQD or GQE identifier.
+        scale_param: Shor modulus/RSA bits, MIPS candidates or SKQD/GQE register width.
         hardware_profile: Comparative QPU topology/timing/coherence model.
         routing: Optional stage placements; pipeline builders supply defaults.
         available_qubits: Usable per-stage QPU capacity, excluding QEC overhead.
 
     Strict integer fields reject booleans and fractional capacities. An omitted
-    scale stays 15 for Shor, becomes 64 for Quantum-MIPS and 22 for SKQD."""
+    scale stays 15 for Shor, becomes 64 for Quantum-MIPS, 22 for SKQD and 4 for GQE."""
     workload_id: WorkloadId = "shors_crypto"
     scale_param: int = Field(default=15, strict=True, ge=2, le=2_147_483_647)
     hardware_profile: HardwareProfile = "ibm_heron_nisq"
@@ -183,6 +187,7 @@ class SimulationRequest(BaseModel):
     interconnect: InterconnectConfig | None = None
     custom_profile: CustomQPUProfileSpec | None = None
     skqd: SKQDParameters | None = None
+    gqe: GQEParameters | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -195,6 +200,9 @@ class SimulationRequest(BaseModel):
             return {**value, "scale_param": QUANTUM_MIPS_DEFAULT_SCALE}
         if isinstance(value, dict) and value.get("workload_id") == "skqd" and "scale_param" not in value:
             return {**value, "scale_param": SKQD_DEFAULT_SCALE}
+        if isinstance(value, dict) and value.get("workload_id") == "gqe":
+            scale = value.get("scale_param", GQE_DEFAULT_SCALE)
+            return {**value, "scale_param": scale, "gqe": gqe_parameters(scale, value.get("gqe")).model_dump()}
         return value
 
     @model_validator(mode="after")
@@ -225,6 +233,11 @@ class SimulationRequest(BaseModel):
                 self.skqd = SKQDParameters()
         elif self.skqd is not None:
             raise ValueError("skqd parameters are only valid for the SKQD workload")
+        if self.workload_id == "gqe":
+            if self.scale_param not in GQE_SCALES:
+                raise ValueError("GQE scale_param must be one of 4, 10, 12.")
+        elif self.gqe is not None:
+            raise ValueError("gqe parameters are only valid for the GQE workload")
         return self
 
 class StageTelemetry(BaseModel):
@@ -443,6 +456,20 @@ def qpu_capacity_plan(scale_param: int, available_qubits: int) -> Dict[str, Any]
 
 
 QPU_LAUNCH_OVERHEAD_MS = 0.30  # One batch launch; explicit modeling assumption.
+
+
+def run_gqe_pipeline(scale_param: int = GQE_DEFAULT_SCALE,
+                     hardware_profile: HardwareProfile = "ibm_heron_nisq",
+                     routing: Optional[RoutingConfig] = None, available_qubits: int = 133,
+                     interconnect: InterconnectConfig | None = None,
+                     custom_profile: CustomQPUProfileSpec | None = None,
+                     gqe: GQEParameters | dict | None = None) -> HybridTelemetryResponse:
+    """Resolve a compact serial epoch plan while retaining representative physics."""
+    profile = resolve_profile(hardware_profile, custom_profile)
+    targets = RoutingConfig.model_validate(routing if routing is not None else RoutingConfig())
+    plan = gqe_plan(scale_param, gqe, interconnect=interconnect)
+    return HybridTelemetryResponse.model_validate(build_gqe_pipeline(
+        plan, profile, available_qubits, targets.model_dump(), QPU_LAUNCH_OVERHEAD_MS))
 
 
 def run_skqd_pipeline(scale_param: int = SKQD_DEFAULT_SCALE,
@@ -1107,6 +1134,9 @@ def simulate_workload(req: SimulationRequest):
         elif req.workload_id == "skqd":
             return run_skqd_pipeline(req.scale_param, req.hardware_profile, req.routing, req.available_qubits,
                                      req.interconnect, req.custom_profile, req.skqd)
+        elif req.workload_id == "gqe":
+            return run_gqe_pipeline(req.scale_param, req.hardware_profile, req.routing, req.available_qubits,
+                                    req.interconnect, req.custom_profile, req.gqe)
     except (ValueError, OverflowError) as error:
         if req.hardware_profile == "custom":
             raise HTTPException(status_code=422, detail="Custom parameters exceed the supported numerical range; reduce durations, routing multipliers or shot periods.") from error

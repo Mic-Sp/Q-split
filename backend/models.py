@@ -140,6 +140,67 @@ class KrylovCircuitFamily(BaseModel):
         return self
 
 
+class GQEParameters(BaseModel):
+    """Strict GPT-QE controls; H2 defaults, resolved by the molecular adapter.
+
+    The request adapter fills molecule/mode-specific defaults before validation.
+    These controls model costs, not an executed transformer or chemistry solver.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, allow_inf_nan=False,
+                              revalidate_instances="always")
+    training_mode: Literal["from_scratch", "pretrained_finetune"] = "from_scratch"
+    epochs: int = Field(default=200, ge=1, le=5_000)
+    circuits_per_epoch: int = Field(default=50, ge=1, le=250)
+    sequence_length: int = Field(default=10, ge=4, le=200)
+    vocabulary_size: int = Field(default=80, ge=32, le=2_048)
+    pauli_measurement_groups: int = Field(default=5, ge=1, le=250)
+    shots_per_group: int = Field(default=1024, ge=100, le=100_000)
+    gradient_steps_per_epoch: int = Field(default=5, ge=1, le=50)
+    minibatch_size: int = Field(default=50, ge=8, le=256)
+    replay_buffer_capacity: int = Field(default=1000, ge=100, le=50_000)
+
+    @model_validator(mode="after")
+    def default_finetune_epochs(self):
+        # Preserve the explicitly supplied field set so a later molecular
+        # resolver can still distinguish an omitted epoch count from an override.
+        if self.training_mode == "pretrained_finetune" and "epochs" not in self.model_fields_set:
+            object.__setattr__(self, "epochs", 40)
+        return self
+
+
+class GQEExecutionPlan(BaseModel):
+    """Compact multiplicities around one declared uniform representative shot."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, allow_inf_nan=False,
+                              revalidate_instances="always")
+    model_version: Literal[1] = 1
+    n_qubits: int = Field(ge=1)
+    parameters: GQEParameters
+    circuit_spec: CircuitSpec
+
+    @model_validator(mode="after")
+    def validate_uniform_resources(self):
+        if self.n_qubits not in (4, 10, 12):
+            raise ValueError("GQE scale_param must be one of 4, 10, 12.")
+        q, tokens, spec = self.n_qubits, self.parameters.sequence_length, self.circuit_spec
+        expected = (q, 2 + 4 * tokens, q // 2 + q * tokens + q, 4 * tokens, q)
+        if (spec.n_qubits, spec.depth, spec.n_1q, spec.n_2q, spec.n_meas) != expected:
+            raise ValueError("GQE representative resources must match the declared uniform token/basis model")
+        if spec.stage1_ms or spec.stage3_ms or spec.native_classical_ms is not None:
+            raise ValueError("GQE representative shots must not embed accumulated host/native costs")
+        return self
+
+    def multiplicities(self) -> dict[str, int]:
+        p = self.parameters
+        circuits = p.epochs * p.circuits_per_epoch
+        evaluations = circuits * p.pauli_measurement_groups
+        return {"epochs": p.epochs, "circuits_per_epoch": p.circuits_per_epoch,
+                "pauli_measurement_groups": p.pauli_measurement_groups, "shots_per_group": p.shots_per_group,
+                "total_generated_circuits": circuits, "total_circuit_evaluations": evaluations,
+                "total_shots": evaluations * p.shots_per_group}
+
+
 class QPUPhysicsSpec(BaseModel):
     """Representative physics, not a live device calibration.
 
