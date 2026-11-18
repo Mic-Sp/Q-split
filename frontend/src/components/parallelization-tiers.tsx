@@ -16,6 +16,10 @@ export function ParallelizationTiers({ scale, availableQubits, onSelect, compact
   const n = workload === "shors_crypto" && (scale === 512 || scale === 2048) ? scale : Math.ceil(Math.log2(scale));
   const thresholds = qubitThresholds(scale, workload);
   const activeTier = activeParallelizationTier(scale, availableQubits, workload);
+  if (workload === "skqd") return <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-600 dark:text-slate-400">
+    <button type="button" onClick={() => onSelect(scale)} aria-pressed={availableQubits === scale} className="min-h-8 rounded-md border border-violet-500/30 bg-violet-500/5 px-2 font-mono text-violet-800 dark:text-violet-200">Fixed register · {scale} qubits</button>
+    <span>Extra capacity stays idle; d and m determine family depth.</span>
+  </div>;
   const tiers = workload === "quantum_mips" ? [
     { key: "minimum", label: "Sequential minimum", shortLabel: "Sequential", value: thresholds.minimum, formula: "k + 4 qubits", calculation: `${n} + 4 = ${thresholds.minimum} qubits`, depth: "1.00× sequential Grover depth", tradeoff: "Serial inner-product oracle across O(√M) Grover iterations. At M = 64 this is a live 10-qubit marked-state Aer reference; it does not execute vector loading or adaptive maximum finding." },
     { key: "windowed", label: "Windowed Parallel", shortLabel: "Windowed", value: thresholds.windowed, formula: "2k + 8 qubits", calculation: `2 × ${n} + 8 = ${thresholds.windowed} qubits`, depth: "0.40× sequential Grover depth", tradeoff: "Parallel tree-based inner-product accumulation uses additional ancilla registers to reduce modeled circuit depth. Classical emulation must hold the entire allocated register in RAM." },

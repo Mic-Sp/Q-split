@@ -21,6 +21,15 @@ export const SIGNIFICANT_OFFLOAD_SPEEDUP = 2;
 export function offloadVerdict(data: HybridTelemetryResponse, request: SimulationRequest): OffloadVerdict {
   const verdict = baseOffloadVerdict(data, request);
   const kernel = data.stages.stage_2_quantum_kernel;
+  if (request.workload_id === "skqd") {
+    const ratio = data.stages.stage_3_classical_post.metrics.classical_to_quantum_latency_ratio;
+    const context = `SKQD uses a fixed ${request.scale_param}-qubit register. QPU status is governed by the shot-weighted family mean; deepest-member survival is a separate diagnostic. Extra capacity does not reduce family depth.`;
+    if (verdict.status !== "blocked" && kernel.node === "QPU" && finite(ratio)) return {
+      title: ratio >= 1 ? "Classical Diagonalization Bound" : "QPU Sampling Bound", status: "warning",
+      message: `Stage 3 / QPU family latency is ${formatValue(ratio)}×. ${ratio >= 1 ? "Compare a smaller retained subspace or GPU postprocessing." : "Compare fewer shots per state or different hardware at the same register width."} ${context}`,
+    };
+    return { ...verdict, message: `${verdict.title === "Coherence Degraded" ? "The family mean survival is degraded. Reduce Trotter steps or Krylov powers and compare the changed approximation." : verdict.message} ${context}` };
+  }
   const context = kernel.node === "QPU" ? architectureTradeOff(request.hardware_profile, kernel.metrics.resource_model_version) : "";
   const mips = request.workload_id === "quantum_mips"
     ? `${mipsRoutingContext(request.scale_param)} Grover O(√M) iterations rapidly consume NISQ coherence at large M; Multi-Oracle tiers reduce depth and long-coherence hardware improves survival, with its gate-time trade-off.` : "";
@@ -60,7 +69,7 @@ function baseOffloadVerdict(data: HybridTelemetryResponse, request: SimulationRe
     title: "Execution Blocked", status: "blocked", message: "A blocked prerequisite prevents this pipeline from executing. Resolve the routing or resource limit before comparing offload latency.",
   };
 
-  const survival = kernel.metrics.coherence_survival_pct;
+  const survival = request.workload_id === "skqd" && kernel.metrics.family_survival ? kernel.metrics.family_survival.point * 100 : kernel.metrics.coherence_survival_pct;
   if (kernel.node === "QPU" && finite(survival) && survival < 35) return { title: "Decoherence Wall", status: "blocked",
     message: `At ${formatSurvivalPercent(survival)}% modeled coherence survival, quantum offloading is non-viable on physical NISQ hardware without logical error correction in this model. Reduce circuit depth or scale; the ideal noise-free profile is a comparison model, not physical error correction.` };
 

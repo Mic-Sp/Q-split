@@ -4,6 +4,7 @@ import { HARDWARE_PROFILES, hardwareLabel } from "@/lib/hardware-profiles";
 import type { HardwareProfile, HybridTelemetryResponse, RoutingConfig, SimulationRequest, WorkloadId } from "@/types/telemetry";
 import { workloadThresholds } from "@/lib/workloads";
 import { modelVersionLabel, resourceModelVersion, sameModelVersion } from "@/lib/model-version";
+import { sanitizeSkqdMetrics, skqdKey, SKQD_FIELDS } from "@/lib/skqd";
 
 export const DEFAULT_ROUTING: RoutingConfig = {
   stage_1_node: "CPU", stage_2_node: "QPU", stage_3_node: "CPU",
@@ -94,6 +95,9 @@ export function describeChanges(before: Snapshot, after: Snapshot): MetricDelta[
     add("Assumed transfer duration · ns", before.request.interconnect?.transfer_duration_ns ?? 100, after.request.interconnect?.transfer_duration_ns ?? 100);
   }
   add("Available QPU qubits", before.request.available_qubits, after.request.available_qubits);
+  if (after.request.workload_id === "skqd") {
+    for (const field of SKQD_FIELDS) add(`SKQD · ${field.label}`, before.request.skqd?.[field.key], after.request.skqd?.[field.key]);
+  }
   add("Execution mode", before.data.execution_mode, after.data.execution_mode);
   add("Primary bottleneck", before.data.primary_bottleneck, after.data.primary_bottleneck);
   add("Total latency", pipelineTiming(before.data).totalMs, pipelineTiming(after.data).totalMs, true);
@@ -140,6 +144,9 @@ export function parseTelemetry(value: unknown): HybridTelemetryResponse {
     }
   }
   resourceModelVersion(data);
+  if (data.workload_id === "skqd") {
+    for (const stage of Object.values(data.stages)) sanitizeSkqdMetrics(stage.metrics);
+  }
   return data;
 }
 
@@ -161,6 +168,7 @@ export async function simulate(request: SimulationRequest, signal: AbortSignal):
   }
   const data = parseTelemetry(body);
   if (data.workload_id !== request.workload_id) throw new Error("The engine did not honor the selected workload. Use an updated backend and retry.");
+  if (request.workload_id === "skqd" && (!data.stages.stage_2_quantum_kernel.metrics.skqd_parameters || skqdKey(data.stages.stage_2_quantum_kernel.metrics.skqd_parameters) !== skqdKey(request.skqd))) throw new Error("The engine did not honor the SKQD parameters.");
   // Older deployments may silently ignore unknown request fields. Do not show
   // their fixed-route response as a successful custom routing simulation.
   for (const { key, routingKey } of PIPELINE) {

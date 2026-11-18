@@ -25,6 +25,9 @@ import { WORKLOADS, workloadScaleLabel } from "@/lib/workloads";
 import { CustomHardwarePanel } from "@/components/custom-hardware-panel";
 import { cloneBuiltinProfile, customProfileDraft, customProfileFromDraft, clearEditedSurfaceCode, type CustomProfileDraft } from "@/lib/custom-profile";
 import { HardwareSelector } from "@/components/hardware-selector";
+import { SkqdControls } from "@/components/skqd-controls";
+import { SkqdFamilyDiagnostics, SkqdClassicalDiagnostics } from "@/components/skqd-diagnostics";
+import { skqdDraft, parametersFromSkqdDraft, skqdKey } from "@/lib/skqd";
 import { DEFAULT_INTERCONNECT, interconnectKey } from "@/lib/interconnect";
 import {
   Activity, ArrowDown, ArrowRight, Check, ChevronDown, CircleAlert, CircuitBoard, Cpu,
@@ -164,12 +167,12 @@ function PipelineCard({ index, stage, selectedNode, onNodeChange, pending, workl
           <p className="console-header border-b border-cyan-700/20 dark:border-cyan-400/20 px-2 py-1 text-[9px] font-semibold leading-3 text-cyan-900 dark:text-cyan-100">Qubits Allocated / Available</p>
           <div className="px-2 py-1.5">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1"><p className="font-mono text-sm leading-5 text-cyan-800 dark:text-cyan-200">{formatValue(stage.metrics.qubits_allocated)} / {formatValue(stage.metrics.available_qubits)}</p><p className="max-w-full rounded border border-cyan-700/20 dark:border-cyan-400/20 bg-cyan-700/10 dark:bg-cyan-400/10 px-1.5 py-0.5 text-[10px] font-medium leading-3 text-cyan-700 dark:text-cyan-300 [overflow-wrap:anywhere]">{formatValue(stage.metrics.parallelization_tier)}</p></div>
-            <p className="mt-0.5 text-[9px] leading-4 text-slate-600 dark:text-slate-400">{formatValue(stage.metrics.idle_qubits)} idle · {stage.metrics.depth_complexity !== undefined ? formatValue(stage.metrics.depth_complexity) : typeof stage.metrics.depth_multiplier === "number" ? `${stage.metrics.depth_multiplier.toFixed(2)}× reference depth` : "Not executed"}{stage.metrics.parallel_speedup_ceiling_reached === true ? " · Speedup ceiling reached" : ""}</p>
+            <p className="mt-0.5 text-[9px] leading-4 text-slate-600 dark:text-slate-400">{formatValue(stage.metrics.idle_qubits)} idle · {stage.metrics.depth_complexity !== undefined ? formatValue(stage.metrics.depth_complexity) : typeof stage.metrics.depth_multiplier === "number" ? `${stage.metrics.depth_multiplier.toFixed(2)}× reference depth` : workload === "skqd" ? "Fixed register width" : "Not executed"}{stage.metrics.parallel_speedup_ceiling_reached === true ? " · Speedup ceiling reached" : ""}</p>
           </div>
         </div>
       )}
       <dl className="mb-2 grid grid-cols-2 gap-1 xl:grid-cols-3">
-        {stage ? Object.entries(stage.metrics).filter(([key, value]) => isScalarMetricValue(value) && !CAPACITY_PANEL_METRICS.has(key) && !COHERENCE_RANGE_METRICS.has(key) && key !== "classical_cpu_baseline").map(([key, value]) => (
+        {stage ? Object.entries(stage.metrics).filter(([key, value]) => isScalarMetricValue(value) && !CAPACITY_PANEL_METRICS.has(key) && !COHERENCE_RANGE_METRICS.has(key) && key !== "classical_cpu_baseline" && (workload !== "skqd" || ["coherence_survival_pct", "execution_feasible", "routing_supported", "gate_execution_ms", "measurement_reset_ms", "launch_overhead_ms"].includes(key))).map(([key, value]) => (
           <div key={key} className="min-w-0 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 px-2 py-1">
             <dt className="text-[9px] leading-3 text-slate-600 dark:text-slate-400 [overflow-wrap:anywhere]">{metricLabels[key] ?? key.replace(/_ms$/, "").replaceAll("_", " ")}</dt>
             <dd title={key.endsWith("_ms") ? formatRawMilliseconds(value) : typeof value === "number" ? String(value) : formatValue(value)} className={["mt-0.5 font-mono text-[10px] leading-4 [overflow-wrap:anywhere]", key === "coherence_survival_pct" ? style?.text : "text-slate-800 dark:text-slate-200"].join(" ")}>{key.endsWith("_ms") ? formatDuration(value) : key === "coherence_survival_pct" || key === "coherence_survival" ? formatSurvivalPercent(value) : key === "routing_model" ? String(value) : key === "depth_model" ? String(value).startsWith("Compiled") ? "Aer reference" : "Analytical" : typeof value === "boolean" ? value ? "Yes" : "No" : formatValue(value)}{key === "coherence_survival_pct" && <CoherenceRangeNote stage={stage} />}</dd>
@@ -177,6 +180,7 @@ function PipelineCard({ index, stage, selectedNode, onNodeChange, pending, workl
         )) : <div className={["col-span-full h-12 rounded-lg bg-slate-100 dark:bg-slate-800/40", pending ? "animate-pulse" : ""].join(" ")} aria-hidden="true" />}
       </dl>
       {stage && <StructuredTelemetryDetails metrics={stage.metrics} />}
+      {workload === "skqd" && index === 2 && stage && <SkqdClassicalDiagnostics stage={stage} />}
       <div className="mt-auto rounded-lg bg-slate-50 dark:bg-slate-950/70 p-1.5">
         <p className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">Stage output</p>
         <p className="text-[11px] leading-4 text-slate-600 dark:text-slate-400 [overflow-wrap:anywhere]">
@@ -198,6 +202,7 @@ export default function Home() {
   const persistentHistory = usePersistentRuns(workload);
   const { saveRun } = persistentHistory;
   const [scale, setScale] = useState(15);
+  const [skqdControls, setSkqdControls] = useState(() => skqdDraft());
   const [hardware, setHardware] = useState<HardwareProfile>("ibm_heron_nisq");
   const [customDraft, setCustomDraft] = useState<CustomProfileDraft>(() => customProfileDraft(cloneBuiltinProfile("ibm_heron_nisq")));
   const [interconnect, setInterconnect] = useState<InterconnectConfig>({ ...DEFAULT_INTERCONNECT });
@@ -279,10 +284,13 @@ export default function Home() {
     ? { ...interconnect, placement: interconnect.placement ?? "auto", fidelity_scenario: interconnect.fidelity_scenario ?? "demonstrated" }
     : hardware === "ibm_nighthawk_r3_dual" ? { ...interconnect } : undefined;
   const validCapacity = Number.isSafeInteger(capacity) && capacity >= 1 && capacity <= 2_147_483_647;
-  const validRun = validCapacity && (hardware !== "custom" || customProfile !== undefined) &&
+  let skqdParameters: SimulationRequest["skqd"];
+  try { if (workload === "skqd") skqdParameters = parametersFromSkqdDraft(skqdControls); } catch { /* Draft errors are rendered beside the controls. */ }
+  const validRun = validCapacity && (workload !== "skqd" || !!skqdParameters) && (hardware !== "custom" || customProfile !== undefined) &&
     (hardware !== "ibm_nighthawk_r3_dual" || (Number.isFinite(interconnect.transfer_duration_ns) && interconnect.transfer_duration_ns! > 0 && interconnect.transfer_duration_ns! <= 1_000_000));
   const configurationChanged = snapshot && (
     snapshot.request.workload_id !== workload || snapshot.request.scale_param !== scale ||
+    (workload === "skqd" && (!skqdParameters || skqdKey(snapshot.request.skqd) !== skqdKey(skqdParameters))) ||
     snapshot.request.hardware_profile !== hardware || snapshot.request.available_qubits !== capacity ||
     ((hardware === "ibm_nighthawk_r3_dual" || hardware === "custom") && interconnectKey(snapshot.request.interconnect) !== interconnectKey(capturedInterconnect)) ||
     (hardware === "custom" && JSON.stringify(snapshot.request.custom_profile) !== JSON.stringify(customProfile)) || PIPELINE.some(({ routingKey }) =>
@@ -295,6 +303,7 @@ export default function Home() {
     dispatch({ type: "start" });
     setSubmittedRequest({
       workload_id: workload, scale_param: scale, hardware_profile: hardware, available_qubits: capacity, routing: { ...routing },
+      ...(workload === "skqd" && skqdParameters ? { skqd: { ...skqdParameters } } : {}),
       ...(capturedInterconnect ? { interconnect: capturedInterconnect } : {}),
       ...(customProfile ? { custom_profile: customProfile } : {}),
     });
@@ -322,6 +331,7 @@ export default function Home() {
     // Restore the immutable circuit's controls, including overrides and placement;
     // changing capacity here could change the tier and invalidate the proof.
     setWorkload(request.workload_id); setScale(request.scale_param); setHardware("custom");
+    setSkqdControls(skqdDraft(request.skqd ?? undefined));
     setCustomDraft(customProfileDraft(request.custom_profile!));
     setAvailableQubits(String(request.available_qubits ?? DEFAULT_AVAILABLE_QUBITS));
     setRouting({ ...DEFAULT_ROUTING, ...request.routing });
@@ -335,8 +345,9 @@ export default function Home() {
   };
   /** Switch control defaults without clearing the other workload's completed snapshots or pending saves. */
   const selectWorkload = (next: WorkloadId) => {
-    const target = WORKLOADS[next].scales[0];
+    const target = next === "skqd" ? 22 : WORKLOADS[next].scales[0];
     setWorkload(next); setScale(target);
+    setSkqdControls(skqdDraft());
     setRouting({ ...DEFAULT_ROUTING });
     if (hardware === "ideal_sim") setAvailableQubits(String(hardwareDefaultQubits(hardware, target, next)));
   };
@@ -344,6 +355,7 @@ export default function Home() {
   const restoreRun = (run: SavedSimulationRun) => {
     const restored = restoredConfiguration(run);
     setWorkload(restored.workload_id); setScale(restored.scale_param); setHardware(restored.hardware_profile);
+    setSkqdControls(skqdDraft(restored.skqd ?? undefined));
     setAvailableQubits(String(restored.available_qubits));
     setInterconnect(restored.hardware_profile === "custom" ? { ...restored.interconnect } : { ...DEFAULT_INTERCONNECT, ...restored.interconnect, transfer_duration_ns: restored.interconnect?.transfer_duration_ns ?? 100 });
     setRouting({ ...DEFAULT_ROUTING, ...restored.routing });
@@ -392,6 +404,7 @@ export default function Home() {
                 <select id="workload" value={workload} onChange={(e) => selectWorkload(e.target.value as WorkloadId)} className="min-h-9 w-full appearance-none rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 py-2 pl-3 pr-8 text-xs text-slate-800 dark:text-slate-200">
                   <option value="shors_crypto">{WORKLOADS.shors_crypto.label}</option>
                   <option value="quantum_mips">{WORKLOADS.quantum_mips.label}</option>
+                  <option value="skqd">{WORKLOADS.skqd.label}</option>
                 </select>
                 <ChevronDown className="pointer-events-none absolute right-3 top-2.5 text-slate-600 dark:text-slate-400" size={14} />
               </div>
@@ -409,8 +422,9 @@ export default function Home() {
               {loading ? "Simulating…" : "Run simulation"}
             </button>
           </div>
+          {workload === "skqd" && <SkqdControls draft={skqdControls} onChange={setSkqdControls} qubits={scale} />}
           {hardware === "custom" && <CustomHardwarePanel draft={customDraft} onChange={updateCustomDraft} onApply={applyCustomProfile} onUseCapacity={value => setAvailableQubits(String(value))} interconnect={interconnect} onInterconnectChange={setInterconnect}
-            activeCircuitQubits={quantum?.node === "QPU" && quantum.metrics.execution_feasible !== false && quantum.metrics.qubits_allocated !== 0 ? quantum.metrics.circuit_spec?.n_qubits : undefined} />}
+            activeCircuitQubits={quantum?.node === "QPU" && quantum.metrics.execution_feasible !== false && quantum.metrics.qubits_allocated !== 0 ? (quantum.metrics.circuit_spec?.n_qubits ?? (workload === "skqd" ? scale : undefined)) : undefined} />}
           <div className="mt-2 border-t border-slate-200 dark:border-slate-800 pt-1">
             <div className="mb-1 flex items-center gap-1"><label htmlFor="available-qubits" className="text-[10px] font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">04 / Available QPU Qubits</label>
               <InfoPopover label="About QPU capacity">
@@ -426,7 +440,7 @@ export default function Home() {
                 <button key={value} type="button" aria-pressed={capacity === value} onClick={() => setAvailableQubits(String(value))} className={["min-h-8 rounded-md border px-2 py-1.5 font-mono text-[11px]", capacity === value ? "border-cyan-700/50 dark:border-cyan-400/50 bg-cyan-700/10 dark:bg-cyan-400/10 text-cyan-800 dark:text-cyan-200" : "border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:border-slate-400 dark:hover:border-slate-600"].join(" ")}>{formatValue(value)}</button>
               ))}</div>
               <div className="ml-2 flex min-w-0 flex-wrap items-center gap-2 border-l border-slate-400 dark:border-slate-600/80 pl-4">
-                <span className="text-[9px] font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">Tiers</span>
+                <span className="text-[9px] font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">{workload === "skqd" ? "Register" : "Tiers"}</span>
                 <ParallelizationTiers key={workload} compact workload={workload} scale={scale} availableQubits={capacity} onSelect={(value) => setAvailableQubits(String(value))} />
               </div>
             </div>
@@ -470,7 +484,7 @@ export default function Home() {
             {[
               { label: "Pipeline latency", value: timing?.totalMs, unit: "ms", icon: Activity },
               { label: quantum?.node === "QPU" ? "Qubits allocated / available" : "Logical qubits", value: quantum?.node === "QPU" ? `${formatValue(quantum.metrics.qubits_allocated)} / ${formatValue(quantum.metrics.available_qubits)}` : quantum?.metrics.qubits_required, unit: "qubits", icon: Layers3 },
-              { label: "Circuit depth", value: quantum?.metrics.circuit_depth, unit: "gates", icon: Workflow },
+              { label: workload === "skqd" ? "Deepest native depth" : "Circuit depth", value: workload === "skqd" ? quantum?.metrics.deepest_circuit_depth ?? quantum?.metrics.krylov_members?.at(-1)?.qpu_comparison_metrics?.circuit_depth : quantum?.metrics.circuit_depth, unit: workload === "skqd" ? "layers" : "gates", icon: Workflow },
               { label: "Coherence survival", value: coherence?.survival, unit: "%", icon: Zap },
             ].map(({ label, value, unit, icon: Icon }) => (
               <div key={label} className="min-w-0 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800 console-panel bg-white dark:bg-slate-900/35">
@@ -527,6 +541,7 @@ export default function Home() {
         </section>
 
         <div data-testid="analytics-row" className="mt-4 grid items-start gap-4 lg:grid-cols-2">
+        {workload === "skqd" && quantum && <section aria-label="SKQD Krylov family results" className="mb-2 min-w-0 lg:col-span-2 rounded-xl border border-violet-600/20 bg-white p-3 dark:bg-slate-900/40"><h2 className="mb-3 text-sm font-semibold text-violet-900 dark:text-violet-100">Stage 2 · Krylov quantum sampling family</h2><SkqdFamilyDiagnostics metrics={quantum.metrics} /></section>}
         <TelemetryAdvisor key={snapshot?.id ?? "idle"} snapshot={snapshot} previous={latest?.before}
           onApplyTarget={applyAdvisorTarget}
           onInsight={saveRun} onPersisted={() => { void persistentHistory.refresh(); }} simulationLoading={loading} saving={persistentHistory.savingCount > 0}

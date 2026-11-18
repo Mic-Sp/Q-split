@@ -10,6 +10,10 @@ export const BENCHMARK_CSV_HEADERS = [
   "Coherence Survival %", "Coherence Budget Status", "Primary Bottleneck", "AI Diagnostic Summary", "Bottleneck Status", "Run ID", "Model Version",
   "Modules Used", "State Transfers Per Shot", "Scheduled Transfer Rounds", "l-coupler Execution ms (Included in Pure Compute)",
   "Transfer Fidelity", "Fidelity Scenario", "Module Placement", "Assumed Transfer Duration ns", "Interconnect Model Version", "Custom Profile Name", "Cloned Baseline ID", "Custom Profile Parameters JSON",
+  "Krylov Dimension d", "Trotter Steps Per Power", "Shots Per Krylov State", "Requested Subspace R", "Effective Subspace R",
+  "Krylov Family Size", "Deepest Native Depth", "QPU Family Mean Survival %", "Deepest QPU Member Survival %",
+  "Expected Surviving QPU Samples", "Stage 3 Subspace Peak Memory Bytes", "Stage 3 Runtime ms", "Configuration Recovery ms",
+  "Sparse Projection ms", "Sparse Eigensolver ms", "Classical To QPU Latency Ratio", "SKQD Bottleneck Regime",
 ];
 
 /**
@@ -43,7 +47,11 @@ export function benchmarkCsv(runs: SavedSimulationRun[]) {
       metrics.modulesUsed, metrics.transfersPerShot, metrics.transferRounds, metrics.linkExecutionMs, metrics.transferFidelity,
       metrics.fidelityScenario, metrics.modulePlacement, metrics.transferDurationNs, metrics.interconnectModelVersion,
       run.request.custom_profile?.name ?? null, run.request.custom_profile?.base_profile_id ?? null,
-      run.request.custom_profile ? JSON.stringify(run.request.custom_profile) : null];
+      run.request.custom_profile ? JSON.stringify(run.request.custom_profile) : null,
+      metrics.skqd?.krylov_dimension ?? null, metrics.skqd?.trotter_steps ?? null, metrics.skqd?.shots_per_state ?? null,
+      metrics.skqd?.retained_subspace_dimension ?? null, metrics.retainedSubspace, metrics.familySize, metrics.deepestDepth,
+      metrics.familyMean, metrics.deepestSurvival, metrics.expectedSamples, metrics.subspaceMemoryBytes, metrics.postprocessingMs,
+      metrics.recoveryMs, metrics.projectionMs, metrics.eigensolverMs, metrics.crossoverRatio, metrics.crossoverRegime];
   });
   return [BENCHMARK_CSV_HEADERS, ...rows].map(row => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
 }

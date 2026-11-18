@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 import { BUILTIN_HARDWARE_PROFILE_IDS, type BuiltinHardwareProfile, type CustomQPUProfileSpec, type InterconnectConfig } from "@/types/telemetry";
 import { HARDWARE_PROFILES } from "@/lib/hardware-profiles";
 import { SurfaceCodeCalculator } from "@/components/surface-code-calculator";
@@ -10,6 +10,18 @@ import { cloneBuiltinProfile, customProfileFromDraft, CUSTOM_PRESET_STORAGE_KEY,
 const control = "mt-1 min-h-9 w-full min-w-0 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1.5 text-xs text-slate-800 dark:text-slate-200 disabled:opacity-50";
 const button = "min-h-9 rounded-md border border-cyan-700/30 dark:border-cyan-400/30 px-3 py-1 text-xs text-cyan-800 dark:text-cyan-300 disabled:opacity-40";
 const group = "min-w-0 rounded-lg border border-slate-200 dark:border-slate-700 p-3";
+
+const PRESET_CHANGE_EVENT = "q-split-custom-presets-changed";
+function subscribePresets(notify: () => void) {
+  window.addEventListener("storage", notify);
+  window.addEventListener(PRESET_CHANGE_EVENT, notify);
+  return () => { window.removeEventListener("storage", notify); window.removeEventListener(PRESET_CHANGE_EVENT, notify); };
+}
+function presetSnapshot() {
+  try { return localStorage.getItem(CUSTOM_PRESET_STORAGE_KEY) ?? ""; }
+  catch { return "unavailable"; }
+}
+const serverPresetSnapshot = () => "";
 
 export function CustomHardwarePanel({ draft, onChange, onApply, onUseCapacity, interconnect, onInterconnectChange, activeCircuitQubits }: {
   draft: CustomProfileDraft;
@@ -21,14 +33,15 @@ export function CustomHardwarePanel({ draft, onChange, onApply, onUseCapacity, i
   activeCircuitQubits?: number;
 }) {
   const [baseline, setBaseline] = useState<BuiltinHardwareProfile>("ibm_heron_nisq");
-  const [presets, setPresets] = useState<CustomPreset[]>([]);
+  const storedPresets = useSyncExternalStore(subscribePresets, presetSnapshot, serverPresetSnapshot);
   const [selectedPreset, setSelectedPreset] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const lifetimes = useRef({ t1_us: "200", t2_us: "150" });
-  useEffect(() => {
-    try { setPresets(readCustomPresets(localStorage.getItem(CUSTOM_PRESET_STORAGE_KEY))); }
-    catch { setNotice("Saved presets could not be loaded. You can still edit and run a profile."); }
-  }, []);
+  let presets: CustomPreset[] = [], presetNotice: string | null = null;
+  try {
+    if (storedPresets === "unavailable") throw new Error("Storage unavailable");
+    presets = readCustomPresets(storedPresets || null);
+  } catch { presetNotice = "Saved presets could not be loaded. You can still edit and run a profile."; }
   let profile: CustomQPUProfileSpec | null = null, error: string | null = null;
   try { profile = customProfileFromDraft(draft); } catch (reason) { error = reason instanceof Error ? reason.message : "Check custom parameters."; }
   const logical = draft.t1_us === "" && draft.t2_us === "";
@@ -39,7 +52,7 @@ export function CustomHardwarePanel({ draft, onChange, onApply, onUseCapacity, i
       onChange={event => update(field, event.target.value)} className={control} spellCheck={false} />
   </label>;
   const store = (next: CustomPreset[], message: string) => {
-    try { localStorage.setItem(CUSTOM_PRESET_STORAGE_KEY, encodeCustomPresets(next)); setPresets(next); setNotice(message); }
+    try { localStorage.setItem(CUSTOM_PRESET_STORAGE_KEY, encodeCustomPresets(next)); window.dispatchEvent(new Event(PRESET_CHANGE_EVENT)); setNotice(message); }
     catch { setNotice("Browser storage is unavailable or full. This configuration can still be simulated and saved in run history."); }
   };
   return <details open className="mt-3 min-w-0 rounded-lg border border-cyan-700/25 dark:border-cyan-400/25 bg-slate-50 dark:bg-slate-900/60">
@@ -62,7 +75,7 @@ export function CustomHardwarePanel({ draft, onChange, onApply, onUseCapacity, i
           <button type="button" className={button} disabled={!selectedPreset} onClick={() => { store(presets.filter(item => item.name !== selectedPreset), "Local preset deleted."); setSelectedPreset(""); }}>Delete preset</button>
         </div>
       </div>
-      {notice && <p role="status" className="text-[11px] text-cyan-800 dark:text-cyan-300">{notice}</p>}
+      {(notice ?? presetNotice) && <p role="status" className="text-[11px] text-cyan-800 dark:text-cyan-300">{notice ?? presetNotice}</p>}
       <details open={logical} className="min-w-0 rounded-lg border border-cyan-700/20 dark:border-cyan-400/20">
         <summary className="cursor-pointer px-3 py-2 text-xs font-semibold text-cyan-900 dark:text-cyan-200">Surface-Code Distance (d) Calculator</summary>
         <SurfaceCodeCalculator key={`${draft.base_profile_id}:${JSON.stringify(draft.surface_code ?? null)}`} profile={profile} capacityText={draft.n_qubits_max} activeCircuitQubits={activeCircuitQubits} onApply={onApply} />

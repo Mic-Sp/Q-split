@@ -94,6 +94,52 @@ class CircuitSpec(BaseModel):
     interconnect: InterconnectConfig | None = None
 
 
+class SKQDParameters(BaseModel):
+    """Bounded analytical SKQD controls, independent of the legacy circuit spec."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, allow_inf_nan=False,
+                              revalidate_instances="always")
+    krylov_dimension: int = Field(default=5, ge=2, le=15)
+    trotter_steps: int = Field(default=6, ge=1, le=20)
+    shots_per_state: int = Field(default=100_000, ge=1_000, le=1_000_000)
+    retained_subspace_dimension: int = Field(default=10_000, ge=100, le=250_000)
+
+
+class KrylovCircuitMember(BaseModel):
+    """One logical circuit and its shot allocation; no family costs are embedded."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, allow_inf_nan=False,
+                              revalidate_instances="always")
+    power_index: int = Field(ge=0, le=14)
+    circuit_spec: CircuitSpec
+    shots: int = Field(ge=1_000, le=1_000_000)
+
+    @model_validator(mode="after")
+    def validate_member_costs(self):
+        if (self.circuit_spec.stage1_ms or self.circuit_spec.stage3_ms
+                or self.circuit_spec.native_classical_ms is not None):
+            raise ValueError("Krylov member specs must not contain job-level classical costs")
+        return self
+
+
+class KrylovCircuitFamily(BaseModel):
+    """Ordered, bounded family with host costs charged once per complete job."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, allow_inf_nan=False,
+                              revalidate_instances="always")
+    members: tuple[KrylovCircuitMember, ...] = Field(min_length=2, max_length=15)
+    stage1_ms: float = Field(default=0.0, ge=0)
+    stage3_ms: float = Field(default=0.0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_power_sequence(self):
+        if [member.power_index for member in self.members] != list(range(len(self.members))):
+            raise ValueError("Krylov powers must be ordered and contiguous from zero")
+        if len({member.circuit_spec.n_qubits for member in self.members}) != 1:
+            raise ValueError("Krylov members must share one register width")
+        return self
+
+
 class QPUPhysicsSpec(BaseModel):
     """Representative physics, not a live device calibration.
 

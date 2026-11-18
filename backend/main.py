@@ -26,21 +26,23 @@ from qiskit_aer import AerSimulator
 
 # Support both `uvicorn backend.main:app` and the container's `uvicorn main:app`.
 if __package__:
-    from .models import CircuitSpec, QPUProfile, StageMetrics, InterconnectConfig, CustomQPUProfileSpec, HardwareProfile, RESOURCE_MODEL_VERSION, ROUTING_MODEL
+    from .models import CircuitSpec, QPUProfile, StageMetrics, InterconnectConfig, CustomQPUProfileSpec, HardwareProfile, RESOURCE_MODEL_VERSION, ROUTING_MODEL, SKQDParameters
+    from .skqd import build_skqd_pipeline
     from .estimation import (estimate_qpu, estimate_classical, STATEVECTOR_PROFILES,
                              CLASSICAL_GPU_COMPUTE_FACTOR, CLASSICAL_GPU_OVERHEAD_MS)
     from .profiles import HARDWARE_PROFILES, execution_profile, profile_metrics, resolve_profile
     from .workloads import (QUANTUM_MIPS_CLASSICAL_PROFILES, shors_spec, mips_spec,
-                           mips_reference_depth, select_shors_base)
+                           mips_reference_depth, select_shors_base, SKQD_DEFAULT_SCALE, SKQD_SCALES)
     from .circuits import (NATIVE_BASIS_GATES, AER_SEED, QUANTUM_MIPS_TARGET_INDEX, SHOR_SHOTS, QUANTUM_MIPS_AER_SHOTS,
                            c_amod15, build_shors_15_circuit, build_quantum_mips_grover_circuit, compile_reference_circuit)
 else:
-    from models import CircuitSpec, QPUProfile, StageMetrics, InterconnectConfig, CustomQPUProfileSpec, HardwareProfile, RESOURCE_MODEL_VERSION, ROUTING_MODEL
+    from models import CircuitSpec, QPUProfile, StageMetrics, InterconnectConfig, CustomQPUProfileSpec, HardwareProfile, RESOURCE_MODEL_VERSION, ROUTING_MODEL, SKQDParameters
+    from skqd import build_skqd_pipeline
     from estimation import (estimate_qpu, estimate_classical, STATEVECTOR_PROFILES,
                             CLASSICAL_GPU_COMPUTE_FACTOR, CLASSICAL_GPU_OVERHEAD_MS)
     from profiles import HARDWARE_PROFILES, execution_profile, profile_metrics, resolve_profile
     from workloads import (QUANTUM_MIPS_CLASSICAL_PROFILES, shors_spec, mips_spec,
-                          mips_reference_depth, select_shors_base)
+                          mips_reference_depth, select_shors_base, SKQD_DEFAULT_SCALE, SKQD_SCALES)
     from circuits import (NATIVE_BASIS_GATES, AER_SEED, QUANTUM_MIPS_TARGET_INDEX, SHOR_SHOTS, QUANTUM_MIPS_AER_SHOTS,
                           c_amod15, build_shors_15_circuit, build_quantum_mips_grover_circuit, compile_reference_circuit)
 
@@ -90,7 +92,7 @@ async def require_engine_secret(secret: Optional[str] = Security(engine_secret_h
 # 1. UNIFIED PYDANTIC CONTRACT
 # ==========================================
 StageNode = Literal["CPU", "GPU", "QPU"]
-WorkloadId = Literal["shors_crypto", "quantum_mips"]
+WorkloadId = Literal["shors_crypto", "quantum_mips", "skqd"]
 
 SHOR_SCALES = (15, 21, 35, 512, 2048)
 
@@ -165,14 +167,14 @@ class SimulationRequest(BaseModel):
     """Validated workload controls shared by OpenAPI and the dispatcher.
 
     Attributes:
-        workload_id: Canonical Shor or Quantum-MIPS identifier.
-        scale_param: Small Shor modulus, RSA bit-width, or MIPS candidate count.
+        workload_id: Canonical Shor, Quantum-MIPS or SKQD identifier.
+        scale_param: Shor modulus/RSA bits, MIPS candidates or SKQD register width.
         hardware_profile: Comparative QPU topology/timing/coherence model.
         routing: Optional stage placements; pipeline builders supply defaults.
         available_qubits: Usable per-stage QPU capacity, excluding QEC overhead.
 
     Strict integer fields reject booleans and fractional capacities. An omitted
-    scale stays 15 for Shor and becomes 64 for Quantum-MIPS."""
+    scale stays 15 for Shor, becomes 64 for Quantum-MIPS and 22 for SKQD."""
     workload_id: WorkloadId = "shors_crypto"
     scale_param: int = Field(default=15, strict=True, ge=2, le=2_147_483_647)
     hardware_profile: HardwareProfile = "ibm_heron_nisq"
@@ -180,16 +182,19 @@ class SimulationRequest(BaseModel):
     available_qubits: int = Field(default=133, strict=True, ge=1, le=2_147_483_647)
     interconnect: InterconnectConfig | None = None
     custom_profile: CustomQPUProfileSpec | None = None
+    skqd: SKQDParameters | None = None
 
     @model_validator(mode="before")
     @classmethod
     def default_workload_scale(cls, value):
-        """Supply M=64 only when a Quantum-MIPS request omits its scale.
+        """Supply the workload default only when the request omits its scale.
 
         The before-validator copies dictionary input instead of mutating it and
         leaves explicit invalid values for the normal field validators to reject."""
         if isinstance(value, dict) and value.get("workload_id") == "quantum_mips" and "scale_param" not in value:
             return {**value, "scale_param": QUANTUM_MIPS_DEFAULT_SCALE}
+        if isinstance(value, dict) and value.get("workload_id") == "skqd" and "scale_param" not in value:
+            return {**value, "scale_param": SKQD_DEFAULT_SCALE}
         return value
 
     @model_validator(mode="after")
@@ -213,6 +218,13 @@ class SimulationRequest(BaseModel):
             raise ValueError("Shor scale_param must be one of 15, 21, 35, 512, 2048.")
         if self.workload_id == "quantum_mips" and self.scale_param not in QUANTUM_MIPS_SCALES:
             raise ValueError("Quantum-MIPS scale_param must be one of 64, 1024, 32768, 131072, 1048576.")
+        if self.workload_id == "skqd":
+            if self.scale_param not in SKQD_SCALES:
+                raise ValueError("SKQD scale_param must be one of 12, 22, 85.")
+            if self.skqd is None:
+                self.skqd = SKQDParameters()
+        elif self.skqd is not None:
+            raise ValueError("skqd parameters are only valid for the SKQD workload")
         return self
 
 class StageTelemetry(BaseModel):
@@ -431,6 +443,20 @@ def qpu_capacity_plan(scale_param: int, available_qubits: int) -> Dict[str, Any]
 
 
 QPU_LAUNCH_OVERHEAD_MS = 0.30  # One batch launch; explicit modeling assumption.
+
+
+def run_skqd_pipeline(scale_param: int = SKQD_DEFAULT_SCALE,
+                      hardware_profile: HardwareProfile = "ibm_heron_nisq",
+                      routing: Optional[RoutingConfig] = None, available_qubits: int = 133,
+                      interconnect: InterconnectConfig | None = None,
+                      custom_profile: CustomQPUProfileSpec | None = None,
+                      skqd: SKQDParameters | None = None) -> HybridTelemetryResponse:
+    """Adapt the dedicated SKQD family pipeline to the unchanged stage contract."""
+    profile = resolve_profile(hardware_profile, custom_profile)
+    targets = RoutingConfig.model_validate(routing if routing is not None else RoutingConfig())
+    return HybridTelemetryResponse.model_validate(build_skqd_pipeline(
+        scale_param, skqd if skqd is not None else SKQDParameters(), profile, available_qubits,
+        targets.model_dump(), QPU_LAUNCH_OVERHEAD_MS, interconnect))
 
 
 def _qpu_metrics(spec: CircuitSpec, profile: QPUProfile, capacity: int, shots: int,
@@ -1078,6 +1104,9 @@ def simulate_workload(req: SimulationRequest):
             return run_shors_pipeline(req.scale_param, req.hardware_profile, req.routing, req.available_qubits, req.interconnect, req.custom_profile)
         elif req.workload_id == "quantum_mips":
             return run_quantum_mips_pipeline(req.scale_param, req.hardware_profile, req.routing, req.available_qubits, req.interconnect, req.custom_profile)
+        elif req.workload_id == "skqd":
+            return run_skqd_pipeline(req.scale_param, req.hardware_profile, req.routing, req.available_qubits,
+                                     req.interconnect, req.custom_profile, req.skqd)
     except (ValueError, OverflowError) as error:
         if req.hardware_profile == "custom":
             raise HTTPException(status_code=422, detail="Custom parameters exceed the supported numerical range; reduce durations, routing multipliers or shot periods.") from error

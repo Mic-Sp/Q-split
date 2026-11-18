@@ -3,10 +3,10 @@
 import math
 
 if __package__:
-    from .models import CircuitSpec, QPUProfile, InterconnectConfig
+    from .models import CircuitSpec, QPUProfile, InterconnectConfig, KrylovCircuitFamily
     from .workloads import partition_transfer_count
 else:
-    from models import CircuitSpec, QPUProfile, InterconnectConfig
+    from models import CircuitSpec, QPUProfile, InterconnectConfig, KrylovCircuitFamily
     from workloads import partition_transfer_count
 
 
@@ -169,5 +169,125 @@ def estimate_classical(spec: CircuitSpec, node_type: str) -> dict:
             "kernel_ms": native, "total_ms": None if native is None else native + host,
             "model": "Workload-supplied illustrative CPU reference; 4x GPU compute assumption" if native is not None else
                      "Unavailable: circuit resources do not identify a task-equivalent native algorithm",
+        },
+    }
+
+
+def _logsumexp(values: list[float]) -> float:
+    """Sum nonnegative quantities in log space, including certain failures."""
+    peak = max(values)
+    if peak == -math.inf:
+        return -math.inf
+    return peak + math.log(math.fsum(math.exp(value - peak) for value in values))
+
+
+def estimate_qpu_family(family: KrylovCircuitFamily, profile: QPUProfile,
+                        launch_overhead_ms: float) -> dict:
+    """Independent physical shots, one family launch, shot-weighted survival.
+
+    Family log means are not additive single-circuit loss terms. Keep each
+    member's physical breakdown intact and expose family logs only in the
+    family_survival summary. A partially infeasible family is not executed.
+    """
+    family = KrylovCircuitFamily.model_validate(family)
+    if (isinstance(launch_overhead_ms, bool) or not isinstance(launch_overhead_ms, (int, float))
+            or not math.isfinite(launch_overhead_ms) or launch_overhead_ms < 0):
+        raise ValueError("launch_overhead_ms must be finite and nonnegative")
+    # Member timings exclude launch; only the complete family owns that cost.
+    estimates = [estimate_qpu(member.circuit_spec, profile, member.shots, 0.0)
+                 for member in family.members]
+    feasible = all(estimate["execution_feasible"] for estimate in estimates)
+    total_shots = sum(member.shots for member in family.members)
+    point_logs = [estimate["coherence_log_survival"] if estimate["coherence_log_survival"] is not None
+                  else -math.inf for estimate in estimates]
+    worst_logs = []
+    for estimate in estimates:
+        terms = estimate["log_survival_terms"]
+        if terms is None:
+            worst_logs.append(-math.inf)
+        else:
+            def term(key):
+                return terms[key] if terms[key] is not None else -math.inf
+            worst_logs.append(sum(term(key) for key in ("one_qubit", "two_qubit", "measurement"))
+                              + min(term("idle_t1"), term("idle_t2")) + terms.get("interconnect", 0.0))
+
+    def aggregate(logs):
+        if not feasible:
+            return 0.0, None, 0.0
+        expected_log = _logsumexp([math.log(member.shots) + value
+                                  for member, value in zip(family.members, logs)])
+        mean_log = min(0.0, expected_log - math.log(total_shots))
+        if all(value == 0 for value in logs):
+            return 1.0, 0.0, float(total_shots)
+        return (math.exp(mean_log), mean_log if math.isfinite(mean_log) else None,
+                min(float(total_shots), math.exp(expected_log)))
+
+    point, log_point, expected = aggregate(point_logs)
+    worst, log_worst, _ = aggregate(worst_logs)
+    deepest = estimates[-1]
+    latency = launch_overhead_ms + math.fsum(estimate["latency_ms"] for estimate in estimates) if feasible else 0.0
+    if not math.isfinite(latency):
+        raise ValueError("Family latency exceeds the finite timing range")
+    result = {
+        "execution_feasible": feasible, "shots": total_shots,
+        "family_model_version": 1, "circuit_family_size": len(family.members),
+        "latency_ms": latency, "qpu_io_included_in_latency": True,
+        "launch_policy": "single_family_batch", "io_state_prep_ms": 0.0,
+        "coherence_survival": point, "coherence_survival_pct": point * 100,
+        "coherence_survival_best": point, "coherence_survival_worst": min(point, worst),
+        "family_survival": {
+            "aggregation": "shot_weighted_log_sum_exp", "governing_scalar": "shot_weighted_mean",
+            "point": point, "best": point, "worst": min(point, worst),
+            "log_point": log_point, "log_worst": log_worst,
+            "expected_surviving_samples": expected,
+            "deepest_member": {"power_index": family.members[-1].power_index,
+                "point": deepest["coherence_survival"], "best": deepest["coherence_survival_best"],
+                "worst": deepest["coherence_survival_worst"], "log_point": deepest["coherence_log_survival"]},
+        },
+        "krylov_members": [{"power_index": member.power_index, "shots": member.shots,
+                            "circuit_spec": member.circuit_spec.model_dump(), "metrics": estimate}
+                           for member, estimate in zip(family.members, estimates)],
+        "deepest_circuit_depth": deepest["circuit_depth"],
+    }
+    for key in ("gate_execution_ms", "measurement_reset_ms", "launch_overhead_ms", "repetition_delay_ms",
+                "link_execution_ms"):
+        result[key] = math.fsum(estimate.get(key, 0.0) for estimate in estimates) if feasible else 0.0
+    result["launch_overhead_ms"] = launch_overhead_ms if feasible else 0.0
+    return result
+
+
+def estimate_classical_family(family: KrylovCircuitFamily, node_type: str) -> dict:
+    """Sum distinct distributions' compute, reuse peak RAM, charge host costs once.
+
+    Like the single-circuit model, repeated sampling reuses each computed
+    distribution. GPU emulation pays one family launch/transfer assumption.
+    No task-equivalent native classical eigensolver baseline is inferred.
+    """
+    family = KrylovCircuitFamily.model_validate(family)
+    estimates = [estimate_classical(member.circuit_spec, node_type)["circuit_emulation"]
+                 for member in family.members]
+    feasible = all(estimate["feasible"] for estimate in estimates)
+    compute = math.fsum(estimate["compute_latency_ms"] for estimate in estimates) if feasible else None
+    launch = CLASSICAL_GPU_OVERHEAD_MS if node_type == "GPU" and feasible else 0.0
+    kernel = compute + launch if feasible else None
+    memories = [estimate["memory_required_bytes"] for estimate in estimates]
+    return {
+        "circuit_emulation": {
+            "name": "Classical Krylov Family Emulation", "node": node_type, "feasible": feasible,
+            "kernel_ms": kernel,
+            "total_ms": kernel + family.stage1_ms + family.stage3_ms if feasible else None,
+            "compute_latency_ms": compute, "launch_transfer_overhead_ms": launch,
+            "logical_qubits": family.members[0].circuit_spec.n_qubits,
+            "memory_required_bytes": max(memories) if all(value is not None for value in memories) else None,
+            "memory_budget_gib": estimates[0]["memory_budget_gib"],
+            "memory_budget_bytes": estimates[0]["memory_budget_bytes"],
+            "host_preprocessing_ms": family.stage1_ms, "host_postprocessing_ms": family.stage3_ms,
+            "circuit_family_size": len(family.members),
+            "model": "Sequential statevector reuse; one distribution per power; host costs once per job",
+        },
+        "native_algorithm": {
+            "name": "Native Classical Algorithm", "node": node_type, "available": False,
+            "feasible": None, "kernel_ms": None, "total_ms": None,
+            "model": "Unavailable: SKQD reconstruction cost alone is not a task-equivalent classical baseline",
         },
     }

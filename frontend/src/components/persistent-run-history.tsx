@@ -35,7 +35,7 @@ export function PersistentRunHistory({ history, onRestore, workload }: { workloa
     { value: "nominal", label: "Nominal Only", count: nominalRuns.length },
     { value: "pinned", label: "Pinned Only", count: pinnedRuns.length },
   ] as const;
-  const workloadLabel = workload === "shors_crypto" ? WORKLOADS.shors_crypto.label : "Quantum-MIPS";
+  const workloadLabel = workload === "shors_crypto" ? WORKLOADS.shors_crypto.label : workload === "skqd" ? "SKQD" : "Quantum-MIPS";
   // Resolve UUIDs against the active family before deriving either the matrix or the download pool.
   const selectedRuns = selectedBenchmarkRuns(runs, selectedIds);
   const exportRuns = benchmarkExportRuns(runs, visibleRuns, selectedIds);

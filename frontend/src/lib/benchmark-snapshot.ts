@@ -1,6 +1,7 @@
 import { DEFAULT_AVAILABLE_QUBITS, DEFAULT_ROUTING } from "@/lib/telemetry";
 import type { SavedSimulationRun } from "@/types/run-history";
 import type { SimulationRequest } from "@/types/telemetry";
+import { parseSkqdParameters } from "@/lib/skqd";
 
 export const SNAPSHOT_NAME_LIMIT = 120;
 /** Validate the UUID route identifier before issuing any snapshot/delete database operation. */
@@ -34,6 +35,7 @@ export function snapshotPatch(value: unknown): { snapshotName: string | null; is
  */
 export function restoredConfiguration(run: SavedSimulationRun): SimulationRequest {
   return { workload_id: run.request.workload_id, scale_param: run.request.scale_param,
+    ...(run.request.workload_id === "skqd" ? { skqd: parseSkqdParameters(run.request.skqd) } : {}),
     hardware_profile: run.request.hardware_profile,
     ...(run.request.custom_profile == null ? {} : { custom_profile: { ...run.request.custom_profile,
       ...(run.request.custom_profile.surface_code ? { surface_code: { ...run.request.custom_profile.surface_code } } : {}) } }),

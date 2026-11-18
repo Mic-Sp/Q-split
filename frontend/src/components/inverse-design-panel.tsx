@@ -12,7 +12,7 @@ export function InverseDesignPanel({ run, onApply, disabled }: { run: CompletedR
   const result = useMemo(() => inverseDesignTargets(run), [run]);
   const [target, setTarget] = useState(0.5);
   const [message, setMessage] = useState<string | null>(null);
-  if (run.request.hardware_profile !== "custom") return null;
+  if (run.request.hardware_profile !== "custom" && run.request.workload_id !== "skqd") return null;
   const apply = (path: "balanced" | "surface_code") => {
     try {
       onApply?.(applyInverseDesignRecipe(run, target, path));

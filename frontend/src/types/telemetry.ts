@@ -3,7 +3,7 @@ export const BUILTIN_HARDWARE_PROFILE_IDS = ["ibm_heron_nisq", "ibm_nighthawk_r2
 export type BuiltinHardwareProfile = typeof BUILTIN_HARDWARE_PROFILE_IDS[number];
 export const HARDWARE_PROFILE_IDS = [...BUILTIN_HARDWARE_PROFILE_IDS, "custom"] as const;
 export type HardwareProfile = typeof HARDWARE_PROFILE_IDS[number];
-export type WorkloadId = "shors_crypto" | "quantum_mips";
+export type WorkloadId = "shors_crypto" | "quantum_mips" | "skqd";
 export type StageNode = "CPU" | "GPU" | "QPU";
 
 /** Three sequential placement selectors; route labels describe projected costs, not physical dispatch. */
@@ -22,6 +22,35 @@ export interface SimulationRequest {
   routing?: Partial<RoutingConfig> | null;
   interconnect?: InterconnectConfig | null;
   custom_profile?: CustomQPUProfileSpec | null;
+  skqd?: SKQDParameters | null;
+}
+
+export interface SKQDParameters {
+  krylov_dimension: number;
+  trotter_steps: number;
+  shots_per_state: number;
+  retained_subspace_dimension: number;
+}
+
+export interface SKQDFamilySurvival {
+  aggregation: "shot_weighted_log_sum_exp";
+  governing_scalar: "shot_weighted_mean";
+  point: number;
+  best: number;
+  worst: number;
+  log_point: number | null;
+  log_worst: number | null;
+  expected_surviving_samples: number;
+  deepest_member: { power_index: number; point: number; best: number; worst: number; log_point: number | null };
+}
+
+export interface SKQDMember {
+  power_index: number;
+  shots: number;
+  circuit_spec: CircuitSpec;
+  metrics?: StageMetrics;
+  emulation?: Record<string, unknown>;
+  qpu_comparison_metrics?: StageMetrics;
 }
 
 export interface InterconnectConfig {
@@ -109,6 +138,23 @@ export interface LogSurvivalTerms {
 
 /** Optional typed fields keep historical runs and workload-specific extra metrics readable. */
 export interface StageMetrics extends Record<string, unknown> {
+  skqd_parameters?: SKQDParameters;
+  skqd_model_version?: 1;
+  family_model_version?: 1;
+  circuit_family_size?: number;
+  deepest_circuit_depth?: number;
+  family_survival?: SKQDFamilySurvival;
+  krylov_members?: SKQDMember[];
+  qpu_sampling_comparison?: { latency_ms: number | null; comparison_only: boolean; family_survival: SKQDFamilySurvival | null };
+  subspace_peak_memory_bytes?: number;
+  projected_matrix_value_bytes?: number;
+  projected_matrix_index_bytes?: number;
+  solver_workspace_bytes?: number;
+  retained_subspace_dimension?: number;
+  requested_subspace_dimension?: number;
+  classical_to_quantum_latency_ratio?: number | null;
+  qpu_family_sampling_latency_ms?: number | null;
+  bottleneck_regime?: "quantum-sampling-bound" | "classical-diagonalization-bound" | "unavailable";
   resource_model_version?: 1 | 2;
   circuit_spec?: CircuitSpec;
   qpu_profile?: QPUProfile;

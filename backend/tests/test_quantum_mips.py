@@ -56,7 +56,7 @@ class QuantumMipsTests(unittest.TestCase):
 
     def test_workload_enum_and_invalid_mips_requests(self):
         workload = SimulationRequest.model_json_schema()["properties"]["workload_id"]
-        self.assertEqual(set(workload["enum"]), {"shors_crypto", "quantum_mips"})
+        self.assertEqual(set(workload["enum"]), {"shors_crypto", "quantum_mips", "skqd"})
         self.assertEqual(workload["default"], "shors_crypto")
         for value in ["unknown", None, True, 42, []]:
             with self.subTest(workload=value), self.assertRaises(ValidationError):

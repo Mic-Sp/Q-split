@@ -3,6 +3,7 @@ import { DEFAULT_AVAILABLE_QUBITS } from "@/lib/telemetry";
 import { formatDuration, formatDurationDelta, formatRawMilliseconds } from "@/lib/duration";
 import type { SavedSimulationRun } from "@/types/run-history";
 import { modelVersionLabel, resourceModelVersion, sameModelVersion } from "@/lib/model-version";
+import { parseSkqdParameters } from "@/lib/skqd";
 
 export const MAX_COMPARISON_RUNS = 3;
 const number = new Intl.NumberFormat("en-US", { maximumFractionDigits: 6 });
@@ -19,6 +20,8 @@ export function benchmarkMetrics(run: SavedSimulationRun) {
   const kernel = run.telemetry.stages.stage_2_quantum_kernel;
   const metrics = kernel.metrics;
   const coherence = coherenceBudget(run.telemetry);
+  const post = run.telemetry.stages.stage_3_classical_post;
+  const family = metrics.family_survival ?? metrics.qpu_sampling_comparison?.family_survival;
   return {
     ...pipelineTiming(run.telemetry),
     availableQubits: finite(metrics.available_qubits) ?? run.request.available_qubits ?? DEFAULT_AVAILABLE_QUBITS,
@@ -37,6 +40,19 @@ export function benchmarkMetrics(run: SavedSimulationRun) {
     fidelityScenario: typeof metrics.fidelity_scenario === "string" ? metrics.fidelity_scenario : null,
     modulePlacement: typeof metrics.module_placement === "string" ? metrics.module_placement : null,
     interconnectModelVersion: finite(metrics.interconnect_model_version),
+    skqd: run.request.workload_id === "skqd" ? parseSkqdParameters(run.request.skqd) : null,
+    familySize: finite(metrics.circuit_family_size),
+    deepestDepth: finite(metrics.deepest_circuit_depth) ?? finite(metrics.krylov_members?.at(-1)?.qpu_comparison_metrics?.circuit_depth),
+    familyMean: family ? family.point * 100 : null,
+    deepestSurvival: family ? family.deepest_member.point * 100 : null,
+    expectedSamples: family ? family.expected_surviving_samples : null,
+    subspaceMemoryBytes: finite(post.metrics.subspace_peak_memory_bytes),
+    retainedSubspace: finite(post.metrics.retained_subspace_dimension),
+    postprocessingMs: run.request.workload_id === "skqd" ? post.latency_ms : null,
+    recoveryMs: finite(post.metrics.recovery_compute_ms), projectionMs: finite(post.metrics.projection_compute_ms),
+    eigensolverMs: finite(post.metrics.eigensolver_compute_ms),
+    crossoverRatio: finite(post.metrics.classical_to_quantum_latency_ratio),
+    crossoverRegime: typeof post.metrics.bottleneck_regime === "string" ? post.metrics.bottleneck_regime : null,
   };
 }
 
@@ -91,6 +107,7 @@ export function benchmarkComparison(runs: SavedSimulationRun[]) {
   const reference = benchmarkMetrics(chosen[0]);
   const showLinks = chosen.some(run => benchmarkMetrics(run).modulesUsed !== null);
   const showCustom = chosen.some(run => run.request.custom_profile != null);
+  const showSkqd = chosen.some(run => run.request.workload_id === "skqd");
   return chosen.map((run, index) => {
     const metrics = benchmarkMetrics(run);
     const compatible = sameModelVersion(chosen[0].telemetry, run.telemetry);
@@ -130,6 +147,25 @@ export function benchmarkComparison(runs: SavedSimulationRun[]) {
     if (showCustom) rows.push(
       categorical("Research profile", run.request.custom_profile?.name ?? "Built-in", chosen[0].request.custom_profile?.name ?? "Built-in"),
       categorical("Cloned baseline", run.request.custom_profile?.base_profile_id ?? "None", chosen[0].request.custom_profile?.base_profile_id ?? "None"),
+    );
+    if (showSkqd) rows.push(
+      numeric("Krylov dimension d", metrics.skqd?.krylov_dimension ?? null, reference.skqd?.krylov_dimension ?? null, "states"),
+      numeric("Trotter steps per power", metrics.skqd?.trotter_steps ?? null, reference.skqd?.trotter_steps ?? null, "steps"),
+      numeric("Shots per Krylov state", metrics.skqd?.shots_per_state ?? null, reference.skqd?.shots_per_state ?? null, "shots"),
+      numeric("Requested subspace R", metrics.skqd?.retained_subspace_dimension ?? null, reference.skqd?.retained_subspace_dimension ?? null, "states"),
+      numeric("Effective retained subspace", metrics.retainedSubspace, reference.retainedSubspace, "states"),
+      numeric("Krylov family size", metrics.familySize, reference.familySize, "circuits"),
+      numeric("Deepest native depth", metrics.deepestDepth, reference.deepestDepth, "layers"),
+      numeric("QPU family mean survival", metrics.familyMean, reference.familyMean, "%", "pp"),
+      numeric("Deepest QPU member survival", metrics.deepestSurvival, reference.deepestSurvival, "%", "pp"),
+      numeric("Expected surviving QPU samples", metrics.expectedSamples, reference.expectedSamples, "samples"),
+      numeric("Stage 3 subspace peak memory", metrics.subspaceMemoryBytes, reference.subspaceMemoryBytes, "bytes"),
+      numeric("Stage 3 runtime", metrics.postprocessingMs, reference.postprocessingMs, "ms"),
+      numeric("Configuration recovery", metrics.recoveryMs, reference.recoveryMs, "ms"),
+      numeric("Sparse projection", metrics.projectionMs, reference.projectionMs, "ms"),
+      numeric("Sparse eigensolver", metrics.eigensolverMs, reference.eigensolverMs, "ms"),
+      numeric("Classical / QPU latency", metrics.crossoverRatio, reference.crossoverRatio, "×"),
+      categorical("SKQD bottleneck regime", metrics.crossoverRegime ?? "Unavailable", reference.crossoverRegime ?? "Unavailable"),
     );
     if (showLinks) rows.push(
       numeric("Modules used", metrics.modulesUsed, reference.modulesUsed, "modules"),

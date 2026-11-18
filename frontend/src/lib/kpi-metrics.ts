@@ -68,7 +68,7 @@ export type CoherenceBudgetStatus = "NOMINAL" | "DEGRADED" | "EXCEEDED";
 export function coherenceBudget(data: HybridTelemetryResponse): { survival: number | undefined; classical: boolean; status: CoherenceBudgetStatus | null } {
   const kernel = data.stages.stage_2_quantum_kernel;
   const classical = kernel.node === "CPU" || kernel.node === "GPU";
-  const raw = kernel.metrics.coherence_survival_pct;
+  const raw = data.workload_id === "skqd" && kernel.metrics.family_survival ? kernel.metrics.family_survival.point * 100 : kernel.metrics.coherence_survival_pct;
   const survival = classical ? 100 : typeof raw === "number" && Number.isFinite(raw) && raw >= 0 && raw <= 100 ? raw : undefined;
   // A noise-free profile cannot make an unavailable register or unsupported QPU host route nominal.
   const qpuBlocked = Object.values(data.stages).some(stage => stage.node === "QPU" && (
