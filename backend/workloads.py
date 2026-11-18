@@ -3,9 +3,9 @@
 import math
 
 if __package__:
-    from .models import CircuitSpec
+    from .models import CircuitSpec, SKQDParameters, KrylovCircuitMember, KrylovCircuitFamily, InterconnectConfig
 else:
-    from models import CircuitSpec
+    from models import CircuitSpec, SKQDParameters, KrylovCircuitMember, KrylovCircuitFamily, InterconnectConfig
 
 
 DEPTH_EXPANSION_FACTOR = 5.45
@@ -167,3 +167,39 @@ def mips_spec(scale: int, n_qubits: int, depth_multiplier: float = 1) -> Circuit
         native_classical_ms=scale * 768 * 2 / 1e6,
         native_classical_name="Exhaustive MIPS (illustrative d=768, 2 ns/component)",
     )
+
+
+SKQD_DEFAULT_SCALE = 22
+SKQD_SCALES = {
+    12: "12-qubit TFIM / Heisenberg validation",
+    22: "22-qubit Heisenberg XXZ benchmark",
+    85: "85-qubit Single-Impurity Anderson Model",
+}
+
+
+def skqd_hamiltonian_terms(n_qubits: int) -> int:
+    """Supplied analytical term-count assumptions, not generated Hamiltonians."""
+    if type(n_qubits) is not int or n_qubits not in SKQD_SCALES:
+        raise ValueError("SKQD scale_param must be one of 12, 22, 85.")
+    return 4 * n_qubits**2 if n_qubits == 85 else 3 * n_qubits
+
+
+def skqd_family(n_qubits: int, parameters: SKQDParameters | None = None, *,
+                stage1_ms: float = 0.0, stage3_ms: float = 0.0,
+                interconnect: InterconnectConfig | None = None) -> KrylovCircuitFamily:
+    """Explicit logical Trotter resources; bypass both Shor/MIPS toy multipliers.
+
+    The same supplied brickwork proxy is used for all scales, including the
+    impurity preset; no claim of compiling that Hamiltonian is made. The existing
+    hardware estimator alone applies topology/native-entangler conversion.
+    """
+    skqd_hamiltonian_terms(n_qubits)
+    parameters = SKQDParameters.model_validate(parameters if parameters is not None else SKQDParameters())
+    members = []
+    for power in range(parameters.krylov_dimension):
+        steps = power * parameters.trotter_steps
+        members.append(KrylovCircuitMember(power_index=power, shots=parameters.shots_per_state,
+            circuit_spec=CircuitSpec(n_qubits=n_qubits, depth=1 + 6 * steps,
+                n_1q=n_qubits + 2 * n_qubits * steps, n_2q=3 * (n_qubits - 1) * steps,
+                n_meas=n_qubits, stage1_ms=0.0, stage3_ms=0.0, interconnect=interconnect)))
+    return KrylovCircuitFamily(members=tuple(members), stage1_ms=stage1_ms, stage3_ms=stage3_ms)
